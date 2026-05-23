@@ -5,7 +5,7 @@
  */
 
 // 🔴 系統 API 端點 (請替換為你的 GAS 網址)
-const API_URL = "請填入你的_GAS_網頁應用程式_URL";
+const API_URL = "https://script.google.com/macros/s/AKfycbxWzxfHYdw9qvcPtGpU2qjxk-10hToTb1Jx-LrMhBN1jkR3IXUnu8m6UgfKcGMsi0tl/exec";
 
 // ============================================================================
 // 全域變數與狀態管理
