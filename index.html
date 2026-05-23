@@ -4,15 +4,22 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <title>長固 ERP 系統</title>
+
   <link rel="icon" href="icon.png" type="image/png">
-  <!-- Bootstrap CSS -->
+  
+  <link rel="apple-touch-icon" href="icon.png">
+  <link rel="apple-touch-icon" sizes="152x152" href="icon.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="icon.png">
+  <link rel="apple-touch-icon" sizes="167x167" href="icon.png">
+  
+  <link rel="icon" sizes="192x192" href="icon.png">
+  <link rel="icon" sizes="512x512" href="icon.png">
+
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-  <!-- 引入獨立的 CSS 樣式表 -->
   <link href="style.css" rel="stylesheet">
 </head>
 <body class="no-scroll">
 
-  <!-- 系統狀態提示 -->
   <div id="bgSyncIndicator">☁️ 同步中...</div>
   <div id="toastBox">✅ 已同步</div>
   <div id="miniLoading">
@@ -20,7 +27,6 @@
     <span id="miniLoadingText" class="ms-2">處理中...</span>
   </div>
 
-  <!-- 登入畫面 -->
   <div id="authScreen">
     <div class="vault-card p-4 shadow-lg text-center auth-box-size">
       <span class="auth-icon">🧾</span>
@@ -33,7 +39,6 @@
     </div>
   </div>
 
-  <!-- 載入畫面 -->
   <div id="splashScreen" style="display: none;">
     <div class="loading-logo">🧾</div>
     <h3 class="fw-bold">長固 ERP 系統</h3>
@@ -43,7 +48,6 @@
     </div>
   </div>
 
-  <!-- 主選單大廳 -->
   <div id="homeMenu">
     <div class="bg-white rounded-3 shadow p-3 mb-3 d-flex justify-content-between align-items-center border-start border-4 border-primary">
       <div>
@@ -79,7 +83,6 @@
     </div>
   </div>
 
-  <!-- 系統主要容器 -->
   <div id="mainApp">
     <nav class="navbar navbar-dark bg-dark">
       <div class="container-fluid d-flex justify-content-between align-items-center">
@@ -93,10 +96,8 @@
     </nav>
 
     <div class="container px-2 mt-2">
-      <!-- 📦 訂單模組 -->
       <div id="sys-order" class="sys-module" style="display:none;">
         <div class="step-card active border-top border-4 border-warning" id="ordStep1">
-          <!-- 自動報表設定區塊 -->
           <div class="email-setting-box">
             <div class="d-flex justify-content-between align-items-center mb-2">
               <h6 class="fw-bold m-0 text-primary">📩 每日下午 3:00 自動報表收件人</h6>
@@ -173,7 +174,6 @@
         </div>
       </div>
 
-      <!-- 📝 發票模組 -->
       <div id="sys-invoice" class="sys-module" style="display:none;">
         <div class="step-card active border-top border-4 border-primary" id="invStep1">
           <h5 class="fw-bold text-primary mb-3">1. 選擇客戶與開立日期</h5>
@@ -264,7 +264,6 @@
         </div>
       </div>
 
-      <!-- 🏭 庫存模組 -->
       <div id="sys-inventory" class="sys-module" style="display:none;">
         <div class="step-card active border-top border-4 border-info">
           <ul class="nav nav-pills nav-fill mb-3" id="invTabs">
@@ -318,7 +317,6 @@
         </div>
       </div>
 
-      <!-- 📊 紀錄報表模組 -->
       <div id="sys-history" class="sys-module" style="display:none;">
         <div class="step-card active border-top border-4 border-success">
           <ul class="nav nav-pills mb-3" id="historyTabs">
@@ -363,7 +361,6 @@
         </div>
       </div>
 
-      <!-- ⚙️ 管理員模組 -->
       <div id="sys-admin" class="sys-module" style="display:none;">
         <div class="step-card active border-top border-4 border-danger">
           <ul class="nav nav-pills nav-fill mb-3" id="adminTabs">
@@ -390,7 +387,6 @@
     </div>
   </div>
 
-  <!-- 💡 Modal 彈跳視窗區 -->
   <div class="modal fade" id="editOrdModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered modal-lg">
       <div class="modal-content">
@@ -588,11 +584,8 @@
     </div>
   </div>
 
-  <!-- Bootstrap JS -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-  <!-- 引入獨立的 JS 檔案 -->
   <script src="main.js"></script>
 
 </body>
 </html>
-
