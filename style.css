@@ -1,0 +1,450 @@
+/* ==========================================================================
+   長固 ERP 系統 - 核心樣式表
+   ========================================================================== */
+
+/* 基礎設定與捲軸隱藏 */
+html::-webkit-scrollbar, 
+body::-webkit-scrollbar { 
+    width: 6px; 
+    height: 6px; 
+}
+
+::-webkit-scrollbar-track { 
+    background: transparent; 
+}
+
+::-webkit-scrollbar-thumb { 
+    background: rgba(0,0,0,0.2); 
+    border-radius: 10px; 
+}
+
+html, body { 
+    /* 調整為更沉穩的深色背景，移除模糊效果的依賴 */
+    background-color: #1a1d20; 
+    height: 100dvh; 
+    margin: 0; 
+    padding: 0; 
+    font-family: system-ui, -apple-system, sans-serif; 
+    overflow: hidden; 
+    -webkit-tap-highlight-color: transparent; 
+}
+
+.no-scroll { 
+    touch-action: none; 
+    overscroll-behavior: none; 
+}
+
+/* ==========================================================================
+   全域互動層 (Loading, Toasts, Sync Indicator)
+   ========================================================================== */
+
+#bgSyncIndicator { 
+    position: fixed; 
+    bottom: 20px; 
+    left: 50%; 
+    transform: translateX(-50%); 
+    background: rgba(0,0,0,0.85); 
+    color: white; 
+    padding: 8px 16px; 
+    border-radius: 20px; 
+    font-size: 0.85rem; 
+    font-weight: bold; 
+    z-index: 10500; 
+    display: none; 
+    box-shadow: 0 4px 10px rgba(0,0,0,0.2); 
+}
+
+#miniLoading { 
+    position: fixed; 
+    top: 50%; 
+    left: 50%; 
+    transform: translate(-50%, -50%); 
+    background: rgba(0,0,0,0.85); 
+    color: white; 
+    padding: 15px 30px; 
+    border-radius: 10px; 
+    z-index: 10600; 
+    display: none; 
+    align-items: center; 
+    gap: 10px;
+}
+
+#toastBox { 
+    position: fixed; 
+    top: max(20px, env(safe-area-inset-top)); 
+    left: 50%; 
+    transform: translateX(-50%); 
+    background: rgba(25, 135, 84, 0.95); 
+    color: white; 
+    padding: 10px 20px; 
+    border-radius: 30px; 
+    z-index: 10700; 
+    display: none; 
+    opacity: 0; 
+    transition: opacity 0.3s; 
+    font-weight: bold; 
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15); 
+}
+
+/* ==========================================================================
+   登入與載入畫面
+   ========================================================================== */
+
+#authScreen, #splashScreen { 
+    position: fixed; 
+    top: 0; 
+    left: 0; 
+    right: 0; 
+    bottom: 0; 
+    height: 100dvh; 
+    width: 100vw; 
+    /* 精準漸層藍色背景，取代原本的暗色背景 */
+    background: linear-gradient(135deg, #0d6efd 0%, #0056b3 100%);
+    z-index: 10000; 
+    display: flex; 
+    flex-direction: column; 
+    justify-content: center; 
+    align-items: center; 
+    color: white; 
+    transition: opacity 0.5s; 
+    padding: 20px;
+}
+
+.auth-box-size {
+    max-width: 400px; 
+    width: 90%;
+}
+
+.auth-icon {
+    font-size: 3.5rem;
+}
+
+.auth-input {
+    letter-spacing: 5px;
+}
+
+.loading-logo { 
+    font-size: 4.5rem; 
+    margin-bottom: 20px; 
+    animation: float 2s ease-in-out infinite; 
+}
+
+@keyframes float { 
+    0% { transform: translateY(0px); } 
+    50% { transform: translateY(-10px); } 
+    100% { transform: translateY(0px); } 
+}
+
+.vault-card { 
+    background: #ffffff; /* 純白底色，移除漸層與模糊，視覺更乾淨 */
+    border-radius: 16px; 
+}
+
+.progress-box { 
+    width: 80%; 
+    max-width: 300px; 
+    background: rgba(255, 255, 255, 0.2); 
+    border-radius: 10px; 
+    overflow: hidden; 
+    margin-top: 20px; 
+}
+
+.progress-fill { 
+    height: 8px; 
+    background: #ffffff; 
+    width: 0%; 
+    transition: width 0.3s ease-out; 
+}
+
+/* ==========================================================================
+   主選單大廳
+   ========================================================================== */
+
+#homeMenu { 
+    padding: max(20px, calc(env(safe-area-inset-top) + 20px)) 20px 20px; 
+    display: none; 
+    max-width: 800px; 
+    margin: 0 auto; 
+    height: 100dvh; 
+    overflow-y: auto; 
+}
+
+.marquee-container { 
+    width: 100%; 
+    overflow: hidden; 
+    border-radius: 50px; 
+    padding: 8px 0; 
+    white-space: nowrap; 
+    position: relative; 
+    margin-bottom: 20px; 
+    background: white;
+}
+
+.marquee-content { 
+    display: inline-block; 
+    animation: marquee 20s linear infinite; 
+    color: #495057; 
+    font-weight: bold; 
+    font-size: 0.9rem; 
+}
+
+@keyframes marquee { 
+    0% { transform: translateX(100vw); } 
+    100% { transform: translateX(-100%); } 
+}
+
+.home-grid { 
+    display: grid; 
+    grid-template-columns: 1fr 1fr; 
+    gap: 15px; 
+    padding-bottom: 20px; 
+}
+
+.home-card { 
+    background: white; 
+    border-radius: 15px; 
+    padding: 22px 10px; 
+    text-align: center; 
+    box-shadow: 0 4px 15px rgba(0,0,0,0.05); 
+    cursor: pointer; 
+    transition: transform 0.2s; 
+    border-bottom: 4px solid transparent; 
+}
+
+.home-card:active { 
+    transform: scale(0.97); 
+}
+
+.c-inv { border-bottom-color: #0d6efd; } 
+.c-ord { border-bottom-color: #ffc107; } 
+.c-stk { border-bottom-color: #0dcaf0; grid-column: span 2; } 
+.c-rep { border-bottom-color: #198754; grid-column: span 2; } 
+.c-mgr { border-bottom-color: #dc3545; grid-column: span 2; }
+
+/* ==========================================================================
+   系統主畫面與容器
+   ========================================================================== */
+
+#mainApp { 
+    display: none; 
+    height: 100dvh; 
+    overflow-y: auto; 
+    padding-bottom: max(60px, env(safe-area-inset-bottom)); 
+    animation: fadeIn 0.3s; 
+}
+
+@keyframes fadeIn { 
+    from { opacity: 0; } 
+    to { opacity: 1; } 
+}
+
+.navbar { 
+    padding-top: max(15px, env(safe-area-inset-top)) !important; 
+    /* 微調導覽列顏色以配合整體風格 */
+    background-color: #212529 !important; 
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1); 
+    position: sticky; 
+    top: 0; 
+    z-index: 1020; 
+}
+
+.step-card { 
+    display: none; 
+    background: #fff; 
+    border-radius: 12px; 
+    padding: 20px; 
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08); 
+    margin-top: 15px; 
+    margin-bottom: 15px; 
+}
+
+.step-card.active { 
+    display: block; 
+    animation: slideUp 0.3s; 
+}
+
+@keyframes slideUp { 
+    from { transform: translateY(10px); opacity: 0; } 
+    to { transform: translateY(0); opacity: 1; } 
+}
+
+/* ==========================================================================
+   通用 UI 元件
+   ========================================================================== */
+
+.fake-input-btn { 
+    cursor: pointer; 
+    text-align: left; 
+    background-color: #f8f9fa !important; 
+    caret-color: transparent; 
+}
+
+.item-row { 
+    border: 1px solid #dee2e6; 
+    border-radius: 12px; 
+    padding: 15px; 
+    margin-bottom: 15px; 
+    background: #fafafa; 
+    position: relative; 
+}
+
+.history-details { 
+    white-space: pre-wrap; 
+    word-break: break-all; 
+    background: #f8f9fa; 
+    padding: 10px; 
+    border-radius: 8px; 
+    font-size: 0.9rem; 
+    line-height: 1.5; 
+    border: 1px solid #e9ecef; 
+}
+
+/* 狀態標籤 */
+.status-void { 
+    text-decoration: line-through; 
+    opacity: 0.6; 
+}
+
+.status-partial { 
+    border-left: 4px solid #17a2b8 !important; 
+}
+
+.stock-dot { 
+    display: inline-block; 
+    width: 12px; 
+    height: 12px; 
+    border-radius: 50%; 
+    margin-right: 5px; 
+}
+
+.stock-g { background-color: #198754; box-shadow: 0 0 5px #198754; } 
+.stock-y { background-color: #ffc107; box-shadow: 0 0 5px #ffc107; } 
+.stock-r { background-color: #dc3545; box-shadow: 0 0 5px #dc3545; }
+
+/* ==========================================================================
+   發票專屬樣式
+   ========================================================================== */
+
+.invoice-box { 
+    min-width: 320px; 
+    border: 3px solid #d32f2f; 
+    padding: 15px; 
+    background: #fff; 
+    font-family: "MingLiU", serif; 
+    overflow-x: auto; 
+    color: #d32f2f; 
+}
+
+.invoice-header { 
+    text-align: center; 
+    border-bottom: 2px solid #d32f2f; 
+    margin-bottom: 10px; 
+    padding-bottom: 5px; 
+}
+
+.invoice-title { 
+    margin: 0; 
+    letter-spacing: 15px; 
+    font-size: 1.8rem; 
+    font-weight: bold; 
+}
+
+.invoice-meta-info {
+    line-height: 1.8; 
+    margin-bottom: 10px; 
+    font-size: 0.95rem; 
+    padding-left: 10px;
+}
+
+.invoice-table { 
+    width: 100%; 
+    border-collapse: collapse; 
+    margin-bottom: 10px; 
+    font-size: 0.95rem; 
+}
+
+.invoice-table th, .invoice-table td { 
+    border: 1px solid #d32f2f; 
+    padding: 8px 6px; 
+    text-align: center; 
+}
+
+.highlight-data { 
+    color: #0056b3 !important; 
+    font-weight: bold; 
+    font-family: sans-serif; 
+}
+
+.letter-spacing-lg {
+    letter-spacing: 3px;
+}
+
+/* ==========================================================================
+   其他元件 (Modal, 上傳區塊, 設定區塊)
+   ========================================================================== */
+
+.fullscreen-modal .modal-dialog { 
+    margin: 0; 
+    width: 100vw; 
+    max-width: none; 
+    height: 100dvh; 
+}
+
+.fullscreen-modal .modal-content { 
+    height: 100dvh; 
+    border: none; 
+    border-radius: 0; 
+    display: flex; 
+    flex-direction: column; 
+}
+
+.fullscreen-modal .modal-body { 
+    overflow-y: auto; 
+    flex-grow: 1; 
+    background: #f1f3f5; 
+    padding: 10px; 
+}
+
+.search-btn-item { 
+    background: white; 
+    border: 1px solid #dee2e6; 
+    border-radius: 8px; 
+    padding: 15px; 
+    margin-bottom: 8px; 
+    text-align: left; 
+    width: 100%; 
+    font-weight: bold; 
+    font-size: 1.1rem; 
+    color: #212529; 
+    box-shadow: 0 2px 5px rgba(0,0,0,0.02); 
+}
+
+.search-btn-item:active { 
+    background: #e9ecef; 
+}
+
+.cam-btn { 
+    border: 2px dashed #0d6efd; 
+    background: #e9ecef; 
+    border-radius: 12px; 
+    padding: 30px; 
+    text-align: center; 
+    cursor: pointer; 
+}
+
+.email-setting-box { 
+    background-color: #fdfdfe; 
+    border: 1px solid #e0e0e0; 
+    border-radius: 8px; 
+    padding: 15px; 
+    margin-bottom: 15px; 
+}
+
+.email-list-container {
+    max-height: 100px; 
+    overflow-y: auto; 
+    border: 1px solid #eee; 
+    padding: 5px; 
+    border-radius: 5px; 
+    background: #fff;
+}
