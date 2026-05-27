@@ -6,12 +6,10 @@
   <title>長固 ERP 系統</title>
 
   <link rel="icon" href="icon.png" type="image/png">
-  
   <link rel="apple-touch-icon" href="icon.png">
   <link rel="apple-touch-icon" sizes="152x152" href="icon.png">
   <link rel="apple-touch-icon" sizes="180x180" href="icon.png">
   <link rel="apple-touch-icon" sizes="167x167" href="icon.png">
-  
   <link rel="icon" sizes="192x192" href="icon.png">
   <link rel="icon" sizes="512x512" href="icon.png">
 
@@ -22,10 +20,7 @@
 
   <div id="bgSyncIndicator">☁️ 同步中...</div>
   <div id="toastBox">✅ 已同步</div>
-  <div id="miniLoading">
-    <div class="spinner-border spinner-border-sm"></div>
-    <span id="miniLoadingText" class="ms-2">處理中...</span>
-  </div>
+  <div id="miniLoading"><div class="spinner-border spinner-border-sm"></div><span id="miniLoadingText" class="ms-2">處理中...</span></div>
 
   <div id="authScreen">
     <div class="vault-card p-4 shadow-lg text-center auth-box-size">
@@ -43,43 +38,26 @@
     <div class="loading-logo">🧾</div>
     <h3 class="fw-bold">長固 ERP 系統</h3>
     <p class="text-secondary mt-2 mb-0" id="splashText">準備連線中...</p>
-    <div class="progress-box">
-      <div class="progress-fill" id="splashProgress"></div>
-    </div>
+    <div class="progress-box"><div class="progress-fill" id="splashProgress"></div></div>
   </div>
 
   <div id="homeMenu">
     <div class="bg-white rounded-3 shadow p-3 mb-3 d-flex justify-content-between align-items-center border-start border-4 border-primary">
-      <div>
-        <h5 class="fw-bold mb-1 text-dark" id="welcomeName">👋 載入中...</h5>
-        <small class="text-muted" id="tokenCountdown">🔐 憑證效期：--</small>
-      </div>
+      <div><h5 class="fw-bold mb-1 text-dark" id="welcomeName">👋 載入中...</h5><small class="text-muted" id="tokenCountdown">🔐 憑證效期：--</small></div>
       <button class="btn btn-sm btn-outline-danger fw-bold px-3" onclick="logout()">登出</button>
     </div>
     <div class="marquee-container shadow-sm">
       <div class="marquee-content" id="lobbyMarquee">
-        <span class="mx-3">🟢 連線正常</span>
-        <span class="mx-3" id="mqOnline">👥 1 人</span>
-        <span class="mx-3">💡 系統防呆與預覽計算引擎修復完成</span>
-        <span class="mx-3 text-primary" id="mqMonthCount">🧾 本月已開立 0 張</span>
+        <span class="mx-3">🟢 連線正常</span><span class="mx-3" id="mqOnline">👥 1 人</span>
+        <span class="mx-3">💡 系統防呆與預覽計算引擎修復完成</span><span class="mx-3 text-primary" id="mqMonthCount">🧾 本月已開立 0 張</span>
       </div>
     </div>
     <div class="home-grid">
-      <div class="home-card c-ord" onclick="enterSystem('order')">
-        <div class="fs-1 mb-2">📦</div><h6 class="fw-bold text-warning mb-1">訂單辨識建檔</h6>
-      </div>
-      <div class="home-card c-inv" onclick="enterSystem('invoice')">
-        <div class="fs-1 mb-2">📝</div><h6 class="fw-bold text-primary mb-1">開立發票作業</h6>
-      </div>
-      <div class="home-card c-stk" onclick="enterSystem('inventory')">
-        <div class="fs-1 mb-2">🏭</div><h5 class="fw-bold text-info mb-1">產品庫存管理</h5>
-      </div>
-      <div class="home-card c-rep" onclick="enterSystem('history')">
-        <div class="fs-1 mb-2">📊</div><h5 class="fw-bold text-success mb-1">發票紀錄與報表</h5>
-      </div>
-      <div class="home-card c-mgr" onclick="enterSystem('admin')">
-        <div class="fs-1 mb-2">⚙️</div><h5 class="fw-bold text-danger mb-1">管理員後台</h5>
-      </div>
+      <div class="home-card c-ord" onclick="enterSystem('order')"><div class="fs-1 mb-2">📦</div><h6 class="fw-bold text-warning mb-1">訂單辨識建檔</h6></div>
+      <div class="home-card c-inv" onclick="enterSystem('invoice')"><div class="fs-1 mb-2">📝</div><h6 class="fw-bold text-primary mb-1">開立發票作業</h6></div>
+      <div class="home-card c-stk" onclick="enterSystem('inventory')"><div class="fs-1 mb-2">🏭</div><h5 class="fw-bold text-info mb-1">產品庫存管理</h5></div>
+      <div class="home-card c-rep" onclick="enterSystem('history')"><div class="fs-1 mb-2">📊</div><h5 class="fw-bold text-success mb-1">發票紀錄與報表</h5></div>
+      <div class="home-card c-mgr" onclick="enterSystem('admin')"><div class="fs-1 mb-2">⚙️</div><h5 class="fw-bold text-danger mb-1">管理員後台</h5></div>
     </div>
   </div>
 
@@ -88,10 +66,7 @@
       <div class="container-fluid d-flex justify-content-between align-items-center">
         <button class="btn btn-sm btn-outline-light" onclick="backToHome()">🏠 首頁</button>
         <span class="navbar-brand mb-0 fs-6 fw-bold text-truncate px-2" id="sysTitle">載入中</span>
-        <div>
-          <span class="badge bg-light text-dark me-2" id="navOnlineCount">👥 1</span>
-          <button class="btn btn-sm btn-outline-info" onclick="refreshData()">🔄 刷新</button>
-        </div>
+        <div><span class="badge bg-light text-dark me-2" id="navOnlineCount">👥 1</span><button class="btn btn-sm btn-outline-info" onclick="refreshData()">🔄 刷新</button></div>
       </div>
     </nav>
 
@@ -99,67 +74,33 @@
       <div id="sys-order" class="sys-module" style="display:none;">
         <div class="step-card active border-top border-4 border-warning" id="ordStep1">
           <div class="email-setting-box">
-            <div class="d-flex justify-content-between align-items-center mb-2">
-              <h6 class="fw-bold m-0 text-primary">📩 每日下午 3:00 自動報表收件人</h6>
-              <button class="btn btn-sm btn-outline-success" onclick="triggerManualReport()">手動發送測試</button>
-            </div>
+            <div class="d-flex justify-content-between align-items-center mb-2"><h6 class="fw-bold m-0 text-primary">📩 每日下午 3:00 自動報表收件人</h6><button class="btn btn-sm btn-outline-success" onclick="triggerManualReport()">手動發送測試</button></div>
             <div class="small text-muted mb-2">信箱清單請至「後台試算表 > 收件信箱管理」新增。勾選後請記得按儲存。</div>
-            <div id="emailCheckboxes" class="mb-2 email-list-container">
-              <div class="text-muted small">載入中...</div>
-            </div>
+            <div id="emailCheckboxes" class="mb-2 email-list-container"><div class="text-muted small">載入中...</div></div>
             <button class="btn btn-sm btn-primary w-100 fw-bold" onclick="saveEmailSettings()">💾 儲存收件設定</button>
           </div>
-
-          <ul class="nav nav-pills nav-fill mb-3">
-            <li class="nav-item"><button class="nav-link active fw-bold py-2" data-bs-toggle="pill" data-bs-target="#tabOrdAuto">📷 智慧辨識</button></li>
-            <li class="nav-item"><button class="nav-link fw-bold py-2" data-bs-toggle="pill" data-bs-target="#tabOrdManual">⌨️ 手動建檔</button></li>
-          </ul>
-          
+          <ul class="nav nav-pills nav-fill mb-3"><li class="nav-item"><button class="nav-link active fw-bold py-2" data-bs-toggle="pill" data-bs-target="#tabOrdAuto">📷 智慧辨識</button></li><li class="nav-item"><button class="nav-link fw-bold py-2" data-bs-toggle="pill" data-bs-target="#tabOrdManual">⌨️ 手動建檔</button></li></ul>
           <div class="tab-content">
             <div class="tab-pane fade show active" id="tabOrdAuto">
-              <div class="cam-btn mb-3" onclick="document.getElementById('orderImgUpload').click()">
-                <div class="fs-1 mb-2">📸</div>
-                <div class="fw-bold text-primary">上傳訂購單 (圖檔或 PDF)</div>
-              </div>
+              <div class="cam-btn mb-3" onclick="document.getElementById('orderImgUpload').click()"><div class="fs-1 mb-2">📸</div><div class="fw-bold text-primary">上傳訂購單 (圖檔或 PDF)</div></div>
               <input type="file" id="orderImgUpload" accept="image/*,application/pdf" style="display:none;" onchange="processOrderUpload(this)">
             </div>
-            <div class="tab-pane fade" id="tabOrdManual">
-              <button class="btn btn-outline-warning text-dark w-100 fw-bold py-3 mb-3" onclick="openOrderModal(null)">➕ 手動輸入一筆新訂單</button>
-            </div>
+            <div class="tab-pane fade" id="tabOrdManual"><button class="btn btn-outline-warning text-dark w-100 fw-bold py-3 mb-3" onclick="openOrderModal(null)">➕ 手動輸入一筆新訂單</button></div>
           </div>
           <hr>
-          
           <div class="p-2 bg-light border rounded mb-3">
             <input type="search" class="form-control mb-2 fw-bold" id="ordSearchInput" placeholder="🔍 搜尋：單號、醫院或品項名稱..." oninput="renderOrderList()">
             <div class="row g-2">
-              <div class="col-6">
-                <select class="form-select form-select-sm fw-bold text-secondary" id="ordFilterClient" onchange="renderOrderList()">
-                  <option value="">🏢 所有醫院</option>
-                </select>
-              </div>
-              <div class="col-6">
-                <select class="form-select form-select-sm fw-bold text-secondary" id="ordFilterDeadline" onchange="renderOrderList()">
-                  <option value="">📅 所有期限</option>
-                  <option value="danger">🔴 逾期 / 今日到期</option>
-                  <option value="warning">🟡 3日內即將到期</option>
-                  <option value="success">🟢 期限充足 (大於3天)</option>
-                  <option value="none">⚪ 未設定期限</option>
-                </select>
-              </div>
+              <div class="col-6"><select class="form-select form-select-sm fw-bold text-secondary" id="ordFilterClient" onchange="renderOrderList()"><option value="">🏢 所有醫院</option></select></div>
+              <div class="col-6"><select class="form-select form-select-sm fw-bold text-secondary" id="ordFilterDeadline" onchange="renderOrderList()"><option value="">📅 所有期限</option><option value="danger">🔴 逾期 / 今日到期</option><option value="warning">🟡 3日內即將到期</option><option value="success">🟢 期限充足 (大於3天)</option><option value="none">⚪ 未設定期限</option></select></div>
             </div>
           </div>
-
-          <div class="d-flex justify-content-between align-items-center mb-2">
-            <h6 class="fw-bold m-0">未結案訂單 (可勾選合併出貨)</h6>
-            <button class="btn btn-sm btn-primary fw-bold px-3" onclick="groupFulfillOrders()">合併開票</button>
-          </div>
+          <div class="d-flex justify-content-between align-items-center mb-2"><h6 class="fw-bold m-0">未結案訂單 (可勾選合併出貨)</h6><button class="btn btn-sm btn-primary fw-bold px-3" onclick="groupFulfillOrders()">合併開票</button></div>
           <div id="ordListContainer"></div>
         </div>
-        
         <div class="step-card border-top border-4 border-warning" id="ordStep2">
           <h5 class="fw-bold text-warning mb-3">確認 AI 辨識結果</h5>
-          <label class="form-label small fw-bold text-muted">客戶/醫院名稱</label>
-          <input type="text" class="form-control fw-bold mb-2" id="aiClient" oninput="recheckAiItems()">
+          <label class="form-label small fw-bold text-muted">客戶/醫院名稱</label><input type="text" class="form-control fw-bold mb-2" id="aiClient" oninput="recheckAiItems()">
           <div class="row g-2 mb-3">
             <div class="col-4"><label class="form-label small fw-bold text-muted">訂單號碼</label><input type="text" class="form-control fw-bold" id="aiOrderNo"></div>
             <div class="col-4"><label class="form-label small fw-bold text-muted">申請單位</label><input type="text" class="form-control fw-bold" id="aiDept"></div>
@@ -167,10 +108,7 @@
           </div>
           <h6 class="fw-bold mt-4 border-bottom pb-2">擷取品項 <span class="text-muted small ms-2">(雙代碼核對)</span></h6>
           <div id="aiItemsContainer" class="mb-3"></div>
-          <div class="d-flex gap-2 mt-4">
-            <button class="btn btn-secondary w-50 fw-bold" onclick="cancelOrderAI()">取消</button>
-            <button class="btn btn-warning w-50 fw-bold shadow-sm" onclick="saveOrderAI()">💾 儲存訂單</button>
-          </div>
+          <div class="d-flex gap-2 mt-4"><button class="btn btn-secondary w-50 fw-bold" onclick="cancelOrderAI()">取消</button><button class="btn btn-warning w-50 fw-bold shadow-sm" onclick="saveOrderAI()">💾 儲存訂單</button></div>
         </div>
       </div>
 
@@ -187,78 +125,38 @@
           <div id="invClientInfo" class="alert alert-success fw-bold" style="display:none;"></div>
           <button class="btn btn-primary w-100 fw-bold py-3 fs-5 shadow-sm" id="btnNext1" style="display:none;" onclick="goStep(2)">下一步：訂單與發票號碼</button>
         </div>
-        
         <div class="step-card border-top border-4 border-primary" id="invStep2">
-          <div class="d-flex justify-content-between align-items-center mb-3">
-            <h5 class="fw-bold text-primary mb-0">2. 填寫憑證資訊</h5>
-            <button class="btn btn-sm btn-outline-secondary" onclick="goStep(1)">上一步</button>
-          </div>
+          <div class="d-flex justify-content-between align-items-center mb-3"><h5 class="fw-bold text-primary mb-0">2. 填寫憑證資訊</h5><button class="btn btn-sm btn-outline-secondary" onclick="goStep(1)">上一步</button></div>
           <div class="mb-3"><label class="form-label fw-bold">訂單編號 (選填)</label><input type="text" class="form-control py-2" id="invOrderNo" placeholder="可填入多筆單號"></div>
           <div class="mb-4"><label class="form-label fw-bold">發票號碼 (選填)</label><input type="text" class="form-control py-2" id="invPaperNo" placeholder="例如：AB-12345678" style="text-transform: uppercase;"></div>
           <button class="btn btn-primary w-100 fw-bold py-3 fs-5 shadow-sm" onclick="goStep(3)">下一步：開立品項</button>
         </div>
-
         <div class="step-card border-top border-4 border-primary" id="invStep3">
-          <div class="d-flex justify-content-between align-items-center mb-3">
-            <h5 class="fw-bold text-primary mb-0">3. 開立品項</h5>
-            <button class="btn btn-sm btn-outline-secondary" onclick="goStep(2)">上一步</button>
-          </div>
+          <div class="d-flex justify-content-between align-items-center mb-3"><h5 class="fw-bold text-primary mb-0">3. 開立品項</h5><button class="btn btn-sm btn-outline-secondary" onclick="goStep(2)">上一步</button></div>
           <div id="invAiNotice" class="alert alert-info py-2 small" style="display:none;">✨ 已智慧載入：依據訂單帶入對應品項與合約價，僅列出【剩餘待出貨】之數量。</div>
           <div id="invItemsContainer"></div>
           <button class="btn btn-outline-primary w-100 fw-bold py-2 mb-4" id="btnAddInvItem" onclick="addInvoiceItemRow()">+ 新增一列 (最多10項)</button>
           <button class="btn btn-success w-100 fw-bold py-3 fs-5 shadow-sm" onclick="generatePreview()">✓ 結算並預覽</button>
         </div>
-        
         <div class="step-card border-top border-4 border-success" id="invStep4">
           <h5 class="fw-bold text-success mb-3">4. 發票預覽與確認</h5>
           <div class="bg-light p-3 rounded mb-3 border">
-            <div class="row">
-              <div class="col-6"><p class="mb-1 text-muted small">開立對象</p><h6 class="fw-bold text-dark" id="prevClientName">--</h6></div>
-              <div class="col-6"><p class="mb-1 text-muted small">統一編號</p><h6 class="fw-bold text-dark" id="prevTaxId">--</h6></div>
-            </div>
-            <div class="row mt-2">
-              <div class="col-6"><p class="mb-1 text-muted small">訂單號碼</p><h6 class="fw-bold text-dark" id="prevOrderNo">--</h6></div>
-              <div class="col-6"><p class="mb-1 text-muted small">發票號碼</p><h6 class="fw-bold text-dark" id="prevPaperNo">--</h6></div>
-            </div>
-            <div class="row mt-2 pt-2 border-top">
-              <div class="col-12"><p class="mb-1 text-muted small">開立日期</p><h6 class="fw-bold text-primary mb-0" id="prevInvDate">--</h6></div>
-            </div>
+            <div class="row"><div class="col-6"><p class="mb-1 text-muted small">開立對象</p><h6 class="fw-bold text-dark" id="prevClientName">--</h6></div><div class="col-6"><p class="mb-1 text-muted small">統一編號</p><h6 class="fw-bold text-dark" id="prevTaxId">--</h6></div></div>
+            <div class="row mt-2"><div class="col-6"><p class="mb-1 text-muted small">訂單號碼</p><h6 class="fw-bold text-dark" id="prevOrderNo">--</h6></div><div class="col-6"><p class="mb-1 text-muted small">發票號碼</p><h6 class="fw-bold text-dark" id="prevPaperNo">--</h6></div></div>
+            <div class="row mt-2 pt-2 border-top"><div class="col-12"><p class="mb-1 text-muted small">開立日期</p><h6 class="fw-bold text-primary mb-0" id="prevInvDate">--</h6></div></div>
           </div>
-          <table class="table table-bordered table-sm align-middle bg-white">
-            <thead class="table-light"><tr><th>品名</th><th>數量</th><th class="text-end">單價</th><th class="text-end">總價</th><th>備註(單號/單位)</th></tr></thead>
-            <tbody id="prevTableBody"></tbody>
-          </table>
+          <table class="table table-bordered table-sm align-middle bg-white"><thead class="table-light"><tr><th>品名</th><th>數量</th><th class="text-end">單價</th><th class="text-end">總價</th><th>備註(單號/單位)</th></tr></thead><tbody id="prevTableBody"></tbody></table>
           <div class="d-flex justify-content-between mb-1"><span class="text-muted">銷售額(未稅)</span><strong id="prevNet">0</strong></div>
           <div class="d-flex justify-content-between mb-2"><span class="text-muted">營業稅(5%)</span><strong id="prevTax">0</strong></div>
           <div class="d-flex justify-content-between pt-2 border-top mb-4"><span class="fw-bold text-danger fs-5">總計(含稅)</span><strong class="text-danger fs-4" id="prevTotal">0</strong></div>
-          <div class="d-flex gap-2">
-            <button class="btn btn-secondary w-50 fw-bold py-3" onclick="goStep(3)">返回修改</button>
-            <button class="btn btn-danger w-50 fw-bold py-3 shadow-sm" onclick="submitInvoiceOptimistic()">確認開立</button>
-          </div>
+          <div class="d-flex gap-2"><button class="btn btn-secondary w-50 fw-bold py-3" onclick="goStep(3)">返回修改</button><button class="btn btn-danger w-50 fw-bold py-3 shadow-sm" onclick="submitInvoiceOptimistic()">確認開立</button></div>
         </div>
-
         <div class="step-card p-2" id="invStep5">
           <div class="alert alert-success fw-bold text-center mb-2">✅ 發票開立完成 (請至出貨作業扣庫存)</div>
           <div class="invoice-box mb-3">
-            <div class="invoice-header">
-              <h2 class="invoice-title">統一發票</h2>
-              <div class="fs-5 fw-bold">（三聯式）</div>
-            </div>
-            <div class="invoice-meta-info">
-              <div><strong>買受人：</strong> <span id="visBuyer" class="highlight-data"></span></div>
-              <div><strong>統一編號：</strong> <span id="visTaxId" class="highlight-data letter-spacing-lg"></span></div>
-              <div><strong>發票號碼：</strong> <span id="visPaperNo" class="highlight-data"></span></div>
-              <div><strong>發票日期：</strong> <span id="visInvDate" class="highlight-data"></span></div>
-            </div>
-            <table class="invoice-table">
-              <thead class="text-center"><tr><th width="35%">品名</th><th width="10%">數量</th><th width="15%">單價</th><th width="20%">總價</th><th width="20%">備註</th></tr></thead>
-              <tbody id="visTbody"></tbody>
-              <tfoot>
-                <tr><td colspan="3" class="text-end fw-bold">銷售額合計</td><td class="text-end highlight-data" id="visNet">0</td><td></td></tr>
-                <tr><td colspan="3" class="text-end fw-bold">營業稅(5%)</td><td class="text-end highlight-data" id="visTax">0</td><td></td></tr>
-                <tr><td colspan="3" class="text-end fw-bold">總計</td><td class="text-end highlight-data" id="visTotal">0</td><td></td></tr>
-              </tfoot>
-            </table>
+            <div class="invoice-header"><h2 class="invoice-title">統一發票</h2><div class="fs-5 fw-bold">（三聯式）</div></div>
+            <div class="invoice-meta-info"><div><strong>買受人：</strong> <span id="visBuyer" class="highlight-data"></span></div><div><strong>統一編號：</strong> <span id="visTaxId" class="highlight-data letter-spacing-lg"></span></div><div><strong>發票號碼：</strong> <span id="visPaperNo" class="highlight-data"></span></div><div><strong>發票日期：</strong> <span id="visInvDate" class="highlight-data"></span></div></div>
+            <table class="invoice-table"><thead class="text-center"><tr><th width="35%">品名</th><th width="10%">數量</th><th width="15%">單價</th><th width="20%">總價</th><th width="20%">備註</th></tr></thead><tbody id="visTbody"></tbody><tfoot><tr><td colspan="3" class="text-end fw-bold">銷售額合計</td><td class="text-end highlight-data" id="visNet">0</td><td></td></tr><tr><td colspan="3" class="text-end fw-bold">營業稅(5%)</td><td class="text-end highlight-data" id="visTax">0</td><td></td></tr><tr><td colspan="3" class="text-end fw-bold">總計</td><td class="text-end highlight-data" id="visTotal">0</td><td></td></tr></tfoot></table>
           </div>
           <button class="btn btn-primary w-100 fw-bold py-3 shadow-sm" onclick="resetInvoiceSystem()">開立下一張</button>
         </div>
@@ -266,29 +164,11 @@
 
       <div id="sys-inventory" class="sys-module" style="display:none;">
         <div class="step-card active border-top border-4 border-info">
-          <ul class="nav nav-pills nav-fill mb-3" id="invTabs">
-            <li class="nav-item"><button class="nav-link active fw-bold py-1 px-2" data-bs-toggle="pill" data-bs-target="#tabStkList">📦 庫存</button></li>
-            <li class="nav-item"><button class="nav-link fw-bold py-1 px-2" data-bs-toggle="pill" data-bs-target="#tabStkLog">📜 異動</button></li>
-            <li class="nav-item"><button class="nav-link fw-bold py-1 px-2" data-bs-toggle="pill" data-bs-target="#tabStkShip">🚚 欠貨出貨</button></li>
-          </ul>
+          <ul class="nav nav-pills nav-fill mb-3" id="invTabs"><li class="nav-item"><button class="nav-link active fw-bold py-1 px-2" data-bs-toggle="pill" data-bs-target="#tabStkList">📦 庫存</button></li><li class="nav-item"><button class="nav-link fw-bold py-1 px-2" data-bs-toggle="pill" data-bs-target="#tabStkLog">📜 異動</button></li><li class="nav-item"><button class="nav-link fw-bold py-1 px-2" data-bs-toggle="pill" data-bs-target="#tabStkShip">🚚 欠貨出貨</button></li></ul>
           <div class="tab-content">
             <div class="tab-pane fade show active" id="tabStkList">
-              <div class="bg-light p-3 rounded border mb-3">
-                <div class="row text-center">
-                  <div class="col-6 border-end">
-                    <div class="text-muted small">庫存總值(成本)</div>
-                    <strong class="fs-5 text-dark" id="stkTotalValue">$0</strong>
-                  </div>
-                  <div class="col-6">
-                    <div class="text-muted small">低於安全警戒</div>
-                    <strong class="fs-5 text-danger" id="stkAlertCount">0 項</strong>
-                  </div>
-                </div>
-              </div>
-              <div class="d-flex gap-2 mb-3">
-                <button class="btn btn-info text-white w-75 fw-bold py-2 shadow-sm" onclick="openAdjustModal(null)">➕ 手動進貨 / 盤點</button>
-                <button class="btn btn-outline-secondary w-25 fw-bold py-2 shadow-sm" onclick="triggerSyncAssetCodes()" title="同步產品價格表的資材碼至庫存清單">🔄 同步</button>
-              </div>
+              <div class="bg-light p-3 rounded border mb-3"><div class="row text-center"><div class="col-6 border-end"><div class="text-muted small">庫存總值(成本)</div><strong class="fs-5 text-dark" id="stkTotalValue">$0</strong></div><div class="col-6"><div class="text-muted small">低於安全警戒</div><strong class="fs-5 text-danger" id="stkAlertCount">0 項</strong></div></div></div>
+              <div class="d-flex gap-2 mb-3"><button class="btn btn-info text-white w-75 fw-bold py-2 shadow-sm" onclick="openAdjustModal(null)">➕ 手動進貨 / 盤點</button><button class="btn btn-outline-secondary w-25 fw-bold py-2 shadow-sm" onclick="triggerSyncAssetCodes()" title="同步產品價格表的資材碼至庫存清單">🔄 同步</button></div>
               <input type="search" class="form-control mb-3" id="stkSearch" placeholder="🔍 搜尋品名或代號..." oninput="renderInventory()">
               <div id="stkListContainer"></div>
             </div>
@@ -298,63 +178,33 @@
                   <div class="col-6"><select class="form-select form-select-sm fw-bold text-secondary" id="logFilterIn" oninput="renderInvLogs()"><option value="">📥 庫存進/退/盤 (全部)</option><option value="建檔進貨">建檔進貨</option><option value="進貨入庫">進貨入庫</option><option value="盤點校正">盤點校正</option><option value="退貨">退貨</option></select></div>
                   <div class="col-6"><select class="form-select form-select-sm fw-bold text-secondary" id="logFilterOut" oninput="renderInvLogs()"><option value="">🚚 出貨相關 (全部)</option><option value="出貨扣抵">出貨扣抵 (開票)</option><option value="出貨扣抵(新建)">出貨扣抵 (開票新建)</option><option value="分批出貨">欠貨分批出貨</option><option value="作廢返還">作廢返還</option></select></div>
                 </div>
-                <div class="row g-2 mb-2">
-                  <div class="col-6"><input type="date" class="form-control form-control-sm text-secondary" id="logFilterStart" oninput="renderInvLogs()" title="開始日期"></div>
-                  <div class="col-6"><input type="date" class="form-control form-control-sm text-secondary" id="logFilterEnd" oninput="renderInvLogs()" title="結束日期"></div>
-                </div>
-                <div class="row g-2">
-                  <div class="col-12"><select class="form-select form-select-sm fw-bold text-secondary" id="logFilterName" oninput="renderInvLogs()"><option value="">📦 所有品名 (不限)</option></select></div>
-                </div>
+                <div class="row g-2 mb-2"><div class="col-6"><input type="date" class="form-control form-control-sm text-secondary" id="logFilterStart" oninput="renderInvLogs()" title="開始日期"></div><div class="col-6"><input type="date" class="form-control form-control-sm text-secondary" id="logFilterEnd" oninput="renderInvLogs()" title="結束日期"></div></div>
+                <div class="row g-2"><div class="col-12"><select class="form-select form-select-sm fw-bold text-secondary" id="logFilterName" oninput="renderInvLogs()"><option value="">📦 所有品名 (不限)</option></select></div></div>
               </div>
-              <input type="search" class="form-control mb-3" id="stkLogSearch" placeholder="🔍 關鍵字模糊搜尋 (操作人員、備註等)..." oninput="renderInvLogs()">
-              <div id="stkLogContainer"></div>
+              <input type="search" class="form-control mb-3" id="stkLogSearch" placeholder="🔍 關鍵字模糊搜尋 (操作人員、備註等)..." oninput="renderInvLogs()"><div id="stkLogContainer"></div>
             </div>
-            <div class="tab-pane fade" id="tabStkShip">
-              <div class="alert alert-info small py-2 mb-3">列出所有「開立發票」後，但尚未完成實際出貨的品項明細 (支援分批出貨)。</div>
-              <div id="stkShipContainer"></div>
-            </div>
+            <div class="tab-pane fade" id="tabStkShip"><div class="alert alert-info small py-2 mb-3">列出所有「開立發票」後，但尚未完成實際出貨的品項明細 (支援分批出貨)。</div><div id="stkShipContainer"></div></div>
           </div>
         </div>
       </div>
 
       <div id="sys-history" class="sys-module" style="display:none;">
         <div class="step-card active border-top border-4 border-success">
-          <ul class="nav nav-pills mb-3" id="historyTabs">
-            <li class="nav-item"><button class="nav-link active fw-bold py-1 px-3" data-bs-toggle="pill" data-bs-target="#tabList">發票紀錄</button></li>
-            <li class="nav-item"><button class="nav-link fw-bold py-1 px-3" data-bs-toggle="pill" data-bs-target="#tabReport">統計報表</button></li>
-          </ul>
-          
+          <ul class="nav nav-pills mb-3" id="historyTabs"><li class="nav-item"><button class="nav-link active fw-bold py-1 px-3" data-bs-toggle="pill" data-bs-target="#tabList">發票紀錄</button></li><li class="nav-item"><button class="nav-link fw-bold py-1 px-3" data-bs-toggle="pill" data-bs-target="#tabReport">統計報表</button></li></ul>
           <div class="tab-content">
             <div class="tab-pane fade show active" id="tabList">
               <div class="p-2 bg-light border rounded mb-3">
-                <div class="row g-2 mb-2">
-                  <div class="col-4"><select class="form-select form-select-sm fw-bold text-secondary" id="histFilterStaff" oninput="renderHistory()"><option value="">👤 員工</option></select></div>
-                  <div class="col-4"><select class="form-select form-select-sm fw-bold text-secondary" id="histFilterClient" oninput="renderHistory()"><option value="">🏢 客戶</option></select></div>
-                  <div class="col-4"><select class="form-select form-select-sm fw-bold text-secondary" id="histFilterStatus" oninput="renderHistory()"><option value="">所有狀態</option><option value="正常">🟢 正常已開</option><option value="作廢">🔴 已作廢</option></select></div>
-                </div>
+                <div class="row g-2 mb-2"><div class="col-4"><select class="form-select form-select-sm fw-bold text-secondary" id="histFilterStaff" oninput="renderHistory()"><option value="">👤 員工</option></select></div><div class="col-4"><select class="form-select form-select-sm fw-bold text-secondary" id="histFilterClient" oninput="renderHistory()"><option value="">🏢 客戶</option></select></div><div class="col-4"><select class="form-select form-select-sm fw-bold text-secondary" id="histFilterStatus" oninput="renderHistory()"><option value="">所有狀態</option><option value="正常">🟢 正常已開</option><option value="作廢">🔴 已作廢</option></select></div></div>
                 <div class="row g-2"><div class="col-12"><input type="date" class="form-control form-control-sm" id="histFilterDate" oninput="renderHistory()"></div></div>
               </div>
               <input type="search" class="form-control mb-3" id="histSearch" placeholder="🔍 搜尋：客戶、發票號碼、明細..." oninput="renderHistory()">
               <div id="histListContainer"></div>
             </div>
-            
             <div class="tab-pane fade" id="tabReport">
-              <div class="row g-2 mb-2">
-                <div class="col-6"><button class="btn btn-outline-secondary w-100 btn-sm" onclick="setReportDate(7)">近 7 天</button></div>
-                <div class="col-6"><button class="btn btn-outline-secondary w-100 btn-sm" onclick="setReportDate(30)">近 30 天</button></div>
-              </div>
-              <div class="row g-2 mb-3">
-                <div class="col-12"><input type="month" id="repMonthPicker" class="form-control form-control-sm text-center fw-bold" onchange="setReportMonth()" placeholder="一鍵選擇特定月份"></div>
-              </div>
-              <div class="row g-2 mb-3">
-                <div class="col-6"><input type="date" id="repStart" class="form-control form-control-sm" onchange="generateReport()"></div>
-                <div class="col-6"><input type="date" id="repEnd" class="form-control form-control-sm" onchange="generateReport()"></div>
-              </div>
-              <div class="bg-light p-3 rounded border mb-3">
-                <div class="d-flex justify-content-between mb-1"><span class="text-muted">有效開立張數</span><strong id="repCount">0 張</strong></div>
-                <div class="d-flex justify-content-between mb-1"><span class="text-muted">總銷售額(未稅)</span><strong id="repNet">0 元</strong></div>
-                <div class="d-flex justify-content-between pt-2 border-top mt-2"><span class="fw-bold text-danger">總營收(含稅)</span><strong class="text-danger fs-5" id="repTotal">0 元</strong></div>
-              </div>
+              <div class="row g-2 mb-2"><div class="col-6"><button class="btn btn-outline-secondary w-100 btn-sm" onclick="setReportDate(7)">近 7 天</button></div><div class="col-6"><button class="btn btn-outline-secondary w-100 btn-sm" onclick="setReportDate(30)">近 30 天</button></div></div>
+              <div class="row g-2 mb-3"><div class="col-12"><input type="month" id="repMonthPicker" class="form-control form-control-sm text-center fw-bold" onchange="setReportMonth()" placeholder="一鍵選擇特定月份"></div></div>
+              <div class="row g-2 mb-3"><div class="col-6"><input type="date" id="repStart" class="form-control form-control-sm" onchange="generateReport()"></div><div class="col-6"><input type="date" id="repEnd" class="form-control form-control-sm" onchange="generateReport()"></div></div>
+              <div class="bg-light p-3 rounded border mb-3"><div class="d-flex justify-content-between mb-1"><span class="text-muted">有效開立張數</span><strong id="repCount">0 張</strong></div><div class="d-flex justify-content-between mb-1"><span class="text-muted">總銷售額(未稅)</span><strong id="repNet">0 元</strong></div><div class="d-flex justify-content-between pt-2 border-top mt-2"><span class="fw-bold text-danger">總營收(含稅)</span><strong class="text-danger fs-5" id="repTotal">0 元</strong></div></div>
               <button class="btn btn-success w-100 fw-bold py-2 mb-4 shadow-sm" onclick="exportReportToEmail()">📥 匯出 Excel 報表並寄信</button>
             </div>
           </div>
@@ -363,229 +213,28 @@
 
       <div id="sys-admin" class="sys-module" style="display:none;">
         <div class="step-card active border-top border-4 border-danger">
-          <ul class="nav nav-pills nav-fill mb-3" id="adminTabs">
-            <li class="nav-item"><button class="nav-link active fw-bold py-2" data-bs-toggle="pill" data-bs-target="#tabAdmItem">📦 報價品項</button></li>
-            <li class="nav-item"><button class="nav-link fw-bold py-2" data-bs-toggle="pill" data-bs-target="#tabAdmClient">🏢 客戶</button></li>
-          </ul>
+          <ul class="nav nav-pills nav-fill mb-3" id="adminTabs"><li class="nav-item"><button class="nav-link active fw-bold py-2" data-bs-toggle="pill" data-bs-target="#tabAdmItem">📦 報價品項</button></li><li class="nav-item"><button class="nav-link fw-bold py-2" data-bs-toggle="pill" data-bs-target="#tabAdmClient">🏢 客戶</button></li></ul>
           <div class="tab-content">
-            <div class="tab-pane fade show active" id="tabAdmItem">
-              <button class="btn btn-primary w-100 fw-bold py-3 mb-3 shadow-sm" onclick="openAdminItemModal(null)">➕ 新增合約報價品項</button>
-              <div class="mb-2">
-                <select class="form-select border-primary fw-bold" id="admItemFilterSelect" onchange="renderAdminItems()"><option value="">📂 所有客戶 (顯示全部)</option></select>
-              </div>
-              <input type="search" class="form-control mb-3" id="admItemSearch" placeholder="🔍 搜尋品名..." oninput="renderAdminItems()">
-              <div id="admItemList"></div>
-            </div>
-            <div class="tab-pane fade" id="tabAdmClient">
-              <button class="btn btn-danger w-100 fw-bold py-3 mb-3 shadow-sm" onclick="openNewClientModal()">➕ 新增全新客戶</button>
-              <input type="search" class="form-control mb-3" id="admClientSearch" placeholder="🔍 搜尋客戶..." oninput="renderAdminClients()">
-              <div id="admClientList"></div>
-            </div>
+            <div class="tab-pane fade show active" id="tabAdmItem"><button class="btn btn-primary w-100 fw-bold py-3 mb-3 shadow-sm" onclick="openAdminItemModal(null)">➕ 新增合約報價品項</button><div class="mb-2"><select class="form-select border-primary fw-bold" id="admItemFilterSelect" onchange="renderAdminItems()"><option value="">📂 所有客戶 (顯示全部)</option></select></div><input type="search" class="form-control mb-3" id="admItemSearch" placeholder="🔍 搜尋品名..." oninput="renderAdminItems()"><div id="admItemList"></div></div>
+            <div class="tab-pane fade" id="tabAdmClient"><button class="btn btn-danger w-100 fw-bold py-3 mb-3 shadow-sm" onclick="openNewClientModal()">➕ 新增全新客戶</button><input type="search" class="form-control mb-3" id="admClientSearch" placeholder="🔍 搜尋客戶..." oninput="renderAdminClients()"><div id="admClientList"></div></div>
           </div>
         </div>
       </div>
     </div>
   </div>
 
-  <div class="modal fade" id="editOrdModal" tabindex="-1">
-    <div class="modal-dialog modal-dialog-centered modal-lg">
-      <div class="modal-content">
-        <div class="modal-header bg-warning">
-          <h5 class="modal-title fw-bold">📦 編輯/建立訂單</h5>
-          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-        </div>
-        <div class="modal-body">
-          <input type="hidden" id="e_ordRow">
-          <div class="mb-3">
-            <label class="small text-muted fw-bold">客戶名稱 <span class="text-danger">*</span></label>
-            <input type="text" class="form-control fake-input-btn fw-bold" id="e_ordClient" readonly placeholder="點此選擇客戶..." onclick="openSearchModal('client_ord', selectClientForOrder)">
-          </div>
-          <div class="row g-2 mb-3">
-            <div class="col-4"><label class="small text-muted fw-bold">訂單號碼</label><input type="text" class="form-control" id="e_ordNo" placeholder="選填"></div>
-            <div class="col-4"><label class="small text-muted fw-bold">申請單位</label><input type="text" class="form-control" id="e_ordDept" placeholder="選填"></div>
-            <div class="col-4"><label class="small text-muted fw-bold">出貨期限</label><input type="date" class="form-control text-danger fw-bold" id="e_ordDeadline"></div>
-          </div>
-          <label class="small text-muted fw-bold border-bottom pb-1 d-block mb-2">品項明細 (雙代碼對照) <span class="text-danger">*</span></label>
-          <div id="e_ordItemsContainer"></div>
-          <button class="btn btn-outline-primary w-100 fw-bold py-2 mb-4 shadow-sm" onclick="addOrderManualItemRow()">+ 新增品項</button>
-          <div class="d-flex gap-2">
-            <button class="btn btn-danger w-50 fw-bold" id="btnDeleteOrd" onclick="deleteOrder()" style="display:none;">作廢刪除</button>
-            <button class="btn btn-warning w-100 fw-bold shadow-sm" id="btnSaveOrd" onclick="saveEditOrder()">確認儲存</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
+  <div class="modal fade" id="editOrdModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered modal-lg"><div class="modal-content"><div class="modal-header bg-warning"><h5 class="modal-title fw-bold">📦 編輯/建立訂單</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" id="e_ordRow"><div class="mb-3"><label class="small text-muted fw-bold">客戶名稱 <span class="text-danger">*</span></label><input type="text" class="form-control fake-input-btn fw-bold" id="e_ordClient" readonly placeholder="點此選擇客戶..." onclick="openSearchModal('client_ord', selectClientForOrder)"></div><div class="row g-2 mb-3"><div class="col-4"><label class="small text-muted fw-bold">訂單號碼</label><input type="text" class="form-control" id="e_ordNo" placeholder="選填"></div><div class="col-4"><label class="small text-muted fw-bold">申請單位</label><input type="text" class="form-control" id="e_ordDept" placeholder="選填"></div><div class="col-4"><label class="small text-muted fw-bold">出貨期限</label><input type="date" class="form-control text-danger fw-bold" id="e_ordDeadline"></div></div><label class="small text-muted fw-bold border-bottom pb-1 d-block mb-2">品項明細 (雙代碼對照) <span class="text-danger">*</span></label><div id="e_ordItemsContainer"></div><button class="btn btn-outline-primary w-100 fw-bold py-2 mb-4 shadow-sm" onclick="addOrderManualItemRow()">+ 新增品項</button><div class="d-flex gap-2"><button class="btn btn-danger w-50 fw-bold" id="btnDeleteOrd" onclick="deleteOrder()" style="display:none;">作廢刪除</button><button class="btn btn-warning w-100 fw-bold shadow-sm" id="btnSaveOrd" onclick="saveEditOrder()">確認儲存</button></div></div></div></div></div>
+  <div class="modal fade" id="adjInvModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header bg-info text-white"><h5 class="modal-title fw-bold">📦 庫存進貨與盤點</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" id="adjRowIdx"><div class="mb-3"><label class="small fw-bold text-muted">品名 (點擊搜尋) <span class="text-danger">*</span></label><input type="text" class="form-control fake-input-btn fw-bold" id="adjName" readonly placeholder="點此搜尋品項..." onclick="openSearchModal('item_adj', selectProductForAdj)"></div><div class="mb-2"><label class="small fw-bold text-muted">長固代號 (自動帶入)</label><input type="text" class="form-control bg-light text-secondary" id="adjInternalCode" readonly placeholder="選定品名後自動帶出"></div><div class="row g-2 mb-2"><div class="col-6"><label class="small fw-bold text-muted">異動數量 (+/-)</label><input type="number" class="form-control text-primary fw-bold" id="adjQty" inputmode="numeric" step="any"></div><div class="col-6"><label class="small fw-bold text-muted">安全庫存</label><input type="number" class="form-control text-danger fw-bold" id="adjAlert" inputmode="numeric" step="any"></div></div><div class="row g-2 mb-2"><div class="col-6"><label class="small fw-bold text-muted">進貨成本</label><input type="number" class="form-control" id="adjCost" inputmode="numeric" step="any"></div><div class="col-6"><label class="small fw-bold text-muted">供應商</label><input type="text" class="form-control" id="adjSup"></div></div><div class="row g-2 mb-3"><div class="col-6"><label class="small fw-bold text-muted">生產批號 (選填)</label><input type="text" class="form-control" id="adjLot"></div><div class="col-6"><label class="small fw-bold text-muted">有效期限 (選填)</label><input type="date" class="form-control" id="adjExp"></div></div><div class="mb-3"><label class="small fw-bold text-muted">異動原因</label><select class="form-select mb-2" id="adjType"><option>進貨入庫</option><option>盤點校正</option><option>退貨</option></select></div><div class="mb-4"><label class="small fw-bold text-muted">備註</label><input type="text" class="form-control" id="adjMemo"></div><button class="btn btn-info text-white w-100 fw-bold py-2" onclick="saveInventoryAdjust()">💾 確認異動</button></div></div></div></div>
+  <div class="modal fade" id="shipModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header bg-primary text-white"><h5 class="modal-title fw-bold">🚚 確認出貨數量</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" id="shipRowIdx"><h6 id="shipItemName" class="fw-bold mb-3"></h6><div class="d-flex justify-content-between mb-2"><span class="text-muted">訂購總數：<strong id="shipTotalQty">0</strong></span><span class="text-muted">已出貨：<strong id="shipDoneQty">0</strong></span><span class="text-danger fw-bold">尚欠數：<strong id="shipRemainQty">0</strong></span></div><div class="mb-3"><label class="fw-bold">本次實際出貨數量</label><input type="number" class="form-control form-control-lg text-primary fw-bold text-center" id="shipNowQty" min="0" step="any" inputmode="numeric"></div><button class="btn btn-primary w-100 fw-bold py-2" onclick="confirmShipment()">確認扣庫出貨</button></div></div></div></div>
+  <div class="modal fade" id="editInvModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header bg-warning"><h5 class="modal-title fw-bold">✏️ 編輯發票紀錄</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" id="e_invRow"><div class="mb-2"><label class="small text-muted fw-bold">發票號碼</label><input type="text" class="form-control fw-bold" id="e_invPaper" style="text-transform: uppercase;"></div><div class="mb-2"><label class="small text-muted fw-bold">訂單號碼</label><input type="text" class="form-control" id="e_invOrder"></div><div class="row g-2 mb-2"><div class="col-6"><label class="small text-muted fw-bold">銷售額(未稅)</label><input type="number" class="form-control" id="e_invNet"></div><div class="col-6"><label class="small text-muted fw-bold">總計(含稅)</label><input type="number" class="form-control text-danger fw-bold" id="e_invTotal"></div></div><div class="mb-3"><label class="small text-muted fw-bold">購買明細</label><textarea class="form-control" id="e_invDetails" rows="4"></textarea></div><button class="btn btn-warning w-100 fw-bold py-2" onclick="saveEditInvoice()">確認修改</button></div></div></div></div>
+  <div class="modal fullscreen-modal fade" id="searchModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content"><div class="modal-header bg-light"><h5 class="modal-title fw-bold text-dark" id="searchModalTitle">選擇</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="search" class="form-control form-control-lg mb-3 shadow-sm sticky-top" id="searchModalInput" placeholder="輸入關鍵字搜尋..." oninput="filterSearchModal()"><div id="searchModalList"></div></div></div></div></div>
+  <div class="modal fade" id="addClientModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header bg-light"><h5 class="modal-title fw-bold text-danger">➕ 新增全新客戶</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><div class="mb-3"><label class="fw-bold text-muted small">客戶名稱 <span class="text-danger">*</span></label><input type="text" class="form-control fw-bold" id="addClientName"></div><div class="mb-4"><label class="fw-bold text-muted small">統一編號</label><input type="text" class="form-control fw-bold" id="addClientTaxId" inputmode="numeric"></div><button class="btn btn-danger w-100 fw-bold py-3 fs-5 shadow-sm" onclick="submitNewClientOptimistic()">💾 建立客戶</button></div></div></div></div>
+  <div class="modal fade" id="editItemModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header bg-light"><h5 class="modal-title fw-bold text-primary" id="editItemModalTitle">📝 編輯品項</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" id="editItemRowIndex"><div class="mb-3"><label class="fw-bold text-muted small">歸屬客戶 <span class="text-danger">*</span></label><input type="text" class="form-control fake-input-btn fw-bold" id="editItemClientDisplay" readonly onclick="triggerItemClientSelect()"><input type="hidden" id="editItemClientVal"></div><div class="mb-3"><label class="fw-bold text-muted small">長固代號 / 資材碼</label><input type="text" class="form-control" id="editItemInternalCode" placeholder="此商品的系統身分證 (選填)"></div><div class="mb-3"><label class="fw-bold text-muted small">合約品名 <span class="text-danger">*</span></label><input type="text" class="form-control fw-bold" id="editItemName"></div><div class="row g-2 mb-4"><div class="col-4"><label class="fw-bold text-muted small">單位</label><input type="text" class="form-control fw-bold" id="editItemUnit"></div><div class="col-8"><label class="fw-bold text-muted small">單價(含稅) <span class="text-danger">*</span></label><input type="number" step="any" class="form-control fw-bold text-end" id="editItemPrice" inputmode="decimal"></div></div><button class="btn btn-primary w-100 fw-bold py-3 fs-5 shadow-sm" onclick="submitEditItemOptimistic()">💾 儲存</button></div></div></div></div>
+  <div class="modal fade" id="editClientModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header bg-light"><h5 class="modal-title fw-bold text-danger">🏢 修改客戶資料</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" id="editClientOldName"><div class="mb-3"><label class="fw-bold text-muted small">客戶名稱 <span class="text-danger">*</span></label><input type="text" class="form-control fw-bold" id="editClientName"></div><div class="mb-4"><label class="fw-bold text-muted small">統一編號</label><input type="text" class="form-control fw-bold" id="editClientTaxId" inputmode="numeric"></div><button class="btn btn-danger w-100 fw-bold py-3 fs-5 shadow-sm" onclick="submitEditClientOptimistic()">💾 確認並套用</button></div></div></div></div>
 
-  <div class="modal fade" id="adjInvModal" tabindex="-1">
-    <div class="modal-dialog modal-dialog-centered">
-      <div class="modal-content">
-        <div class="modal-header bg-info text-white">
-          <h5 class="modal-title fw-bold">📦 庫存進貨與盤點</h5>
-          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-        </div>
-        <div class="modal-body">
-          <input type="hidden" id="adjRowIdx">
-          <div class="mb-3">
-            <label class="small fw-bold text-muted">品名 (點擊搜尋) <span class="text-danger">*</span></label>
-            <input type="text" class="form-control fake-input-btn fw-bold" id="adjName" readonly placeholder="點此搜尋品項..." onclick="openSearchModal('item_adj', selectProductForAdj)">
-          </div>
-          <div class="mb-2">
-            <label class="small fw-bold text-muted">長固代號 (自動帶入)</label>
-            <input type="text" class="form-control bg-light text-secondary" id="adjInternalCode" readonly placeholder="選定品名後自動帶出">
-          </div>
-          <div class="row g-2 mb-2">
-            <div class="col-6"><label class="small fw-bold text-muted">異動數量 (+/-)</label><input type="number" class="form-control text-primary fw-bold" id="adjQty" inputmode="numeric" step="any"></div>
-            <div class="col-6"><label class="small fw-bold text-muted">安全庫存</label><input type="number" class="form-control text-danger fw-bold" id="adjAlert" inputmode="numeric" step="any"></div>
-          </div>
-          <div class="row g-2 mb-2">
-            <div class="col-6"><label class="small fw-bold text-muted">進貨成本</label><input type="number" class="form-control" id="adjCost" inputmode="numeric" step="any"></div>
-            <div class="col-6"><label class="small fw-bold text-muted">供應商</label><input type="text" class="form-control" id="adjSup"></div>
-          </div>
-          <div class="row g-2 mb-3">
-            <div class="col-6"><label class="small fw-bold text-muted">生產批號 (選填)</label><input type="text" class="form-control" id="adjLot"></div>
-            <div class="col-6"><label class="small fw-bold text-muted">有效期限 (選填)</label><input type="date" class="form-control" id="adjExp"></div>
-          </div>
-          <div class="mb-3">
-            <label class="small fw-bold text-muted">異動原因</label>
-            <select class="form-select mb-2" id="adjType"><option>進貨入庫</option><option>盤點校正</option><option>退貨</option></select>
-          </div>
-          <div class="mb-4"><label class="small fw-bold text-muted">備註</label><input type="text" class="form-control" id="adjMemo"></div>
-          <button class="btn btn-info text-white w-100 fw-bold py-2" onclick="saveInventoryAdjust()">💾 確認異動</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="modal fade" id="shipModal" tabindex="-1">
-    <div class="modal-dialog modal-dialog-centered">
-      <div class="modal-content">
-        <div class="modal-header bg-primary text-white">
-          <h5 class="modal-title fw-bold">🚚 確認出貨數量</h5>
-          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-        </div>
-        <div class="modal-body">
-          <input type="hidden" id="shipRowIdx">
-          <h6 id="shipItemName" class="fw-bold mb-3"></h6>
-          <div class="d-flex justify-content-between mb-2">
-            <span class="text-muted">訂購總數：<strong id="shipTotalQty">0</strong></span>
-            <span class="text-muted">已出貨：<strong id="shipDoneQty">0</strong></span>
-            <span class="text-danger fw-bold">尚欠數：<strong id="shipRemainQty">0</strong></span>
-          </div>
-          <div class="mb-3">
-            <label class="fw-bold">本次實際出貨數量</label>
-            <input type="number" class="form-control form-control-lg text-primary fw-bold text-center" id="shipNowQty" min="0" step="any" inputmode="numeric">
-          </div>
-          <button class="btn btn-primary w-100 fw-bold py-2" onclick="confirmShipment()">確認扣庫出貨</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="modal fade" id="editInvModal" tabindex="-1">
-    <div class="modal-dialog modal-dialog-centered">
-      <div class="modal-content">
-        <div class="modal-header bg-warning">
-          <h5 class="modal-title fw-bold">✏️ 編輯發票紀錄</h5>
-          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-        </div>
-        <div class="modal-body">
-          <input type="hidden" id="e_invRow">
-          <div class="mb-2"><label class="small text-muted fw-bold">發票號碼</label><input type="text" class="form-control fw-bold" id="e_invPaper" style="text-transform: uppercase;"></div>
-          <div class="mb-2"><label class="small text-muted fw-bold">訂單號碼</label><input type="text" class="form-control" id="e_invOrder"></div>
-          <div class="row g-2 mb-2">
-            <div class="col-6"><label class="small text-muted fw-bold">銷售額(未稅)</label><input type="number" class="form-control" id="e_invNet"></div>
-            <div class="col-6"><label class="small text-muted fw-bold">總計(含稅)</label><input type="number" class="form-control text-danger fw-bold" id="e_invTotal"></div>
-          </div>
-          <div class="mb-3"><label class="small text-muted fw-bold">購買明細</label><textarea class="form-control" id="e_invDetails" rows="4"></textarea></div>
-          <button class="btn btn-warning w-100 fw-bold py-2" onclick="saveEditInvoice()">確認修改</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="modal fullscreen-modal fade" id="searchModal" tabindex="-1">
-    <div class="modal-dialog">
-      <div class="modal-content">
-        <div class="modal-header bg-light">
-          <h5 class="modal-title fw-bold text-dark" id="searchModalTitle">選擇</h5>
-          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-        </div>
-        <div class="modal-body">
-          <input type="search" class="form-control form-control-lg mb-3 shadow-sm sticky-top" id="searchModalInput" placeholder="輸入關鍵字搜尋..." oninput="filterSearchModal()">
-          <div id="searchModalList"></div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="modal fade" id="addClientModal" tabindex="-1">
-    <div class="modal-dialog modal-dialog-centered">
-      <div class="modal-content">
-        <div class="modal-header bg-light">
-          <h5 class="modal-title fw-bold text-danger">➕ 新增全新客戶</h5>
-          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-        </div>
-        <div class="modal-body">
-          <div class="mb-3"><label class="fw-bold text-muted small">客戶名稱 <span class="text-danger">*</span></label><input type="text" class="form-control fw-bold" id="addClientName"></div>
-          <div class="mb-4"><label class="fw-bold text-muted small">統一編號</label><input type="text" class="form-control fw-bold" id="addClientTaxId" inputmode="numeric"></div>
-          <button class="btn btn-danger w-100 fw-bold py-3 fs-5 shadow-sm" onclick="submitNewClientOptimistic()">💾 建立客戶</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="modal fade" id="editItemModal" tabindex="-1">
-    <div class="modal-dialog modal-dialog-centered">
-      <div class="modal-content">
-        <div class="modal-header bg-light">
-          <h5 class="modal-title fw-bold text-primary" id="editItemModalTitle">📝 編輯品項</h5>
-          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-        </div>
-        <div class="modal-body">
-          <input type="hidden" id="editItemRowIndex">
-          <div class="mb-3">
-            <label class="fw-bold text-muted small">歸屬客戶 <span class="text-danger">*</span></label>
-            <input type="text" class="form-control fake-input-btn fw-bold" id="editItemClientDisplay" readonly onclick="triggerItemClientSelect()">
-            <input type="hidden" id="editItemClientVal">
-          </div>
-          <div class="mb-3">
-            <label class="fw-bold text-muted small">長固代號 / 資材碼</label>
-            <input type="text" class="form-control" id="editItemInternalCode" placeholder="此商品的系統身分證 (選填)">
-          </div>
-          <div class="mb-3">
-            <label class="fw-bold text-muted small">合約品名 <span class="text-danger">*</span></label>
-            <input type="text" class="form-control fw-bold" id="editItemName">
-          </div>
-          <div class="row g-2 mb-4">
-            <div class="col-4"><label class="fw-bold text-muted small">單位</label><input type="text" class="form-control fw-bold" id="editItemUnit"></div>
-            <div class="col-8"><label class="fw-bold text-muted small">單價(含稅) <span class="text-danger">*</span></label><input type="number" step="any" class="form-control fw-bold text-end" id="editItemPrice" inputmode="decimal"></div>
-          </div>
-          <button class="btn btn-primary w-100 fw-bold py-3 fs-5 shadow-sm" onclick="submitEditItemOptimistic()">💾 儲存</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="modal fade" id="editClientModal" tabindex="-1">
-    <div class="modal-dialog modal-dialog-centered">
-      <div class="modal-content">
-        <div class="modal-header bg-light">
-          <h5 class="modal-title fw-bold text-danger">🏢 修改客戶資料</h5>
-          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-        </div>
-        <div class="modal-body">
-          <input type="hidden" id="editClientOldName">
-          <div class="mb-3"><label class="fw-bold text-muted small">客戶名稱 <span class="text-danger">*</span></label><input type="text" class="form-control fw-bold" id="editClientName"></div>
-          <div class="mb-4"><label class="fw-bold text-muted small">統一編號</label><input type="text" class="form-control fw-bold" id="editClientTaxId" inputmode="numeric"></div>
-          <button class="btn btn-danger w-100 fw-bold py-3 fs-5 shadow-sm" onclick="submitEditClientOptimistic()">💾 確認並套用</button>
-        </div>
-      </div>
-    </div>
-  </div>
+  <div id="printArea"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
   <script src="main.js"></script>
-
 </body>
 </html>
