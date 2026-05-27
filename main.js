@@ -5,7 +5,7 @@
  */
 
 // 🔴 系統 API 端點 (請替換為你的 GAS 網頁應用程式 URL)
-const API_URL = "https://script.google.com/macros/s/AKfycbxWzxfHYdw9qvcPtGpU2qjxk-10hToTb1Jx-LrMhBN1jkR3IXUnu8m6UgfKcGMsi0tl/exec";
+const API_URL = "請填入你的_GAS_網頁應用程式_URL";
 
 // ============================================================================
 // 全域變數與狀態管理
@@ -504,7 +504,7 @@ function renderHistory() {
     }).join('');
 }
 
-// ✨ 出貨單列印魔法 (完美套用 PDF 排版)
+// ✨ 出貨單列印魔法 (A5橫向、移除送貨地址版)
 function printDeliveryNote(idx) {
     const h = globalHistory.find(x => x.rowIdx === idx); if (!h) return;
     const items = globalSalesDetails.filter(s => s.paperNo === h.paperNo && s.shipStatus !== '作廢');
@@ -516,7 +516,6 @@ function printDeliveryNote(idx) {
         items.forEach(item => {
             const inv = globalInventory.find(v => v.name === item.name);
             const lotExp = inv ? `${inv.lot||''} ${inv.expiry||''}`.trim() : '';
-            // 欠貨邏輯：因為這裡印的是本次發票數量，如果沒有紀錄原訂單數，暫以 0 顯示。
             tbodyHtml += `
                 <tr>
                     <td style="border: 1px solid #333; padding: 8px; text-align: left;">${item.name}</td>
@@ -536,21 +535,19 @@ function printDeliveryNote(idx) {
     }
 
     const html = `
-        <div style="padding: 10px; width: 100%; box-sizing: border-box; height: 148mm;">
+        <div style="padding: 0; width: 100%; box-sizing: border-box;">
             <table style="width: 100%; border: none; margin-bottom: 15px;">
                 <tr>
-                    <td style="width: 55%; vertical-align: top;">
+                    <td style="width: 50%; vertical-align: top;">
                         <div style="font-weight: bold; font-size: 16px;">TO:</div>
-                        <div style="font-weight: bold; font-size: 20px; margin-top: 5px; letter-spacing: 2px;">${h.client}</div>
-                        <div style="font-size: 13px; margin-top: 10px; border-bottom: 1px solid #999; width: 80%; display: inline-block; color:#888;">(送貨地址)</div>
+                        <div style="font-weight: bold; font-size: 22px; margin-top: 5px; letter-spacing: 2px;">${h.client}</div>
                     </td>
-                    <td style="width: 45%; vertical-align: top; font-size: 14px; line-height: 1.6;">
-                        <div style="font-weight: bold; font-size: 15px;">FROM: 長固實業有限公司</div>
+                    <td style="width: 50%; vertical-align: top; font-size: 14px; line-height: 1.6; text-align: right;">
+                        <div style="font-weight: bold; font-size: 16px;">FROM: 長固實業有限公司</div>
                         <div>新北市三重區重新路五段609巷6號4樓</div>
                         <div>TEL: (02) 2999-3881 &nbsp; 2999-3593</div>
                         <div>FAX: 886-2-2999-3495</div>
-                        <div style="margin-top: 10px;">${dateStr}</div>
-                        <div>1/1</div>
+                        <div style="margin-top: 5px;">${dateStr} &nbsp;&nbsp; 1/1</div>
                     </td>
                 </tr>
             </table>
@@ -578,12 +575,12 @@ function printDeliveryNote(idx) {
                 </tfoot>
             </table>
 
-            <div style="margin-top: 20px; font-size: 14px; line-height: 1.6;">
+            <div style="margin-top: 15px; font-size: 14px; line-height: 1.6;">
                 <p style="margin-bottom: 5px;">以上貨品數量及單價請查核.</p>
-                <p style="margin-bottom: 20px;">附發票號碼: <strong style="font-size: 16px;">${h.paperNo || ''}</strong></p>
-                <div style="display: flex; justify-content: space-between; margin-top: 50px;">
-                    <div style="width: 45%;">簽收: <span style="border-bottom: 1px solid #000; display: inline-block; width: 70%;">&nbsp;</span></div>
-                    <div style="width: 45%;">備考: <span style="border-bottom: 1px solid #000; display: inline-block; width: 70%;">&nbsp;</span></div>
+                <p style="margin-bottom: 15px;">附發票號碼: <strong style="font-size: 16px;">${h.paperNo || ''}</strong></p>
+                <div style="display: flex; justify-content: space-between; margin-top: 30px;">
+                    <div style="width: 45%;">簽收: <span style="border-bottom: 1px solid #000; display: inline-block; width: 75%;">&nbsp;</span></div>
+                    <div style="width: 45%;">備考: <span style="border-bottom: 1px solid #000; display: inline-block; width: 75%;">&nbsp;</span></div>
                 </div>
             </div>
         </div>
