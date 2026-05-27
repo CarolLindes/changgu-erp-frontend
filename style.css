@@ -68,7 +68,7 @@ html, body {
 .email-list-container { max-height: 100px; overflow-y: auto; border: 1px solid #eee; padding: 5px; border-radius: 5px; background: #fff;}
 
 /* ==========================================================================
-   列印專屬樣式 (@media print) - 出貨單排版魔法
+   列印專屬樣式 (@media print) - 出貨單排版魔法 (A5 橫式滿版)
    ========================================================================== */
 #printArea { display: none; }
 
@@ -85,7 +85,7 @@ html, body {
         page-break-after: avoid;
     }
     @page {
-        size: A4 portrait;
+        size: A5 landscape;
         margin: 10mm;
     }
 }
