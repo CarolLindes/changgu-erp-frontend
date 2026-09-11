@@ -1,5 +1,5 @@
 /* ==========================================================================
-   長固 ERP 系統 - 核心樣式表
+   長固 ERP 系統 - 核心樣式表 (測試環境優化版)
    ========================================================================== */
 html::-webkit-scrollbar, body::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -68,13 +68,29 @@ html, body {
 .email-list-container { max-height: 100px; overflow-y: auto; border: 1px solid #eee; padding: 5px; border-radius: 5px; background: #fff;}
 
 /* ==========================================================================
+   拖曳排序 (Drag & Drop) 專屬樣式
+   ========================================================================== */
+.draggable-row {
+    transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+.drag-handle {
+    transition: color 0.2s ease;
+}
+.drag-handle:hover {
+    color: #495057 !important;
+}
+.drag-handle:active {
+    cursor: grabbing !important;
+}
+
+/* ==========================================================================
    列印專屬樣式 (@media print) - 出貨單排版魔法 (A5 橫式滿版)
    ========================================================================== */
 #printArea { display: none; }
 
 @media print {
     body { background: #fff !important; margin: 0; padding: 0; }
-    #bgSyncIndicator, #toastBox, #miniLoading, #authScreen, #splashScreen, #homeMenu, #mainApp, .modal {
+    #btnRetrySync, #bgSyncIndicator, #toastBox, #miniLoading, #authScreen, #splashScreen, #homeMenu, #mainApp, .modal {
         display: none !important;
     }
     #printArea {
