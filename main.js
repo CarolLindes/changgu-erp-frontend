@@ -5,7 +5,7 @@
  */
 
 // 🔴 系統 API 端點 (已更新為測試環境專用網址)
-const API_URL = "https://script.google.com/macros/s/AKfycbxWzxfHYdw9qvcPtGpU2qjxk-10hToTb1Jx-LrMhBN1jkR3IXUnu8m6UgfKcGMsi0tl/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbxWzxfHYdw9qvcPtGpU2qjxk-10hToTb1Jx-LrMhBN1jkR3IXUnu8m6UgfKcGMsi0tl/exec/exec";
 
 // ============================================================================
 // 全域變數與狀態管理
@@ -594,19 +594,16 @@ function generatePreview() {
         const orderNoStr = document.getElementById('invOrderNo') ? document.getElementById('invOrderNo').value : ''; 
         const invDateStr = document.getElementById('invDate').value ? document.getElementById('invDate').value : getTodayStr();
 
-        // 第一次迴圈：計算含稅總計與各品項初步未稅額，並找出最大筆金額來吸收尾差
         validItems.forEach((item, idx) => { 
             let price = Math.max(0, parseFloat(item.product.price) || 0); 
             let qty = Math.max(0, parseFloat(item.qty) || 0); 
             const sub = price * qty; 
             totalWithTax += sub; 
 
-            // 計算單品項未稅額 (四捨五入)
             let unTaxedSub = Math.round(qty * (price / 1.05));
             item.adjustedUnTaxedSub = unTaxedSub;
             sumUnTaxedSub += unTaxedSub;
 
-            // 紀錄未稅額最大的品項索引
             if (unTaxedSub > maxUnTaxedValue) {
                 maxUnTaxedValue = unTaxedSub;
                 maxUnTaxedIndex = idx;
@@ -616,19 +613,15 @@ function generatePreview() {
             item.formattedRemark = remark; 
         });
 
-        // 結算整張發票真正的未稅總計與稅額
         totalWithTax = Math.round(totalWithTax); 
         const netTotal = Math.round(totalWithTax / 1.05); 
         const tax = totalWithTax - netTotal;
 
-        // ⚠️【核心優化】尾差自動調節機制
         const diff = netTotal - sumUnTaxedSub;
         if (diff !== 0 && maxUnTaxedIndex !== -1) {
-            // 將相差的 1 塊錢直接加進/扣除最大的品項未稅額中
             validItems[maxUnTaxedIndex].adjustedUnTaxedSub += diff;
         }
 
-        // 渲染發票預覽表格
         const prevBody = document.getElementById('prevTableBody'); prevBody.innerHTML = '';
         validItems.forEach((item) => {
             let price = Math.max(0, parseFloat(item.product.price) || 0); 
@@ -671,7 +664,6 @@ function submitInvoiceOptimistic() {
         if(i < currentInvoiceData.validItems.length) {
             const item = currentInvoiceData.validItems[i]; 
             const unTaxedP = (item.product.price / 1.05).toFixed(3); 
-            // ⚠️ 直接調用稍早在預覽階段，已經完美調節過尾差的未稅總金額
             const unTaxedS = item.adjustedUnTaxedSub;
             
             tbody.innerHTML += `<tr><td class="text-start highlight-data">${item.product.productName}</td><td class="highlight-data">${item.qty} ${item.product.unit}</td><td class="text-end highlight-data">${unTaxedP}</td><td class="text-end highlight-data">${unTaxedS.toLocaleString()}</td><td class="highlight-data" style="font-size:0.8rem;">${item.formattedRemark}</td></tr>`;
@@ -940,4 +932,45 @@ window.renderAdminItems = debounce(function() {
 
 function openAdminItemModal(idx) { const m = document.getElementById('editItemModal'); const ipt = document.getElementById('editItemClientDisplay'); if(idx) { const p = globalCatalog.find(x => x.rowIndex === idx); document.getElementById('editItemRowIndex').value = idx; ipt.value = p.clientName; document.getElementById('editItemClientVal').value = p.clientName; ipt.onclick = null; ipt.classList.remove('fake-input-btn'); document.getElementById('editItemName').value = p.productName; document.getElementById('editItemInternalCode').value = p.internalCode || ''; document.getElementById('editItemUnit').value = p.unit; document.getElementById('editItemPrice').value = p.price; } else { document.getElementById('editItemRowIndex').value = ''; ipt.value = ''; ipt.onclick = triggerItemClientSelect; ipt.classList.add('fake-input-btn'); document.getElementById('editItemName').value = ''; document.getElementById('editItemInternalCode').value = ''; document.getElementById('editItemUnit').value = '式'; document.getElementById('editItemPrice').value = ''; } bootstrap.Modal.getOrCreateInstance(m).show(); }
 function triggerItemClientSelect() { bootstrap.Modal.getInstance(document.getElementById('editItemModal')).hide(); openSearchModal('admin_client', (val) => { document.getElementById('editItemClientDisplay').value = val; document.getElementById('editItemClientVal').value = val; setTimeout(()=> bootstrap.Modal.getOrCreateInstance(document.getElementById('editItemModal')).show(), 400); }); }
-function submitEditItemOptimistic() { const idx = document.getElementById('editItemRowIndex').value; const client = document.getElementById('editItemClientVal').value; const name = document.getElementById('editItemName').value.trim(); const internalCode = document.getElementById('editItemInternalCode').value.trim(); const unit = document.getElementById('editItemUnit').value.trim(); const price = document.getElementById('editItemPrice').value; if(!client || !name || !price) return alert('必填未填'); const payload = { rowIndex: idx ? parseInt(idx) : null, clientName: client, productName: name, internalCode: internalCode, unit, price: Number(price) }; if(idx) { const p = globalCatalog.find(x => x.rowIndex === payload.rowIndex); if(p) Object.assign(p, payload); } else { payload.rowIndex = Date.now(); globalCatalog.push(payload); } window.renderAdminItems(); bootstrap.Modal.getInstance(document.getElementById('editItemModal')).hide(); pushToSyncQueue('saveAdminItem', payload, null); }
+
+function submitEditItemOptimistic() { 
+    const idx = document.getElementById('editItemRowIndex').value; 
+    const client = document.getElementById('editItemClientVal').value; 
+    const name = document.getElementById('editItemName').value.trim(); 
+    const internalCode = document.getElementById('editItemInternalCode').value.trim(); 
+    const unit = document.getElementById('editItemUnit').value.trim(); 
+    const price = document.getElementById('editItemPrice').value; 
+    
+    if(!client || !name || !price) return alert('必填未填'); 
+    
+    // 【修正】後端需要知道的 Payload，如果是新增，rowIndex 就是 null
+    const payload = { 
+        rowIndex: idx ? parseInt(idx) : null, 
+        clientName: client, 
+        productName: name, 
+        internalCode: internalCode, 
+        unit: unit, 
+        price: Number(price) 
+    }; 
+    
+    if(idx) { 
+        const p = globalCatalog.find(x => x.rowIndex === payload.rowIndex); 
+        if(p) Object.assign(p, payload); 
+    } else { 
+        // 【修正】前端顯示用的假 ID，不要污染要傳給後端的 payload
+        globalCatalog.push({ 
+            rowIndex: Date.now(), 
+            clientName: client, 
+            productName: name, 
+            internalCode: internalCode, 
+            unit: unit, 
+            price: Number(price) 
+        }); 
+    } 
+    
+    window.renderAdminItems(); 
+    bootstrap.Modal.getInstance(document.getElementById('editItemModal')).hide(); 
+    
+    // 將乾淨的 payload (新增的話 rowIndex 仍為 null) 傳給後端
+    pushToSyncQueue('saveAdminItem', payload, null); 
+}
