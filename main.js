@@ -5,7 +5,7 @@
  */
 
 // 🔴 系統 API 端點 (已更新為測試環境專用網址)
-const API_URL = "https://script.google.com/macros/s/AKfycbxWzxfHYdw9qvcPtGpU2qjxk-10hToTb1Jx-LrMhBN1jkR3IXUnu8m6UgfKcGMsi0tl/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbwR4pxjLSldLQW3sG7y8FiTPyV4mZg4rq0L33k0Htz26RxK8mrjFpucpW7pnBmpZaXD/exec";
 
 // ============================================================================
 // 全域變數與狀態管理
@@ -63,7 +63,6 @@ let isSyncing = false;
 let syncTimeoutTimer = null;
 
 function pushToSyncQueue(action, payload, callback) { 
-    // 發送更新時，附加前端時間戳記以供後端進行「危險操作」的髒讀比對
     if (payload && typeof payload === 'object') {
         payload.clientSyncTime = myLastSyncTime;
     }
@@ -91,13 +90,11 @@ function triggerSync() {
         updateSyncIndicator(); 
         isSyncing = false; 
         
-        // 【優化】當佇列清空（代表操作順利寫入）時，自動在背景默默抓取最新資料
         if (bgSyncQueue.length === 0) silentRefreshData();
         else triggerSync();
     }).catch(e => {
         clearTimeout(syncTimeoutTimer);
         console.error("背景傳輸異常", e); 
-        // 若為髒讀錯誤，強制停止此任務並要求重整，絕對不重試
         if (e.message && e.message.includes("DIRTY_READ")) {
             alert(e.message);
             bgSyncQueue.shift();
@@ -116,8 +113,8 @@ function handleSyncRetry(task) {
         try { failedTasks = JSON.parse(localStorage.getItem('failedSyncTasks') || '[]'); } catch(e){}
         failedTasks.push(task);
         localStorage.setItem('failedSyncTasks', JSON.stringify(failedTasks));
-        bgSyncQueue.shift(); // 丟棄當前佇列，防止卡死
-        checkFailedTasks(); // 更新警告按鈕
+        bgSyncQueue.shift(); 
+        checkFailedTasks(); 
     }
     isSyncing = false; 
     setTimeout(triggerSync, 5000); 
@@ -166,7 +163,6 @@ function updateSyncIndicator() {
     } 
 }
 
-// 【優化】背景默默同步 (不鎖畫面、不跳提示)
 function silentRefreshData() {
     callApi('getInitData', {}).then(res => {
         globalClients = res.clients||[]; globalCatalog = res.catalog||[]; globalHistory = res.history||[]; globalOrders = res.orders||[]; globalInventory = res.inventory||[]; globalSalesDetails = res.salesDetails||[]; globalInvLogs = res.invLogs||[];
@@ -193,7 +189,6 @@ function showLoading(msg="處理中...") { document.getElementById('miniLoadingT
 function hideLoading() { document.getElementById('miniLoading').style.display = 'none'; }
 function showToast(msg) { const tb = document.getElementById('toastBox'); tb.innerText = msg; tb.style.display = 'block'; setTimeout(()=> tb.style.opacity = '1', 10); setTimeout(() => { tb.style.opacity = '0'; setTimeout(()=> tb.style.display = 'none', 300); }, 2500); }
 
-// 防抖函數：延遲執行，避免打字時畫面頻繁重繪卡頓
 function debounce(func, delay = 300) {
     let timer;
     return function(...args) {
@@ -530,7 +525,7 @@ function groupFulfillOrders() {
 }
 
 // ============================================================================
-// 發票模組 (Drag & Drop)
+// 發票模組 (Drag & Drop + 尾差自動調節機制)
 // ============================================================================
 function goStep(s) { document.querySelectorAll('#sys-invoice .step-card').forEach(c=>c.style.display='none'); document.getElementById('invStep'+s).style.display='block'; document.getElementById('mainApp').scrollTo(0,0); }
 function selectClientForInvoice(name) { const c = globalClients.find(x => x.name === name); if(!c) return; document.getElementById('invClientInput').value = name; currentInvoiceData.clientName = name; currentInvoiceData.taxId = c.taxId; document.getElementById('invClientInfo').innerText = `✓ 綁定成功 (統編: ${c.taxId||'無'})`; document.getElementById('invClientInfo').style.display = 'block'; document.getElementById('btnNext1').style.display = 'block'; document.getElementById('invOrderNo').value = ''; selectedOrderCache = []; document.getElementById('invAiNotice').style.display = 'none'; }
@@ -590,16 +585,74 @@ function generatePreview() {
     try {
         const validItems = currentInvoiceData.items.filter(x => x && x.product && parseFloat(x.qty) > 0);
         if(validItems.length === 0) return alert('請完整選擇品項並輸入大於零的數量！');
-        let totalWithTax = 0; const prevBody = document.getElementById('prevTableBody'); prevBody.innerHTML = '';
-        const orderNoStr = document.getElementById('invOrderNo') ? document.getElementById('invOrderNo').value : ''; const invDateStr = document.getElementById('invDate').value ? document.getElementById('invDate').value : getTodayStr();
+
+        let totalWithTax = 0;
+        let sumUnTaxedSub = 0;
+        let maxUnTaxedIndex = -1;
+        let maxUnTaxedValue = -1;
+
+        const orderNoStr = document.getElementById('invOrderNo') ? document.getElementById('invOrderNo').value : ''; 
+        const invDateStr = document.getElementById('invDate').value ? document.getElementById('invDate').value : getTodayStr();
+
+        // 第一次迴圈：計算含稅總計與各品項初步未稅額，並找出最大筆金額來吸收尾差
         validItems.forEach((item, idx) => { 
-            let price = Math.max(0, parseFloat(item.product.price) || 0); let qty = Math.max(0, parseFloat(item.qty) || 0); const sub = price * qty; totalWithTax += sub; 
-            let remark = `${item.orderRef ? item.orderRef : (idx === 0 && orderNoStr ? orderNoStr : '')} ${item.deptRef ? item.deptRef : ''}`.trim(); item.formattedRemark = remark; 
-            prevBody.innerHTML += `<tr><td class="text-start">${item.product.productName||'未知'}</td><td>${qty} ${item.product.unit||'式'}</td><td class="text-end">$${price.toFixed(3)}</td><td class="text-end">$${sub.toLocaleString()}</td><td class="text-center small text-secondary">${remark}</td></tr>`; 
+            let price = Math.max(0, parseFloat(item.product.price) || 0); 
+            let qty = Math.max(0, parseFloat(item.qty) || 0); 
+            const sub = price * qty; 
+            totalWithTax += sub; 
+
+            // 計算單品項未稅額 (四捨五入)
+            let unTaxedSub = Math.round(qty * (price / 1.05));
+            item.adjustedUnTaxedSub = unTaxedSub;
+            sumUnTaxedSub += unTaxedSub;
+
+            // 紀錄未稅額最大的品項索引
+            if (unTaxedSub > maxUnTaxedValue) {
+                maxUnTaxedValue = unTaxedSub;
+                maxUnTaxedIndex = idx;
+            }
+
+            let remark = `${item.orderRef ? item.orderRef : (idx === 0 && orderNoStr ? orderNoStr : '')} ${item.deptRef ? item.deptRef : ''}`.trim(); 
+            item.formattedRemark = remark; 
         });
-        totalWithTax = Math.round(totalWithTax); const net = Math.round(totalWithTax / 1.05); const tax = totalWithTax - net;
-        currentInvoiceData.finalNet = net; currentInvoiceData.finalTax = tax; currentInvoiceData.finalTotal = totalWithTax; currentInvoiceData.validItems = validItems; currentInvoiceData.detailsStr = validItems.map(x => `${x.product.productName || ''} x${x.qty} (單價: $${(parseFloat(x.product.price)||0).toFixed(3)}) ${x.formattedRemark ? '[' + x.formattedRemark + ']' : ''}`).join('\n');
-        setSafeText('prevClientName', currentInvoiceData.clientName || '無'); setSafeText('prevTaxId', currentInvoiceData.taxId || '無'); setSafeText('prevOrderNo', orderNoStr || '無'); setSafeText('prevPaperNo', document.getElementById('invPaperNo') ? document.getElementById('invPaperNo').value.toUpperCase() : '無'); setSafeText('prevInvDate', invDateStr); setSafeText('prevNet', net.toLocaleString()); setSafeText('prevTax', tax.toLocaleString()); setSafeText('prevTotal', totalWithTax.toLocaleString()); goStep(4);
+
+        // 結算整張發票真正的未稅總計與稅額
+        totalWithTax = Math.round(totalWithTax); 
+        const netTotal = Math.round(totalWithTax / 1.05); 
+        const tax = totalWithTax - netTotal;
+
+        // ⚠️【核心優化】尾差自動調節機制
+        const diff = netTotal - sumUnTaxedSub;
+        if (diff !== 0 && maxUnTaxedIndex !== -1) {
+            // 將相差的 1 塊錢直接加進/扣除最大的品項未稅額中
+            validItems[maxUnTaxedIndex].adjustedUnTaxedSub += diff;
+        }
+
+        // 渲染發票預覽表格
+        const prevBody = document.getElementById('prevTableBody'); prevBody.innerHTML = '';
+        validItems.forEach((item) => {
+            let price = Math.max(0, parseFloat(item.product.price) || 0); 
+            let qty = Math.max(0, parseFloat(item.qty) || 0); 
+            const sub = price * qty; 
+            prevBody.innerHTML += `<tr><td class="text-start">${item.product.productName||'未知'}</td><td>${qty} ${item.product.unit||'式'}</td><td class="text-end">$${price.toFixed(3)}</td><td class="text-end">$${sub.toLocaleString()}</td><td class="text-center small text-secondary">${item.formattedRemark}</td></tr>`; 
+        });
+
+        currentInvoiceData.finalNet = netTotal; 
+        currentInvoiceData.finalTax = tax; 
+        currentInvoiceData.finalTotal = totalWithTax; 
+        currentInvoiceData.validItems = validItems; 
+        currentInvoiceData.detailsStr = validItems.map(x => `${x.product.productName || ''} x${x.qty} (單價: $${(parseFloat(x.product.price)||0).toFixed(3)}) ${x.formattedRemark ? '[' + x.formattedRemark + ']' : ''}`).join('\n');
+
+        setSafeText('prevClientName', currentInvoiceData.clientName || '無'); 
+        setSafeText('prevTaxId', currentInvoiceData.taxId || '無'); 
+        setSafeText('prevOrderNo', orderNoStr || '無'); 
+        setSafeText('prevPaperNo', document.getElementById('invPaperNo') ? document.getElementById('invPaperNo').value.toUpperCase() : '無'); 
+        setSafeText('prevInvDate', invDateStr); 
+        setSafeText('prevNet', netTotal.toLocaleString()); 
+        setSafeText('prevTax', tax.toLocaleString()); 
+        setSafeText('prevTotal', totalWithTax.toLocaleString()); 
+        
+        goStep(4);
     } catch(err) { alert("預覽結算時發生錯誤: " + err.message); }
 }
 
@@ -610,11 +663,17 @@ function submitInvoiceOptimistic() {
     globalHistory.unshift({ rowIdx: 9999, time: invDateTimestamp, staff: myName, client: payload.clientName, taxId: payload.taxId, net: payload.netTotal, tax: payload.tax, total: payload.totalWithTax, details: payload.detailsStr, paperNo: payload.paperNo, orderNo: payload.orderNo, status: "正常", historyLog: "[]" });
     payloadItems.forEach(pi => { let tempIdx = -Math.floor(Math.random() * 1000000); globalSalesDetails.unshift({ rowIdx: tempIdx, time: invDateTimestamp, paperNo: paperNo, client: payload.clientName, orderNo: orderNo, name: pi.name, qty: pi.qty, price: pi.price, subtotal: pi.subtotal, shippedQty: 0, shipStatus: '待出貨' }); });
     pushToSyncQueue('submitInvoice', payload, null);
+    
     setSafeText('visBuyer', payload.clientName); setSafeText('visTaxId', payload.taxId); setSafeText('visPaperNo', paperNo); setSafeText('visInvDate', invDateVal.replace(/-/g, '/')); setSafeText('visNet', payload.netTotal.toLocaleString()); setSafeText('visTax', payload.tax.toLocaleString()); setSafeText('visTotal', payload.totalWithTax.toLocaleString());
+    
     const tbody = document.getElementById('visTbody'); tbody.innerHTML = '';
     for(let i=0; i < Math.max(currentInvoiceData.validItems.length, 5); i++) {
         if(i < currentInvoiceData.validItems.length) {
-            const item = currentInvoiceData.validItems[i]; const unTaxedP = (item.product.price / 1.05).toFixed(3); const unTaxedS = Math.round(item.qty * (item.product.price / 1.05));
+            const item = currentInvoiceData.validItems[i]; 
+            const unTaxedP = (item.product.price / 1.05).toFixed(3); 
+            // ⚠️ 直接調用稍早在預覽階段，已經完美調節過尾差的未稅總金額
+            const unTaxedS = item.adjustedUnTaxedSub;
+            
             tbody.innerHTML += `<tr><td class="text-start highlight-data">${item.product.productName}</td><td class="highlight-data">${item.qty} ${item.product.unit}</td><td class="text-end highlight-data">${unTaxedP}</td><td class="text-end highlight-data">${unTaxedS.toLocaleString()}</td><td class="highlight-data" style="font-size:0.8rem;">${item.formattedRemark}</td></tr>`;
         } else { tbody.innerHTML += `<tr><td>&nbsp;</td><td></td><td></td><td></td><td></td></tr>`; }
     }
