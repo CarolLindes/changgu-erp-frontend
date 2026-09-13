@@ -4,7 +4,7 @@
  * ============================================================================
  */
 
-// 🔴 系統 API 端點 (已更新為測試環境專用網址)
+// 🔴 系統 API 端點 (已更新為正式版本專用網址)
 const API_URL = "https://script.google.com/macros/s/AKfycbxWzxfHYdw9qvcPtGpU2qjxk-10hToTb1Jx-LrMhBN1jkR3IXUnu8m6UgfKcGMsi0tl/exec";
 
 // ============================================================================
@@ -346,7 +346,7 @@ function triggerManualReport() {
 }
 
 // ============================================================================
-// 訂單模組 (Debounced)
+// 訂單模組 (Debounced + 來源標籤擴充)
 // ============================================================================
 function processOrderUpload(input) {
     if(!input.files || !input.files[0]) return; const file = input.files[0]; const mimeType = file.type || 'application/pdf'; const reader = new FileReader();
@@ -369,12 +369,23 @@ window.updateAiItemName = function(idx, val) { if(aiTempData && aiTempData.items
 window.updateAiItemQty = function(idx, val) { if(aiTempData && aiTempData.items[idx]) { aiTempData.items[idx].qty = Math.max(0, parseFloat(val) || 0); } };
 
 function cancelOrderAI() { document.getElementById('ordStep2').style.display = 'none'; document.getElementById('ordStep1').style.display = 'block'; aiTempData = null; }
+
 function saveOrderAI() {
     if(!aiTempData) return;
-    aiTempData.clientName = document.getElementById('aiClient').value; aiTempData.orderNo = document.getElementById('aiOrderNo').value; aiTempData.department = document.getElementById('aiDept').value; aiTempData.deadline = document.getElementById('aiDeadline').value;
+    aiTempData.clientName = document.getElementById('aiClient').value; 
+    aiTempData.orderNo = document.getElementById('aiOrderNo').value; 
+    aiTempData.department = document.getElementById('aiDept').value; 
+    aiTempData.deadline = document.getElementById('aiDeadline').value;
+    
+    // 【修改】為圖片上傳的訂單補上專屬標籤
+    aiTempData.source = '📷 圖片辨識';
+    aiTempData.mailUrl = '';
+    
     if(!aiTempData.clientName) return alert("客戶名稱必填");
     aiTempData.items.forEach(i => { const p = globalCatalog.find(x => x.clientName === aiTempData.clientName && x.productName === i.name); if(p) i.internalCode = p.internalCode || p.assetCode || ""; });
-    globalOrders.unshift({ rowIdx: 9999, time: Date.now(), client: aiTempData.clientName, orderNo: aiTempData.orderNo, dept: aiTempData.department, status: "待出貨", jsonStr: JSON.stringify(aiTempData.items), deadline: aiTempData.deadline });
+    
+    globalOrders.unshift({ rowIdx: 9999, time: Date.now(), client: aiTempData.clientName, orderNo: aiTempData.orderNo, dept: aiTempData.department, status: "待出貨", jsonStr: JSON.stringify(aiTempData.items), deadline: aiTempData.deadline, source: aiTempData.source, mailUrl: aiTempData.mailUrl });
+    
     pushToSyncQueue('saveOrderData', aiTempData, null); cancelOrderAI(); updateOrderClientDropdown(); window.renderOrderList(); showToast("✅ 訂單建檔完成");
 }
 
@@ -404,12 +415,38 @@ window.renderOrderList = debounce(function() {
         }).join('<hr class="my-2" style="opacity: 0.1;">');
         if (orderFullyShipped && items.length > 0) return;
         const desc = items.length > 0 ? displayItems : (o.jsonError ? '⚠️ 資料格式損毀' : '無明細'); const warningLabel = o.jsonError ? `<span class="badge bg-danger ms-2">資料異常</span>` : (hasPartial ? `<span class="badge bg-info text-white ms-2">部分開立</span>` : '');
+        
         let deadlineHtml = '';
         if (o.deadline) {
             const deadlineDate = new Date(o.deadline); deadlineDate.setHours(0,0,0,0); const diffDays = Math.ceil((deadlineDate - today) / 86400000);
             if (diffDays < 0) deadlineHtml = `<span class="badge bg-danger ms-2">🔴 已逾期 (${o.deadline})</span>`; else if (diffDays === 0) deadlineHtml = `<span class="badge bg-danger ms-2">🔴 今日出貨 (${o.deadline})</span>`; else if (diffDays <= 3) deadlineHtml = `<span class="badge bg-warning text-dark ms-2">🟡 即將到期 (${o.deadline})</span>`; else deadlineHtml = `<span class="badge bg-success ms-2">🟢 期限: ${o.deadline}</span>`;
         }
-        html += `<div class="item-row bg-white shadow-sm mb-2 p-3 ${hasPartial ? 'status-partial' : ''}"><div class="d-flex align-items-center justify-content-between mb-2 border-bottom pb-2"><div class="d-flex align-items-center" style="max-width: 75%;"><input class="form-check-input me-3 cb-order" type="checkbox" value="${o.rowIdx}" data-orderno="${escapeQuotes(o.orderNo)}" data-client="${escapeQuotes(o.client)}" style="transform: scale(1.3); flex-shrink: 0;"><div><div class="fw-bold text-dark fs-6">${o.client} ${warningLabel}</div><div class="small text-muted mt-1">單號: ${o.orderNo||'無'} ${deadlineHtml}</div></div></div><button class="btn btn-sm btn-outline-secondary" onclick="openOrderModal(${o.rowIdx})">📝 編輯</button></div><div class="small text-muted">${desc}</div></div>`;
+
+        // 【修改】為訂單產生專屬來源標籤與信件查閱按鈕
+        const sourceStr = o.source || '⌨️ 手動建檔';
+        let sourceBadge = '';
+        if (sourceStr.includes('信件')) sourceBadge = `<span class="badge bg-primary ms-2">${sourceStr}</span>`;
+        else if (sourceStr.includes('圖片')) sourceBadge = `<span class="badge bg-info text-dark ms-2">${sourceStr}</span>`;
+        else sourceBadge = `<span class="badge bg-secondary ms-2">${sourceStr}</span>`;
+
+        let mailBtn = o.mailUrl ? `<a href="${escapeQuotes(o.mailUrl)}" target="_blank" class="btn btn-sm btn-outline-primary fw-bold me-2">📧 查閱原信</a>` : '';
+
+        html += `<div class="item-row bg-white shadow-sm mb-2 p-3 ${hasPartial ? 'status-partial' : ''}">
+            <div class="d-flex align-items-center justify-content-between mb-2 border-bottom pb-2">
+                <div class="d-flex align-items-center" style="max-width: 65%;">
+                    <input class="form-check-input me-3 cb-order" type="checkbox" value="${o.rowIdx}" data-orderno="${escapeQuotes(o.orderNo)}" data-client="${escapeQuotes(o.client)}" style="transform: scale(1.3); flex-shrink: 0;">
+                    <div>
+                        <div class="fw-bold text-dark fs-6">${o.client} ${warningLabel} ${sourceBadge}</div>
+                        <div class="small text-muted mt-1">單號: ${o.orderNo||'無'} ${deadlineHtml}</div>
+                    </div>
+                </div>
+                <div>
+                    ${mailBtn}
+                    <button class="btn btn-sm btn-outline-secondary fw-bold" onclick="openOrderModal(${o.rowIdx})">📝 編輯</button>
+                </div>
+            </div>
+            <div class="small text-muted">${desc}</div>
+        </div>`;
     });
     c.innerHTML = html || '<div class="text-center text-muted py-3">目前訂單皆已出清結案</div>';
 }, 300);
@@ -488,13 +525,42 @@ function removeOrderManualItem(rowId) {
 }
 
 function saveEditOrder() {
-    const idx = parseInt(document.getElementById('e_ordRow').value); const c = document.getElementById('e_ordClient').value; const o = document.getElementById('e_ordNo').value; const d = document.getElementById('e_ordDept').value; const deadline = document.getElementById('e_ordDeadline').value; 
-    if(!c) return alert('客戶名稱必填！'); let items = [];
-    for (let item of currentOrderManualItems) { if (!item.name || item.qty <= 0) return alert('品項明細填寫不完整或數量無效！'); items.push({ code: item.code, internalCode: item.internalCode, name: item.name, qty: item.qty }); }
+    const idx = parseInt(document.getElementById('e_ordRow').value); 
+    const c = document.getElementById('e_ordClient').value; 
+    const o = document.getElementById('e_ordNo').value; 
+    const d = document.getElementById('e_ordDept').value; 
+    const deadline = document.getElementById('e_ordDeadline').value; 
+    
+    if(!c) return alert('客戶名稱必填！'); 
+    let items = [];
+    for (let item of currentOrderManualItems) { 
+        if (!item.name || item.qty <= 0) return alert('品項明細填寫不完整或數量無效！'); 
+        items.push({ code: item.code, internalCode: item.internalCode, name: item.name, qty: item.qty }); 
+    }
     if (items.length === 0) return alert('請至少新增一項品項！');
-    const j = JSON.stringify(items); const payload = { rowIdx: idx||null, clientName: c, orderNo: o, department: d, status: '待出貨', items: items, deadline: deadline }; 
-    if(idx) { const od = globalOrders.find(x=>x.rowIdx===idx); if(od){ od.client = c; od.orderNo = o; od.dept = d; od.jsonStr = j; od.deadline = deadline; } } else { globalOrders.unshift({ rowIdx: Date.now(), time: Date.now(), client: c, orderNo: o, dept: d, status: "待出貨", jsonStr: j, deadline: deadline }); }
-    pushToSyncQueue('saveOrderData', payload, null); updateOrderClientDropdown(); window.renderOrderList(); bootstrap.Modal.getInstance(document.getElementById('editOrdModal')).hide();
+    
+    // 【修改】智慧判斷來源，編輯時保留原有的來源與信件網址
+    let src = '⌨️ 手動建檔'; 
+    let mUrl = '';
+    if(idx) { 
+        const od = globalOrders.find(x => x.rowIdx === idx); 
+        if(od) { src = od.source || '⌨️ 手動建檔'; mUrl = od.mailUrl || ''; } 
+    }
+    
+    const j = JSON.stringify(items); 
+    const payload = { rowIdx: idx||null, clientName: c, orderNo: o, department: d, status: '待出貨', items: items, deadline: deadline, source: src, mailUrl: mUrl }; 
+    
+    if(idx) { 
+        const od = globalOrders.find(x => x.rowIdx === idx); 
+        if(od){ od.client = c; od.orderNo = o; od.dept = d; od.jsonStr = j; od.deadline = deadline; od.source = src; od.mailUrl = mUrl; } 
+    } else { 
+        globalOrders.unshift({ rowIdx: Date.now(), time: Date.now(), client: c, orderNo: o, dept: d, status: "待出貨", jsonStr: j, deadline: deadline, source: src, mailUrl: mUrl }); 
+    }
+    
+    pushToSyncQueue('saveOrderData', payload, null); 
+    updateOrderClientDropdown(); 
+    window.renderOrderList(); 
+    bootstrap.Modal.getInstance(document.getElementById('editOrdModal')).hide();
 }
 
 function deleteOrder() {
@@ -943,7 +1009,6 @@ function submitEditItemOptimistic() {
     
     if(!client || !name || !price) return alert('必填未填'); 
     
-    // 【修正】後端需要知道的 Payload，如果是新增，rowIndex 就是 null
     const payload = { 
         rowIndex: idx ? parseInt(idx) : null, 
         clientName: client, 
@@ -957,7 +1022,6 @@ function submitEditItemOptimistic() {
         const p = globalCatalog.find(x => x.rowIndex === payload.rowIndex); 
         if(p) Object.assign(p, payload); 
     } else { 
-        // 【修正】前端顯示用的假 ID，不要污染要傳給後端的 payload
         globalCatalog.push({ 
             rowIndex: Date.now(), 
             clientName: client, 
@@ -971,6 +1035,5 @@ function submitEditItemOptimistic() {
     window.renderAdminItems(); 
     bootstrap.Modal.getInstance(document.getElementById('editItemModal')).hide(); 
     
-    // 將乾淨的 payload (新增的話 rowIndex 仍為 null) 傳給後端
     pushToSyncQueue('saveAdminItem', payload, null); 
 }
