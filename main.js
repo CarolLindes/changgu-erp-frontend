@@ -5,7 +5,7 @@
  */
 
 // 🔴 系統 API 端點 (已更新為測試環境專用網址)
-const API_URL = "https://script.google.com/macros/s/AKfycbxWzxfHYdw9qvcPtGpU2qjxk-10hToTb1Jx-LrMhBN1jkR3IXUnu8m6UgfKcGMsi0tl/exec/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbxWzxfHYdw9qvcPtGpU2qjxk-10hToTb1Jx-LrMhBN1jkR3IXUnu8m6UgfKcGMsi0tl/exec";
 
 // ============================================================================
 // 全域變數與狀態管理
