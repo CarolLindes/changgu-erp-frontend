@@ -4,7 +4,7 @@
  * ============================================================================
  */
 
-// 🔴 系統 API 端點 (已更新為上線專用網址)
+// 🔴 系統 API 端點 (已更新為上線版本專用網址)
 const API_URL = "https://script.google.com/macros/s/AKfycbxWzxfHYdw9qvcPtGpU2qjxk-10hToTb1Jx-LrMhBN1jkR3IXUnu8m6UgfKcGMsi0tl/exec";
 
 // ============================================================================
@@ -55,7 +55,7 @@ async function callApi(action, payload = {}) {
 }
 
 // ============================================================================
-// 背景同步佇列系統
+// 【全新優化】背景同步佇列系統 (含 Task ID 任務機制)
 // ============================================================================
 let bgSyncQueue = []; 
 let isSyncing = false; 
@@ -64,8 +64,12 @@ let syncTimeoutTimer = null;
 function pushToSyncQueue(action, payload, callback) { 
     if (payload && typeof payload === 'object') {
         payload.clientSyncTime = myLastSyncTime;
+        // 【新增】賦予獨一無二的任務身分證 Task ID，防重複連點與寫入
+        if (!payload.taskId) {
+            payload.taskId = 'T_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
+        }
     }
-    bgSyncQueue.push({ action, payload, callback, retry: 0 }); 
+    bgSyncQueue.push({ action, payload, callback, retry: 0, time: Date.now() }); 
     updateSyncIndicator(); 
     triggerSync(); 
 }
@@ -76,11 +80,12 @@ function triggerSync() {
     const task = bgSyncQueue[0];
     
     clearTimeout(syncTimeoutTimer);
+    // 【優化】放寬等待時間至 30 秒，減少因 Google 試算表處理較慢導致的誤判超時
     syncTimeoutTimer = setTimeout(() => {
         console.warn("同步超時，強制重置狀態");
         task.retry += 1;
         handleSyncRetry(task);
-    }, 15000);
+    }, 30000);
 
     callApi(task.action, task.payload).then(res => {
         clearTimeout(syncTimeoutTimer);
@@ -119,6 +124,9 @@ function handleSyncRetry(task) {
     setTimeout(triggerSync, 5000); 
 }
 
+// ============================================================================
+// 【全新優化】報錯與未同步處理中心介面
+// ============================================================================
 function checkFailedTasks() {
     let failedTasks = [];
     try { failedTasks = JSON.parse(localStorage.getItem('failedSyncTasks') || '[]'); } catch(e){}
@@ -128,28 +136,100 @@ function checkFailedTasks() {
         btn.id = 'btnRetrySync';
         btn.className = 'btn btn-danger fw-bold shadow position-fixed';
         btn.style.cssText = 'bottom: 20px; right: 20px; z-index: 10800; border-radius: 30px; padding: 10px 20px; font-size: 0.9rem;';
-        btn.onclick = window.retryFailedTasks;
+        // 【優化】改為呼叫報錯中心視窗
+        btn.onclick = window.openSyncErrorModal;
         document.body.appendChild(btn);
     }
     if (failedTasks.length > 0) {
-        btn.innerText = `🔴 有 ${failedTasks.length} 筆未同步資料 (點擊重試)`;
+        btn.innerText = `🔴 有 ${failedTasks.length} 筆未同步資料 (點擊處理)`;
         btn.style.display = 'block';
     } else {
         btn.style.display = 'none';
     }
 }
 
-window.retryFailedTasks = function() {
+window.openSyncErrorModal = function() {
+    renderSyncErrorList();
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('syncErrorModal')).show();
+};
+
+function renderSyncErrorList() {
     let failedTasks = [];
     try { failedTasks = JSON.parse(localStorage.getItem('failedSyncTasks') || '[]'); } catch(e){}
-    if (failedTasks.length === 0) return alert("沒有未同步的資料");
-    failedTasks.forEach(task => { task.retry = 0; bgSyncQueue.push(task); });
-    localStorage.removeItem('failedSyncTasks');
-    checkFailedTasks();
-    updateSyncIndicator();
-    triggerSync();
-    showToast("🔄 已將失敗任務重新加入同步佇列");
+    const c = document.getElementById('syncErrorList');
+    
+    if (failedTasks.length === 0) {
+        c.innerHTML = '<div class="text-center text-success fw-bold py-4 fs-5">✅ 所有資料皆已同步完成！</div>';
+        checkFailedTasks();
+        setTimeout(() => bootstrap.Modal.getInstance(document.getElementById('syncErrorModal')).hide(), 1500);
+        return;
+    }
+    
+    c.innerHTML = failedTasks.map((t, idx) => {
+        const dateStr = t.time ? new Date(t.time).toLocaleString() : '未知時間';
+        const desc = translateTaskDesc(t);
+        return `<div class="bg-white border rounded p-3 mb-2 shadow-sm d-flex justify-content-between align-items-center">
+            <div>
+                <div class="fw-bold text-dark fs-6">${desc}</div>
+                <div class="small text-muted mt-1">🕒 發生時間: ${dateStr}</div>
+                <div class="small text-secondary" style="font-size: 0.75rem;">內部指令: ${t.action}</div>
+            </div>
+            <div class="d-flex flex-column gap-2" style="min-width: 100px;">
+                <button class="btn btn-sm btn-primary fw-bold" onclick="retrySingleTask(${idx})">🔄 重新傳送</button>
+                <button class="btn btn-sm btn-outline-danger fw-bold" onclick="discardSingleTask(${idx})">🗑️ 清除捨棄</button>
+            </div>
+        </div>`;
+    }).join('');
 }
+
+// 翻譯程式碼為人話
+function translateTaskDesc(t) {
+    const p = t.payload || {};
+    switch(t.action) {
+        case 'saveOrderData': return `📦 建立/編輯訂單 | 醫院: ${p.clientName} | 單號: ${p.orderNo||'無'}`;
+        case 'submitInvoice': return `📝 開立發票 | 客戶: ${p.clientName} | 總計: $${(p.totalWithTax||0).toLocaleString()}`;
+        case 'updateShipment': return `🚚 出貨作業 | 扣庫存 (${p.updates?.[0]?.name||'多筆品項'})`;
+        case 'adjustInventory': return `🏭 庫存異動 | 品項: ${p.name} | 動作: ${p.type} (${p.changeQty>0?'+':''}${p.changeQty})`;
+        case 'submitPurchaseOrder': return `🛒 向廠商訂貨 | 品項: ${p.name}`;
+        case 'supplementInvoiceNo': return `📝 補登發票 | 新號碼: ${p.newPaperNo}`;
+        case 'addClientData': return `🏢 新增客戶 | 名稱: ${p.clientName}`;
+        case 'updateClientData': return `🏢 修改客戶 | 名稱: ${p.newName}`;
+        case 'saveAdminItem': return `📦 編輯報價品項 | 品名: ${p.productName}`;
+        case 'editInvLogRecord': return `✏️ 編輯異動紀錄 | 單號: ${p.invoiceNo||p.orderNo}`;
+        case 'updateInvoiceRecord': return `🗑️ 發票狀態操作 | 動作: ${p.action==='void'?'作廢':'修改'}`;
+        case 'updateOrderStatus': return `📝 訂單狀態更新 | 狀態變更`;
+        default: return `⚙️ 系統操作 (${t.action})`;
+    }
+}
+
+window.retrySingleTask = function(idx) {
+    let failedTasks = [];
+    try { failedTasks = JSON.parse(localStorage.getItem('failedSyncTasks') || '[]'); } catch(e){}
+    if (failedTasks[idx]) {
+        let t = failedTasks[idx];
+        t.retry = 0; // 重置重試次數
+        bgSyncQueue.push(t);
+        failedTasks.splice(idx, 1);
+        localStorage.setItem('failedSyncTasks', JSON.stringify(failedTasks));
+        renderSyncErrorList();
+        checkFailedTasks();
+        updateSyncIndicator();
+        triggerSync();
+        showToast("🔄 已加入同步佇列重試");
+    }
+};
+
+window.discardSingleTask = function(idx) {
+    if(!confirm("確定要捨棄這筆資料嗎？\n(捨棄後資料將不會寫入系統，請確認您已不需要此操作)")) return;
+    let failedTasks = [];
+    try { failedTasks = JSON.parse(localStorage.getItem('failedSyncTasks') || '[]'); } catch(e){}
+    if (failedTasks[idx]) {
+        failedTasks.splice(idx, 1);
+        localStorage.setItem('failedSyncTasks', JSON.stringify(failedTasks));
+        renderSyncErrorList();
+        checkFailedTasks();
+    }
+};
 
 function updateSyncIndicator() { 
     const ind = document.getElementById('bgSyncIndicator'); 
@@ -348,13 +428,12 @@ function triggerManualReport() {
 // 訂單模組 (含立即掃描與排查機制)
 // ============================================================================
 
-// 【新增】立即掃描信箱新訂單
 window.triggerEmailScan = function() {
     showLoading("⚡ 正在連線信箱掃描新訂單...");
     callApi('scanEmailOrders', {}).then(res => {
         hideLoading();
         alert(res.msg);
-        refreshData(); // 掃描完立刻重整資料，確保看到最新匯入的訂單
+        refreshData(); 
     }).catch(err => {
         hideLoading();
         alert("掃描失敗：" + err.message);
@@ -367,7 +446,6 @@ function processOrderUpload(input) {
         showLoading("✨ Gemini AI 智慧辨識中...");
         callApi('processOrderImage', { base64Str: e.target.result, mimeType: mimeType }).then(res => { 
             hideLoading(); 
-            // 由於改成支援陣列，所以取第一筆資料填入 UI，若有多筆建議後端直接 import，這裡是預覽單筆的舊邏輯保留相容
             let previewData = Array.isArray(res) ? res[0] : res;
             if(!previewData) return alert('未辨識到訂單資訊');
             aiTempData = previewData; 
@@ -440,7 +518,6 @@ window.renderOrderList = debounce(function() {
         }).join('<hr class="my-2" style="opacity: 0.1;">');
         if (orderFullyShipped && items.length > 0) return;
         
-        // 【新增】防重複訂單 UI 排版
         let isDuplicate = String(o.status).includes('待排查');
         let cardStyle = isDuplicate ? 'border: 2px solid #dc3545; background-color: #fff5f5;' : '';
         let warningLabel = o.jsonError ? `<span class="badge bg-danger ms-2">資料異常</span>` : 
@@ -580,7 +657,6 @@ function saveEditOrder() {
     }
     
     const j = JSON.stringify(items); 
-    // 若原先是「待排查」，手動編輯儲存後一律切回「待出貨」或保持原本的狀態
     if (currStatus.includes('待排查')) currStatus = '待出貨';
     const payload = { rowIdx: idx||null, clientName: c, orderNo: o, department: d, status: currStatus, items: items, deadline: deadline, source: src, mailUrl: mUrl }; 
     
@@ -594,7 +670,7 @@ function saveEditOrder() {
     pushToSyncQueue('saveOrderData', payload, null); 
     updateOrderClientDropdown(); 
     window.renderOrderList(); 
-    bootstrap.Modal.getInstance(document.getElementById('editOrdModal')).show().hide();
+    bootstrap.Modal.getInstance(document.getElementById('editOrdModal')).hide();
     showToast("✅ 訂單儲存完成 (若與其他單號重複將會自動排查)");
 }
 
@@ -637,9 +713,7 @@ function groupFulfillOrders() {
 function goStep(s) { document.querySelectorAll('#sys-invoice .step-card').forEach(c=>c.style.display='none'); document.getElementById('invStep'+s).style.display='block'; document.getElementById('mainApp').scrollTo(0,0); }
 function selectClientForInvoice(name) { const c = globalClients.find(x => x.name === name); if(!c) return; document.getElementById('invClientInput').value = name; currentInvoiceData.clientName = name; currentInvoiceData.taxId = c.taxId; document.getElementById('invClientInfo').innerText = `✓ 綁定成功 (統編: ${c.taxId||'無'})`; document.getElementById('invClientInfo').style.display = 'block'; document.getElementById('btnNext1').style.display = 'block'; document.getElementById('invOrderNo').value = ''; selectedOrderCache = []; document.getElementById('invAiNotice').style.display = 'none'; }
 
-// 【新增】借用發票號碼邏輯
 window.borrowInvoiceNo = function() {
-    // 產生專屬借用碼
     const tempNo = "[借用中]-" + Math.floor(Math.random() * 10000000);
     document.getElementById('invPaperNo').value = tempNo;
     showToast("✅ 已帶入借用單號，請繼續開立，日後可至紀錄補登");
@@ -1151,11 +1225,9 @@ window.renderHistory = debounce(function() {
         let badgeHTML = isVoid ? '<span class="badge bg-danger ms-1">已作廢</span>' : '';
         if(isEdited && !isVoid) badgeHTML += `<span class="badge bg-warning text-dark ms-1" onclick="alert('修改紀錄：\\n${escapeQuotes(JSON.parse(h.historyLog).join('\\n'))}')" style="cursor:pointer;">⚠️ 已修改</span>`;
         
-        // 【新增】判斷借用單號 UI
         const isBorrowed = String(h.paperNo).startsWith('[借用中]');
         let paperNoHtml = h.paperNo ? (isBorrowed ? `<span class="text-danger">⚠️ ${h.paperNo}</span>` : `發票: ${h.paperNo}`) : '';
 
-        // 【新增】按鈕配置 (包含補登按鈕)
         let actionBtns = '';
         if (!isVoid) {
             actionBtns += `<button class="btn btn-sm btn-outline-info me-1 fw-bold" onclick="printDeliveryNote(${h.rowIdx})">🖨️ 列印出單</button>`;
@@ -1180,7 +1252,6 @@ window.renderHistory = debounce(function() {
     }).join('');
 }, 300);
 
-// 【新增】開啟補登發票視窗
 window.openSuppInvModal = function(idx, oldPaperNo) {
     document.getElementById('supp_invRowIdx').value = idx;
     document.getElementById('supp_oldPaperNo').value = oldPaperNo;
@@ -1188,7 +1259,6 @@ window.openSuppInvModal = function(idx, oldPaperNo) {
     bootstrap.Modal.getOrCreateInstance(document.getElementById('suppInvModal')).show();
 };
 
-// 【新增】確認補登發票並連動
 window.confirmSupplementInvoice = function() {
     const idx = parseInt(document.getElementById('supp_invRowIdx').value);
     const oldPaperNo = document.getElementById('supp_oldPaperNo').value;
@@ -1201,7 +1271,7 @@ window.confirmSupplementInvoice = function() {
         hideLoading();
         bootstrap.Modal.getInstance(document.getElementById('suppInvModal')).hide();
         showToast("✅ 發票號碼已成功補登並連動更新");
-        refreshData(); // 強制重整以確保三張表的資料都拿到最新版
+        refreshData(); 
     });
 };
 
@@ -1413,4 +1483,31 @@ function submitEditItemOptimistic() {
     bootstrap.Modal.getInstance(document.getElementById('editItemModal')).hide(); 
     
     pushToSyncQueue('saveAdminItem', payload, null); 
+}
+
+// ============================================================================
+// 【遠端遙控】呼叫 AI 接單機器人 (changgu.erp@gmail.com)
+// ============================================================================
+function scanEmailOrders() {
+  const url = CONFIG.ROBOT_API_URL;
+  if (!url || url.includes("請將你在")) {
+    throw new Error("⚠️ 請先在主系統 Code.gs 上方 CONFIG 設定 ROBOT_API_URL！");
+  }
+  
+  const payload = { action: "triggerScan" };
+  const options = {
+    method: "post",
+    contentType: "application/json",
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+  
+  const response = UrlFetchApp.fetch(url, options);
+  const json = JSON.parse(response.getContentText());
+  
+  if (json.success) {
+    return { success: true, count: json.data.count, msg: json.data.msg };
+  } else {
+    throw new Error("機器人連線失敗：" + (json.error || "未知錯誤"));
+  }
 }
