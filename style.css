@@ -1,5 +1,5 @@
 /* ==========================================================================
-   長固 ERP 系統 - 核心樣式表 (測試環境優化版)
+   長固 ERP 系統 - 核心樣式表 (測試環境優化版 + 訂貨單擴充)
    ========================================================================== */
 html::-webkit-scrollbar, body::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -84,24 +84,32 @@ html, body {
 }
 
 /* ==========================================================================
-   列印專屬樣式 (@media print) - 出貨單排版魔法 (A5 橫式滿版)
+   列印專屬樣式 (@media print) - 出貨單與訂貨單 (A5 橫式滿版)
    ========================================================================== */
-#printArea { display: none; }
+#printArea, #printPoArea { display: none; }
 
 @media print {
     body { background: #fff !important; margin: 0; padding: 0; }
+    
+    /* 隱藏所有不需要印出來的網頁元素 */
     #btnRetrySync, #bgSyncIndicator, #toastBox, #miniLoading, #authScreen, #splashScreen, #homeMenu, #mainApp, .modal {
         display: none !important;
     }
-    #printArea {
-        display: block !important;
+    
+    /* 控制出貨單與訂貨單的顯示 */
+    #printArea, #printPoArea {
         width: 100%;
         color: #000;
         font-family: "MingLiU", "微軟正黑體", sans-serif;
         page-break-after: avoid;
     }
+    
+    /* 設定紙張為 A5 橫式 */
     @page {
         size: A5 landscape;
         margin: 10mm;
     }
+
+    /* 確保只有觸發列印的那一個區塊會顯示 (透過 JS 控制) */
+    .print-active { display: block !important; }
 }
