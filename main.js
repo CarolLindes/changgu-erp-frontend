@@ -1,10 +1,10 @@
 /**
  * ============================================================================
- * 長固 ERP 系統 - 前端核心運算邏輯 (測試環境優化版 + 訂購單完美擴充 + 補登發票機制)
+ * 長固 ERP 系統 - 前端核心運算邏輯 (徹底大掃除與完美修復版)
  * ============================================================================
  */
 
-// 🔴 系統 API 端點 (已更新為上線版本專用網址)
+// 🔴 系統 API 端點 (已更新為測試環境專用網址)
 const API_URL = "https://script.google.com/macros/s/AKfycbxWzxfHYdw9qvcPtGpU2qjxk-10hToTb1Jx-LrMhBN1jkR3IXUnu8m6UgfKcGMsi0tl/exec";
 
 // ============================================================================
@@ -55,7 +55,7 @@ async function callApi(action, payload = {}) {
 }
 
 // ============================================================================
-// 【全新優化】背景同步佇列系統 (含 Task ID 任務機制)
+// 背景同步佇列系統 (修復轉移時 UI 卡住的 Bug)
 // ============================================================================
 let bgSyncQueue = []; 
 let isSyncing = false; 
@@ -64,7 +64,6 @@ let syncTimeoutTimer = null;
 function pushToSyncQueue(action, payload, callback) { 
     if (payload && typeof payload === 'object') {
         payload.clientSyncTime = myLastSyncTime;
-        // 【新增】賦予獨一無二的任務身分證 Task ID，防重複連點與寫入
         if (!payload.taskId) {
             payload.taskId = 'T_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
         }
@@ -80,7 +79,6 @@ function triggerSync() {
     const task = bgSyncQueue[0];
     
     clearTimeout(syncTimeoutTimer);
-    // 【優化】放寬等待時間至 30 秒，減少因 Google 試算表處理較慢導致的誤判超時
     syncTimeoutTimer = setTimeout(() => {
         console.warn("同步超時，強制重置狀態");
         task.retry += 1;
@@ -103,6 +101,7 @@ function triggerSync() {
             alert(e.message);
             bgSyncQueue.shift();
             isSyncing = false;
+            updateSyncIndicator(); // 【修復】強制更新 UI，收回轉圈圈動畫
             return;
         }
         task.retry += 1;
@@ -119,13 +118,16 @@ function handleSyncRetry(task) {
         localStorage.setItem('failedSyncTasks', JSON.stringify(failedTasks));
         bgSyncQueue.shift(); 
         checkFailedTasks(); 
+        updateSyncIndicator(); // 【修復】強制更新 UI，把任務移交給報錯中心後隱藏雲朵
     }
     isSyncing = false; 
-    setTimeout(triggerSync, 5000); 
+    if (bgSyncQueue.length > 0) {
+        setTimeout(triggerSync, 5000); 
+    }
 }
 
 // ============================================================================
-// 【全新優化】報錯與未同步處理中心介面
+// 報錯與未同步處理中心介面
 // ============================================================================
 function checkFailedTasks() {
     let failedTasks = [];
@@ -136,7 +138,6 @@ function checkFailedTasks() {
         btn.id = 'btnRetrySync';
         btn.className = 'btn btn-danger fw-bold shadow position-fixed';
         btn.style.cssText = 'bottom: 20px; right: 20px; z-index: 10800; border-radius: 30px; padding: 10px 20px; font-size: 0.9rem;';
-        // 【優化】改為呼叫報錯中心視窗
         btn.onclick = window.openSyncErrorModal;
         document.body.appendChild(btn);
     }
@@ -182,20 +183,20 @@ function renderSyncErrorList() {
     }).join('');
 }
 
-// 翻譯程式碼為人話
+// 將背景任務翻譯成看得懂的說明
 function translateTaskDesc(t) {
     const p = t.payload || {};
     switch(t.action) {
-        case 'saveOrderData': return `📦 建立/編輯訂單 | 醫院: ${p.clientName} | 單號: ${p.orderNo||'無'}`;
-        case 'submitInvoice': return `📝 開立發票 | 客戶: ${p.clientName} | 總計: $${(p.totalWithTax||0).toLocaleString()}`;
+        case 'saveOrderData': return `📦 建立/編輯訂單 | 醫院: ${p.clientName||'未知'} | 單號: ${p.orderNo||'無'}`;
+        case 'submitInvoice': return `📝 開立發票 | 客戶: ${p.clientName||'未知'} | 總計: $${(p.totalWithTax||0).toLocaleString()}`;
         case 'updateShipment': return `🚚 出貨作業 | 扣庫存 (${p.updates?.[0]?.name||'多筆品項'})`;
-        case 'adjustInventory': return `🏭 庫存異動 | 品項: ${p.name} | 動作: ${p.type} (${p.changeQty>0?'+':''}${p.changeQty})`;
-        case 'submitPurchaseOrder': return `🛒 向廠商訂貨 | 品項: ${p.name}`;
-        case 'supplementInvoiceNo': return `📝 補登發票 | 新號碼: ${p.newPaperNo}`;
-        case 'addClientData': return `🏢 新增客戶 | 名稱: ${p.clientName}`;
-        case 'updateClientData': return `🏢 修改客戶 | 名稱: ${p.newName}`;
-        case 'saveAdminItem': return `📦 編輯報價品項 | 品名: ${p.productName}`;
-        case 'editInvLogRecord': return `✏️ 編輯異動紀錄 | 單號: ${p.invoiceNo||p.orderNo}`;
+        case 'adjustInventory': return `🏭 庫存異動 | 品項: ${p.name||'未知'} | 動作: ${p.type||''} (${(p.changeQty||0)>0?'+':''}${p.changeQty||0})`;
+        case 'submitPurchaseOrder': return `🛒 向廠商訂貨 | 品項: ${p.name||'未知'}`;
+        case 'supplementInvoiceNo': return `📝 補登發票 | 新號碼: ${p.newPaperNo||'未知'}`;
+        case 'addClientData': return `🏢 新增客戶 | 名稱: ${p.clientName||'未知'}`;
+        case 'updateClientData': return `🏢 修改客戶 | 名稱: ${p.newName||'未知'}`;
+        case 'saveAdminItem': return `📦 編輯報價品項 | 品名: ${p.productName||'未知'}`;
+        case 'editInvLogRecord': return `✏️ 編輯異動紀錄 | 單號: ${p.invoiceNo||p.orderNo||'未知'}`;
         case 'updateInvoiceRecord': return `🗑️ 發票狀態操作 | 動作: ${p.action==='void'?'作廢':'修改'}`;
         case 'updateOrderStatus': return `📝 訂單狀態更新 | 狀態變更`;
         default: return `⚙️ 系統操作 (${t.action})`;
@@ -207,7 +208,7 @@ window.retrySingleTask = function(idx) {
     try { failedTasks = JSON.parse(localStorage.getItem('failedSyncTasks') || '[]'); } catch(e){}
     if (failedTasks[idx]) {
         let t = failedTasks[idx];
-        t.retry = 0; // 重置重試次數
+        t.retry = 0; 
         bgSyncQueue.push(t);
         failedTasks.splice(idx, 1);
         localStorage.setItem('failedSyncTasks', JSON.stringify(failedTasks));
@@ -460,6 +461,7 @@ function processOrderUpload(input) {
     };
     reader.readAsDataURL(file); input.value = '';
 }
+
 function recheckAiItems() {
     if(!aiTempData || !aiTempData.items) return; const clientName = document.getElementById('aiClient').value;
     const html = aiTempData.items.map((i, index) => {
@@ -864,10 +866,8 @@ function submitInvoiceOptimistic() {
 function resetInvoiceSystem() { document.getElementById('invDate').value = getTodayStr(); document.getElementById('invClientInput').value=''; document.getElementById('invOrderNo').value=''; document.getElementById('invPaperNo').value=''; document.getElementById('invItemsContainer').innerHTML=''; currentInvoiceData={clientName:'', taxId:'', items:[]}; selectedOrderCache=[]; goStep(1); }
 
 // ============================================================================
-// 庫存與異動模組 (含自動向廠商叫貨)
+// 庫存與異動模組
 // ============================================================================
-function triggerSyncAssetCodes() { showLoading("同步長固代號 / 資材碼中..."); callApi('syncAssetCodesToInventory', {}).then(res => { hideLoading(); if(res.success) { showToast(`✅ 同步完成！共更新了 ${res.count} 筆資料。`); refreshData(); } else { alert(res.msg); } }).catch(err => { hideLoading(); alert("同步失敗：" + err.message); }); }
-
 window.renderInventory = debounce(function() {
     const term = document.getElementById('stkSearch').value.toLowerCase(); let arr = globalInventory; if(term) arr = arr.filter(v => v.name.toLowerCase().includes(term) || v.supplier.toLowerCase().includes(term) || String(v.internalCode).toLowerCase().includes(term));
     let totalVal = 0; let alertCount = 0; globalInventory.forEach(v => { totalVal += (v.qty * v.cost); if(v.qty <= v.alertQty) alertCount++; });
@@ -918,36 +918,6 @@ window.renderInvLogs = debounce(function() {
     }).join('');
 }, 300);
 
-function openEditInvLogModal(idx) {
-    const l = globalInvLogs.find(x => x.rowIdx === idx); if(!l) return;
-    document.getElementById('e_logRowIdx').value = idx;
-    document.getElementById('e_logInvoiceNo').value = l.invoiceNo || '';
-    document.getElementById('e_logArrivalDate').value = l.arrivalDate || '';
-    document.getElementById('e_logOrderNo').value = l.orderNo || '';
-    document.getElementById('e_logMemo').value = l.memo || '';
-    document.getElementById('e_logSnapshot').value = l.snapshot || '';
-    
-    bootstrap.Modal.getOrCreateInstance(document.getElementById('editInvLogModal')).show();
-}
-
-function saveEditInvLog() {
-    const idx = parseInt(document.getElementById('e_logRowIdx').value);
-    const invoiceNo = document.getElementById('e_logInvoiceNo').value.trim();
-    const arrivalDate = document.getElementById('e_logArrivalDate').value;
-    const orderNo = document.getElementById('e_logOrderNo').value.trim();
-    const memo = document.getElementById('e_logMemo').value.trim();
-    
-    const l = globalInvLogs.find(x => x.rowIdx === idx);
-    if(l) {
-        l.invoiceNo = invoiceNo; l.arrivalDate = arrivalDate; l.orderNo = orderNo; l.memo = memo;
-    }
-    
-    pushToSyncQueue('editInvLogRecord', { rowIdx: idx, invoiceNo, arrivalDate, orderNo, memo }, null);
-    window.renderInvLogs();
-    bootstrap.Modal.getInstance(document.getElementById('editInvLogModal')).hide();
-    showToast("💾 異動紀錄已更新");
-}
-
 function openAdjustModal(nameStr) {
     document.getElementById('adjInvoiceNo').value = ''; 
     document.getElementById('adjArrivalDate').value = getTodayStr(); 
@@ -955,23 +925,6 @@ function openAdjustModal(nameStr) {
     if(nameStr) { const v = globalInventory.find(x => x.name === nameStr); document.getElementById('adjRowIdx').value = v.rowIdx; document.getElementById('adjName').value = v.name; document.getElementById('adjName').onclick = null; document.getElementById('adjName').classList.remove('fake-input-btn'); document.getElementById('adjInternalCode').value = v.internalCode || ''; document.getElementById('adjAlert').value = v.alertQty; document.getElementById('adjCost').value = v.cost; document.getElementById('adjSup').value = v.supplier; } 
     else { document.getElementById('adjRowIdx').value = ''; document.getElementById('adjName').value = ''; document.getElementById('adjName').onclick = () => openSearchModal('item_adj', selectProductForAdj); document.getElementById('adjName').classList.add('fake-input-btn'); document.getElementById('adjInternalCode').value = ''; document.getElementById('adjAlert').value = '10'; document.getElementById('adjCost').value = '0'; document.getElementById('adjSup').value = ''; }
     document.getElementById('adjQty').value = ''; document.getElementById('adjLot').value = ''; document.getElementById('adjExp').value = ''; document.getElementById('adjMemo').value = ''; bootstrap.Modal.getOrCreateInstance(document.getElementById('adjInvModal')).show();
-}
-
-function selectProductForAdj(val) { 
-    document.getElementById('adjName').value = val; const p = globalCatalog.find(x => x.productName === val); 
-    if(p) {
-        let intCode = p.internalCode || p.assetCode || '';
-        document.getElementById('adjInternalCode').value = intCode;
-        
-        if (intCode) {
-            const parts = intCode.split('-');
-            if (parts.length > 1) {
-                const supCodeMatch = parts[1];
-                const s = globalSuppliers.find(x => x.code === supCodeMatch);
-                if (s) document.getElementById('adjSup').value = s.name;
-            }
-        }
-    } 
 }
 
 function saveInventoryAdjust() {
@@ -1004,13 +957,6 @@ function renderShipments() {
     }).join('');
 }
 
-function openShipModal(rowIdx) {
-    const s = globalSalesDetails.find(x => x.rowIdx === rowIdx); if(!s) return;
-    document.getElementById('shipRowIdx').value = rowIdx; document.getElementById('shipItemName').innerText = s.name; document.getElementById('shipTotalQty').innerText = s.qty; document.getElementById('shipDoneQty').innerText = s.shippedQty;
-    const remain = s.qty - s.shippedQty; document.getElementById('shipRemainQty').innerText = remain; document.getElementById('shipNowQty').value = remain; document.getElementById('shipNowQty').max = remain;
-    bootstrap.Modal.getOrCreateInstance(document.getElementById('shipModal')).show();
-}
-
 function confirmShipment() {
     const rowIdx = parseInt(document.getElementById('shipRowIdx').value); const qty = parseFloat(document.getElementById('shipNowQty').value);
     if(isNaN(qty) || qty <= 0) return alert("數量錯誤"); const s = globalSalesDetails.find(x => x.rowIdx === rowIdx); if(!s) return; if(qty > (s.qty - s.shippedQty)) return alert("出貨量不可大於欠貨量");
@@ -1022,132 +968,37 @@ function confirmShipment() {
 
 function openPurchaseOrderModal(salesRowIdx) {
     const s = globalSalesDetails.find(x => x.rowIdx === salesRowIdx); if(!s) return;
-    
-    document.getElementById('poDate').value = getTodayStr();
-    document.getElementById('poSupplier').value = '';
-    document.getElementById('poSupPhone').value = '';
-    document.getElementById('poSupFax').value = '';
-    document.getElementById('poMemo').value = '';
-    
-    document.getElementById('poItemName').value = s.name;
-    document.getElementById('poClientName').value = s.client;
-    document.getElementById('poOrderNo').value = s.orderNo || '';
-    
-    const remainQty = s.qty - s.shippedQty;
-    document.getElementById('poQty').value = remainQty;
-
+    document.getElementById('poDate').value = getTodayStr(); document.getElementById('poSupplier').value = ''; document.getElementById('poSupPhone').value = ''; document.getElementById('poSupFax').value = ''; document.getElementById('poMemo').value = ''; document.getElementById('poItemName').value = s.name; document.getElementById('poClientName').value = s.client; document.getElementById('poOrderNo').value = s.orderNo || '';
+    const remainQty = s.qty - s.shippedQty; document.getElementById('poQty').value = remainQty;
     const p = globalCatalog.find(x => x.clientName === s.client && x.productName === s.name);
-    let intCode = '';
     if (p) {
-        intCode = p.internalCode || p.assetCode || '';
-        document.getElementById('poInternalCode').value = intCode;
-        
-        let inv = globalInventory.find(x => x.name === s.name);
-        document.getElementById('poUnitPrice').value = inv ? (inv.cost || 0) : 0;
-
-        if (intCode) {
-            const parts = intCode.split('-');
-            if (parts.length > 1) {
-                const supCodeMatch = parts[1];
-                const supplier = globalSuppliers.find(x => x.code === supCodeMatch);
-                if (supplier) {
-                    document.getElementById('poSupplier').value = supplier.name || '';
-                    document.getElementById('poSupPhone').value = supplier.phone || '';
-                    document.getElementById('poSupFax').value = supplier.fax || '';
-                }
-            }
-        }
+        let intCode = p.internalCode || p.assetCode || ''; document.getElementById('poInternalCode').value = intCode;
+        let inv = globalInventory.find(x => x.name === s.name); document.getElementById('poUnitPrice').value = inv ? (inv.cost || 0) : 0;
+        if (intCode) { const parts = intCode.split('-'); if (parts.length > 1) { const supplier = globalSuppliers.find(x => x.code === parts[1]); if (supplier) { document.getElementById('poSupplier').value = supplier.name || ''; document.getElementById('poSupPhone').value = supplier.phone || ''; document.getElementById('poSupFax').value = supplier.fax || ''; } } }
     }
-
-    const cObj = globalClients.find(x => x.name === s.client);
-    document.getElementById('poAddress').value = cObj ? (cObj.address || '') : '';
-    
-    const deptSelect = document.getElementById('poReceiveDept');
-    deptSelect.innerHTML = '';
-    if (cObj && cObj.receiveDept) {
-        const depts = cObj.receiveDept.split(/[,，\n]+/).map(str => str.trim()).filter(x => x);
-        if (depts.length > 0) {
-            deptSelect.innerHTML = depts.map(d => `<option value="${d}">${d}</option>`).join('');
-        } else {
-            deptSelect.innerHTML = `<option value="">無資料</option>`;
-        }
-    } else {
-        deptSelect.innerHTML = `<option value="">無資料</option>`;
-    }
-
+    const cObj = globalClients.find(x => x.name === s.client); document.getElementById('poAddress').value = cObj ? (cObj.address || '') : '';
+    const deptSelect = document.getElementById('poReceiveDept'); deptSelect.innerHTML = '';
+    if (cObj && cObj.receiveDept) { const depts = cObj.receiveDept.split(/[,，\n]+/).map(str => str.trim()).filter(x => x); deptSelect.innerHTML = depts.length > 0 ? depts.map(d => `<option value="${d}">${d}</option>`).join('') : `<option value="">無資料</option>`; } else { deptSelect.innerHTML = `<option value="">無資料</option>`; }
     bootstrap.Modal.getOrCreateInstance(document.getElementById('purchaseOrderModal')).show();
 }
 
 function confirmPurchaseOrder() {
-    const qty = parseFloat(document.getElementById('poQty').value);
-    if (isNaN(qty) || qty <= 0) return alert("請輸入正確的訂貨數量！");
-    
-    const snapData = {
-        poDate: document.getElementById('poDate').value,
-        poOrderNo: document.getElementById('poOrderNo').value,
-        poSupplier: document.getElementById('poSupplier').value,
-        poSupPhone: document.getElementById('poSupPhone').value,
-        poSupFax: document.getElementById('poSupFax').value,
-        poItemName: document.getElementById('poItemName').value,
-        poInternalCode: document.getElementById('poInternalCode').value,
-        poUnitPrice: document.getElementById('poUnitPrice').value,
-        poClientName: document.getElementById('poClientName').value,
-        poReceiveDept: document.getElementById('poReceiveDept').value,
-        poAddress: document.getElementById('poAddress').value,
-        poQty: qty,
-        poMemo: document.getElementById('poMemo').value
-    };
-
-    const payload = {
-        name: snapData.poItemName,
-        staff: myName,
-        orderNo: snapData.poOrderNo,
-        orderDate: snapData.poDate,
-        memo: snapData.poMemo,
-        snapshot: JSON.stringify(snapData) 
-    };
-
-    let inv = globalInventory.find(x => x.name === snapData.poItemName);
-    let currentQty = inv ? inv.qty : 0;
-    globalInvLogs.unshift({
-        rowIdx: Date.now(), 
-        time: Date.now(), 
-        staff: myName, 
-        name: snapData.poItemName, 
-        type: '向廠商訂貨', 
-        qtyChange: 0, 
-        newQty: currentQty, 
-        orderNo: snapData.poOrderNo,
-        arrivalDate: snapData.poDate, 
-        memo: snapData.poMemo,
-        snapshot: payload.snapshot
-    });
-
-    pushToSyncQueue('submitPurchaseOrder', payload, null);
-    window.renderInvLogs();
-    bootstrap.Modal.getInstance(document.getElementById('purchaseOrderModal')).hide();
-    
-    showToast("🛒 訂貨單已記錄！即將列印...");
-    setTimeout(() => {
-        printPurchaseOrder(snapData);
-    }, 500);
+    const qty = parseFloat(document.getElementById('poQty').value); if (isNaN(qty) || qty <= 0) return alert("請輸入正確的訂貨數量！");
+    const snapData = { poDate: document.getElementById('poDate').value, poOrderNo: document.getElementById('poOrderNo').value, poSupplier: document.getElementById('poSupplier').value, poSupPhone: document.getElementById('poSupPhone').value, poSupFax: document.getElementById('poSupFax').value, poItemName: document.getElementById('poItemName').value, poInternalCode: document.getElementById('poInternalCode').value, poUnitPrice: document.getElementById('poUnitPrice').value, poClientName: document.getElementById('poClientName').value, poReceiveDept: document.getElementById('poReceiveDept').value, poAddress: document.getElementById('poAddress').value, poQty: qty, poMemo: document.getElementById('poMemo').value };
+    const payload = { name: snapData.poItemName, staff: myName, orderNo: snapData.poOrderNo, orderDate: snapData.poDate, memo: snapData.poMemo, snapshot: JSON.stringify(snapData) };
+    let inv = globalInventory.find(x => x.name === snapData.poItemName); let currentQty = inv ? inv.qty : 0;
+    globalInvLogs.unshift({ rowIdx: Date.now(), time: Date.now(), staff: myName, name: snapData.poItemName, type: '向廠商訂貨', qtyChange: 0, newQty: currentQty, orderNo: snapData.poOrderNo, arrivalDate: snapData.poDate, memo: snapData.poMemo, snapshot: payload.snapshot });
+    pushToSyncQueue('submitPurchaseOrder', payload, null); window.renderInvLogs(); bootstrap.Modal.getInstance(document.getElementById('purchaseOrderModal')).hide(); showToast("🛒 訂貨單已記錄！即將列印...");
+    setTimeout(() => { printPurchaseOrder(snapData); }, 500);
 }
 
 window.reprintPurchaseOrderFast = function(idx) {
-    const l = globalInvLogs.find(x => x.rowIdx === idx);
-    if (!l || !l.snapshot) return alert("無快照可列印！");
-    try {
-        const snapData = JSON.parse(l.snapshot);
-        printPurchaseOrder(snapData);
-    } catch(e) {
-        alert("快照資料解析失敗");
-    }
+    const l = globalInvLogs.find(x => x.rowIdx === idx); if (!l || !l.snapshot) return alert("無快照可列印！");
+    try { const snapData = JSON.parse(l.snapshot); printPurchaseOrder(snapData); } catch(e) { alert("快照資料解析失敗"); }
 }
 
 function printPurchaseOrder(data) {
-    const totalAmount = parseFloat(data.poQty) * parseFloat(data.poUnitPrice || 0);
-    const dateStr = data.poDate ? data.poDate.replace(/-/g, '/') : getTodayStr().replace(/-/g, '/');
-
+    const totalAmount = parseFloat(data.poQty) * parseFloat(data.poUnitPrice || 0); const dateStr = data.poDate ? data.poDate.replace(/-/g, '/') : getTodayStr().replace(/-/g, '/');
     const html = `
         <div style="padding: 0; width: 100%; box-sizing: border-box; font-family: 'MingLiU', '微軟正黑體', sans-serif;">
             <div style="text-align: center; font-size: 26px; font-weight: 900; letter-spacing: 5px; margin-bottom: 10px; color: #000;">長固實業有限公司 - 訂貨單</div>
@@ -1169,46 +1020,19 @@ function printPurchaseOrder(data) {
                     </td>
                 </tr>
             </table>
-
             <table style="width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 15px; color: #000;">
-                <thead>
-                    <tr style="background-color: #f8f9fa;">
-                        <th style="border: 2px solid #000; padding: 10px; text-align: left;">長固代號 / 品名</th>
-                        <th style="border: 2px solid #000; padding: 10px; width: 80px; text-align: center;">數量</th>
-                        <th style="border: 2px solid #000; padding: 10px; width: 100px; text-align: right;">單價</th>
-                        <th style="border: 2px solid #000; padding: 10px; width: 120px; text-align: right;">總計</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td style="border: 1px solid #000; padding: 15px 10px; text-align: left;">
-                            <div style="font-weight: bold; margin-bottom: 5px;">${escapeQuotes(data.poInternalCode)}</div>
-                            <div>${escapeQuotes(data.poItemName)}</div>
-                        </td>
-                        <td style="border: 1px solid #000; padding: 15px 10px; text-align: center; font-size: 18px; font-weight: bold;">${data.poQty}</td>
-                        <td style="border: 1px solid #000; padding: 15px 10px; text-align: right;">${Number(data.poUnitPrice).toLocaleString()}</td>
-                        <td style="border: 1px solid #000; padding: 15px 10px; text-align: right; font-weight: bold;">${totalAmount.toLocaleString()}</td>
-                    </tr>
-                </tbody>
+                <thead><tr style="background-color: #f8f9fa;"><th style="border: 2px solid #000; padding: 10px; text-align: left;">長固代號 / 品名</th><th style="border: 2px solid #000; padding: 10px; width: 80px; text-align: center;">數量</th><th style="border: 2px solid #000; padding: 10px; width: 100px; text-align: right;">單價</th><th style="border: 2px solid #000; padding: 10px; width: 120px; text-align: right;">總計</th></tr></thead>
+                <tbody><tr><td style="border: 1px solid #000; padding: 15px 10px; text-align: left;"><div style="font-weight: bold; margin-bottom: 5px;">${escapeQuotes(data.poInternalCode)}</div><div>${escapeQuotes(data.poItemName)}</div></td><td style="border: 1px solid #000; padding: 15px 10px; text-align: center; font-size: 18px; font-weight: bold;">${data.poQty}</td><td style="border: 1px solid #000; padding: 15px 10px; text-align: right;">${Number(data.poUnitPrice).toLocaleString()}</td><td style="border: 1px solid #000; padding: 15px 10px; text-align: right; font-weight: bold;">${totalAmount.toLocaleString()}</td></tr></tbody>
             </table>
-            
-            <div style="margin-top: 15px; font-size: 14px; border: 1px solid #000; padding: 10px; background-color: #fcfcfc; color: #000;">
-                <div style="margin-bottom: 5px;"><strong>📍 送貨地點：</strong>${escapeQuotes(data.poAddress)}</div>
-                <div style="margin-bottom: 5px;"><strong>📦 收貨單位：</strong>${escapeQuotes(data.poReceiveDept)}</div>
-                <div><strong>📝 備註事項：</strong>${escapeQuotes(data.poMemo)}</div>
-            </div>
+            <div style="margin-top: 15px; font-size: 14px; border: 1px solid #000; padding: 10px; background-color: #fcfcfc; color: #000;"><div style="margin-bottom: 5px;"><strong>📍 送貨地點：</strong>${escapeQuotes(data.poAddress)}</div><div style="margin-bottom: 5px;"><strong>📦 收貨單位：</strong>${escapeQuotes(data.poReceiveDept)}</div><div><strong>📝 備註事項：</strong>${escapeQuotes(data.poMemo)}</div></div>
         </div>
     `;
-
-    document.getElementById('printPoArea').innerHTML = html;
-    document.getElementById('printPoArea').classList.add('print-active');
-    document.getElementById('printArea').classList.remove('print-active');
-    
+    document.getElementById('printPoArea').innerHTML = html; document.getElementById('printPoArea').classList.add('print-active'); document.getElementById('printArea').classList.remove('print-active');
     setTimeout(() => { window.print(); }, 300);
 }
 
 // ============================================================================
-// 報表與發票出貨單列印模組 (含發票補登功能)
+// 報表與發票出貨單列印模組 (含發票補登)
 // ============================================================================
 window.renderHistory = debounce(function() {
     const fStaff = document.getElementById('histFilterStaff').value; const fClient = document.getElementById('histFilterClient').value; const fDate = document.getElementById('histFilterDate').value; const fStatus = document.getElementById('histFilterStatus').value; const term = document.getElementById('histSearch').value.toLowerCase();
@@ -1221,7 +1045,6 @@ window.renderHistory = debounce(function() {
     c.innerHTML = filtered.map(h => {
         const d = new Date(h.time); const dateStr = isNaN(d.getTime()) ? '未知' : `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`;
         const isVoid = h.status === '作廢'; const isEdited = h.historyLog && h.historyLog.length > 2;
-        
         let badgeHTML = isVoid ? '<span class="badge bg-danger ms-1">已作廢</span>' : '';
         if(isEdited && !isVoid) badgeHTML += `<span class="badge bg-warning text-dark ms-1" onclick="alert('修改紀錄：\\n${escapeQuotes(JSON.parse(h.historyLog).join('\\n'))}')" style="cursor:pointer;">⚠️ 已修改</span>`;
         
@@ -1231,9 +1054,7 @@ window.renderHistory = debounce(function() {
         let actionBtns = '';
         if (!isVoid) {
             actionBtns += `<button class="btn btn-sm btn-outline-info me-1 fw-bold" onclick="printDeliveryNote(${h.rowIdx})">🖨️ 列印出單</button>`;
-            if (isBorrowed) {
-                actionBtns += `<button class="btn btn-sm btn-danger me-1 fw-bold" onclick="openSuppInvModal(${h.rowIdx}, '${escapeQuotes(h.paperNo)}')">📝 補登發票</button>`;
-            }
+            if (isBorrowed) actionBtns += `<button class="btn btn-sm btn-danger me-1 fw-bold" onclick="openSuppInvModal(${h.rowIdx}, '${escapeQuotes(h.paperNo)}')">📝 補登發票</button>`;
             actionBtns += `<button class="btn btn-sm btn-outline-danger me-1" onclick="voidInv(${h.rowIdx}, '${escapeQuotes(h.paperNo)}')">作廢</button>`;
             actionBtns += `<button class="btn btn-sm btn-outline-secondary" onclick="openEditInv(${h.rowIdx})">編輯</button>`;
         }
@@ -1253,9 +1074,7 @@ window.renderHistory = debounce(function() {
 }, 300);
 
 window.openSuppInvModal = function(idx, oldPaperNo) {
-    document.getElementById('supp_invRowIdx').value = idx;
-    document.getElementById('supp_oldPaperNo').value = oldPaperNo;
-    document.getElementById('supp_newPaperNo').value = '';
+    document.getElementById('supp_invRowIdx').value = idx; document.getElementById('supp_oldPaperNo').value = oldPaperNo; document.getElementById('supp_newPaperNo').value = '';
     bootstrap.Modal.getOrCreateInstance(document.getElementById('suppInvModal')).show();
 };
 
@@ -1263,16 +1082,17 @@ window.confirmSupplementInvoice = function() {
     const idx = parseInt(document.getElementById('supp_invRowIdx').value);
     const oldPaperNo = document.getElementById('supp_oldPaperNo').value;
     const newPaperNo = document.getElementById('supp_newPaperNo').value.trim().toUpperCase();
-
     if (!newPaperNo) return alert("請輸入正確的發票號碼！");
     
     showLoading("連動更新中...");
-    pushToSyncQueue('supplementInvoiceNo', { rowIdx: idx, oldPaperNo: oldPaperNo, newPaperNo: newPaperNo, staff: myName }, function(res) {
+    callApi('supplementInvoiceNo', { rowIdx: idx, oldPaperNo: oldPaperNo, newPaperNo: newPaperNo, staff: myName })
+    .then(res => {
         hideLoading();
         bootstrap.Modal.getInstance(document.getElementById('suppInvModal')).hide();
         showToast("✅ 發票號碼已成功補登並連動更新");
-        refreshData(); 
-    });
+        refreshData(); // 強制重整抓取最新資料
+    })
+    .catch(err => { hideLoading(); alert("補登失敗：" + err.message); });
 };
 
 function printDeliveryNote(idx) {
@@ -1286,81 +1106,18 @@ function printDeliveryNote(idx) {
         items.forEach(item => {
             const inv = globalInventory.find(v => v.name === item.name);
             const lotExp = inv ? `${inv.lot||''} ${inv.expiry||''}`.trim() : '';
-            tbodyHtml += `
-                <tr>
-                    <td style="border: 1px solid #333; padding: 8px; text-align: left;">${item.name}</td>
-                    <td style="border: 1px solid #333; padding: 8px; text-align: center;">${item.qty}</td>
-                    <td style="border: 1px solid #333; padding: 8px; text-align: center;">0</td>
-                    <td style="border: 1px solid #333; padding: 8px; text-align: right;">${Number(item.price).toLocaleString()}</td>
-                    <td style="border: 1px solid #333; padding: 8px; text-align: right;">
-                        ${Number(item.subtotal).toLocaleString()}<br>
-                        <span style="font-size: 11px; color: #555;">${item.orderNo || ''}</span>
-                    </td>
-                    <td style="border: 1px solid #333; padding: 8px; text-align: center; font-size: 11px;">${lotExp}</td>
-                </tr>
-            `;
+            tbodyHtml += `<tr><td style="border: 1px solid #333; padding: 8px; text-align: left;">${item.name}</td><td style="border: 1px solid #333; padding: 8px; text-align: center;">${item.qty}</td><td style="border: 1px solid #333; padding: 8px; text-align: center;">0</td><td style="border: 1px solid #333; padding: 8px; text-align: right;">${Number(item.price).toLocaleString()}</td><td style="border: 1px solid #333; padding: 8px; text-align: right;">${Number(item.subtotal).toLocaleString()}<br><span style="font-size: 11px; color: #555;">${item.orderNo || ''}</span></td><td style="border: 1px solid #333; padding: 8px; text-align: center; font-size: 11px;">${lotExp}</td></tr>`;
         });
-    } else {
-        tbodyHtml = `<tr><td colspan="6" style="border: 1px solid #333; padding: 8px; text-align: center;">(無明細資料或為舊資料)</td></tr>`;
-    }
+    } else { tbodyHtml = `<tr><td colspan="6" style="border: 1px solid #333; padding: 8px; text-align: center;">(無明細資料或為舊資料)</td></tr>`; }
 
     const html = `
         <div style="padding: 0; width: 100%; box-sizing: border-box;">
-            <table style="width: 100%; border: none; margin-bottom: 15px;">
-                <tr>
-                    <td style="width: 50%; vertical-align: top;">
-                        <div style="font-weight: bold; font-size: 16px;">TO:</div>
-                        <div style="font-weight: bold; font-size: 22px; margin-top: 5px; letter-spacing: 2px;">${h.client}</div>
-                    </td>
-                    <td style="width: 50%; vertical-align: top; font-size: 14px; line-height: 1.6; text-align: right;">
-                        <div style="font-weight: bold; font-size: 16px;">FROM: 長固實業有限公司</div>
-                        <div>新北市三重區重新路五段609巷6號4樓</div>
-                        <div>TEL: (02) 2999-3881 &nbsp; 2999-3593</div>
-                        <div>FAX: 886-2-2999-3495</div>
-                        <div style="margin-top: 5px;">${dateStr} &nbsp;&nbsp; 1/1</div>
-                    </td>
-                </tr>
-            </table>
-
-            <table style="width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px;">
-                <thead>
-                    <tr style="background-color: #f8f9fa;">
-                        <th style="border: 1px solid #333; padding: 8px; text-align: center;">品名</th>
-                        <th style="border: 1px solid #333; padding: 8px; width: 60px; text-align: center;">數量</th>
-                        <th style="border: 1px solid #333; padding: 8px; width: 60px; text-align: center;">欠貨</th>
-                        <th style="border: 1px solid #333; padding: 8px; width: 80px; text-align: center;">單價</th>
-                        <th style="border: 1px solid #333; padding: 8px; width: 120px; text-align: center;">小計 客戶訂單號</th>
-                        <th style="border: 1px solid #333; padding: 8px; width: 100px; text-align: center;">批號/效期</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${tbodyHtml}
-                </tbody>
-                <tfoot>
-                    <tr>
-                        <td colspan="4" style="border: 1px solid #333; padding: 8px; text-align: right; font-weight: bold;">*總計*</td>
-                        <td style="border: 1px solid #333; padding: 8px; text-align: right; font-weight: bold;">${Number(h.total).toLocaleString()}</td>
-                        <td style="border: 1px solid #333; padding: 8px;"></td>
-                    </tr>
-                </tfoot>
-            </table>
-
-            <div style="margin-top: 15px; font-size: 14px; line-height: 1.6;">
-                <p style="margin-bottom: 5px;">以上貨品數量及單價請查核.</p>
-                <p style="margin-bottom: 15px;">附發票號碼: <strong style="font-size: 16px;">${h.paperNo || ''}</strong></p>
-                <div style="display: flex; justify-content: space-between; margin-top: 30px;">
-                    <div style="width: 45%;">簽收: <span style="border-bottom: 1px solid #000; display: inline-block; width: 75%;">&nbsp;</span></div>
-                    <div style="width: 45%;">備考: <span style="border-bottom: 1px solid #000; display: inline-block; width: 75%;">&nbsp;</span></div>
-                </div>
-            </div>
+            <table style="width: 100%; border: none; margin-bottom: 15px;"><tr><td style="width: 50%; vertical-align: top;"><div style="font-weight: bold; font-size: 16px;">TO:</div><div style="font-weight: bold; font-size: 22px; margin-top: 5px; letter-spacing: 2px;">${h.client}</div></td><td style="width: 50%; vertical-align: top; font-size: 14px; line-height: 1.6; text-align: right;"><div style="font-weight: bold; font-size: 16px;">FROM: 長固實業有限公司</div><div>新北市三重區重新路五段609巷6號4樓</div><div>TEL: (02) 2999-3881 &nbsp; 2999-3593</div><div>FAX: 886-2-2999-3495</div><div style="margin-top: 5px;">${dateStr} &nbsp;&nbsp; 1/1</div></td></tr></table>
+            <table style="width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px;"><thead><tr style="background-color: #f8f9fa;"><th style="border: 1px solid #333; padding: 8px; text-align: center;">品名</th><th style="border: 1px solid #333; padding: 8px; width: 60px; text-align: center;">數量</th><th style="border: 1px solid #333; padding: 8px; width: 60px; text-align: center;">欠貨</th><th style="border: 1px solid #333; padding: 8px; width: 80px; text-align: center;">單價</th><th style="border: 1px solid #333; padding: 8px; width: 120px; text-align: center;">小計 客戶訂單號</th><th style="border: 1px solid #333; padding: 8px; width: 100px; text-align: center;">批號/效期</th></tr></thead><tbody>${tbodyHtml}</tbody><tfoot><tr><td colspan="4" style="border: 1px solid #333; padding: 8px; text-align: right; font-weight: bold;">*總計*</td><td style="border: 1px solid #333; padding: 8px; text-align: right; font-weight: bold;">${Number(h.total).toLocaleString()}</td><td style="border: 1px solid #333; padding: 8px;"></td></tr></tfoot></table>
+            <div style="margin-top: 15px; font-size: 14px; line-height: 1.6;"><p style="margin-bottom: 5px;">以上貨品數量及單價請查核.</p><p style="margin-bottom: 15px;">附發票號碼: <strong style="font-size: 16px;">${h.paperNo || ''}</strong></p><div style="display: flex; justify-content: space-between; margin-top: 30px;"><div style="width: 45%;">簽收: <span style="border-bottom: 1px solid #000; display: inline-block; width: 75%;">&nbsp;</span></div><div style="width: 45%;">備考: <span style="border-bottom: 1px solid #000; display: inline-block; width: 75%;">&nbsp;</span></div></div></div>
         </div>
     `;
-
-    document.getElementById('printArea').innerHTML = html;
-    
-    document.getElementById('printArea').classList.add('print-active');
-    document.getElementById('printPoArea').classList.remove('print-active');
-    
+    document.getElementById('printArea').innerHTML = html; document.getElementById('printArea').classList.add('print-active'); document.getElementById('printPoArea').classList.remove('print-active');
     setTimeout(() => { window.print(); }, 300);
 }
 
@@ -1403,7 +1160,7 @@ function exportReportToEmail() {
 }
 
 // ============================================================================
-// 通用搜尋與管理員模組
+// 管理員與表單工具模組
 // ============================================================================
 function openSearchModal(type, callback) {
     currentSearchCallback = callback; document.getElementById('searchModalList').innerHTML = ''; document.getElementById('searchModalInput').value = '';
@@ -1483,31 +1240,4 @@ function submitEditItemOptimistic() {
     bootstrap.Modal.getInstance(document.getElementById('editItemModal')).hide(); 
     
     pushToSyncQueue('saveAdminItem', payload, null); 
-}
-
-// ============================================================================
-// 【遠端遙控】呼叫 AI 接單機器人 (changgu.erp@gmail.com)
-// ============================================================================
-function scanEmailOrders() {
-  const url = CONFIG.ROBOT_API_URL;
-  if (!url || url.includes("請將你在")) {
-    throw new Error("⚠️ 請先在主系統 Code.gs 上方 CONFIG 設定 ROBOT_API_URL！");
-  }
-  
-  const payload = { action: "triggerScan" };
-  const options = {
-    method: "post",
-    contentType: "application/json",
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true
-  };
-  
-  const response = UrlFetchApp.fetch(url, options);
-  const json = JSON.parse(response.getContentText());
-  
-  if (json.success) {
-    return { success: true, count: json.data.count, msg: json.data.msg };
-  } else {
-    throw new Error("機器人連線失敗：" + (json.error || "未知錯誤"));
-  }
 }
