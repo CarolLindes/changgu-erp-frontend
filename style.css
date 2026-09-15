@@ -33,7 +33,7 @@ html, body {
 .home-card { background: white; border-radius: 15px; padding: 22px 10px; text-align: center; box-shadow: 0 4px 15px rgba(0,0,0,0.05); cursor: pointer; transition: transform 0.2s; border-bottom: 4px solid transparent; }
 .home-card:active { transform: scale(0.97); }
 .c-inv { border-bottom-color: #0d6efd; } .c-ord { border-bottom-color: #ffc107; } .c-stk { border-bottom-color: #0dcaf0; grid-column: span 2; } .c-rep { border-bottom-color: #198754; grid-column: span 2; } .c-mgr { border-bottom-color: #dc3545; grid-column: span 2; }
-.c-quo { border-bottom-color: #6f42c1; grid-column: span 2; } /* 估價單專屬色 */
+.c-quo { border-bottom-color: #6f42c1; grid-column: span 2; }
 
 #mainApp { display: none; height: 100dvh; overflow-y: auto; padding-bottom: max(60px, env(safe-area-inset-bottom)); animation: fadeIn 0.3s; }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
@@ -87,7 +87,7 @@ html, body {
 }
 
 /* ==========================================================================
-   列印專屬樣式 (@media print) - 出貨單、訂貨單、估價單
+   列印專屬樣式 (@media print)
    ========================================================================== */
 #printArea, #printPoArea, #printQuoteArea { display: none; }
 
@@ -97,6 +97,11 @@ html, body {
     /* 隱藏所有不需要印出來的網頁元素與列印控制列 */
     #btnRetrySync, #bgSyncIndicator, #toastBox, #miniLoading, #authScreen, #splashScreen, #homeMenu, #mainApp, .modal, #printControlBar {
         display: none !important;
+    }
+    
+    /* 強制將頁面本身的 margin 設為 0，這能關閉瀏覽器預設的網址、日期等浮水印 */
+    @page {
+        margin: 0;
     }
     
     /* 控制預設的版面顯示 */
@@ -109,10 +114,4 @@ html, body {
     
     /* 確保只有觸發列印的那一個區塊會顯示 (透過 JS 控制) */
     .print-active { display: block !important; }
-
-    /* 預設紙張為 A5 橫式 (出貨單/訂貨單使用，估價單則會被動態樣式覆蓋) */
-    @page {
-        size: A5 landscape;
-        margin: 10mm;
-    }
 }
