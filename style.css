@@ -1,5 +1,5 @@
 /* ==========================================================================
-   長固 ERP 系統 - 核心樣式表 (測試環境優化版 + 訂貨單擴充)
+   長固 ERP 系統 - 核心樣式表 (終極修復版：支援估價單與動態列印)
    ========================================================================== */
 html::-webkit-scrollbar, body::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -33,6 +33,7 @@ html, body {
 .home-card { background: white; border-radius: 15px; padding: 22px 10px; text-align: center; box-shadow: 0 4px 15px rgba(0,0,0,0.05); cursor: pointer; transition: transform 0.2s; border-bottom: 4px solid transparent; }
 .home-card:active { transform: scale(0.97); }
 .c-inv { border-bottom-color: #0d6efd; } .c-ord { border-bottom-color: #ffc107; } .c-stk { border-bottom-color: #0dcaf0; grid-column: span 2; } .c-rep { border-bottom-color: #198754; grid-column: span 2; } .c-mgr { border-bottom-color: #dc3545; grid-column: span 2; }
+.c-quo { border-bottom-color: #6f42c1; grid-column: span 2; } /* 估價單專屬色 */
 
 #mainApp { display: none; height: 100dvh; overflow-y: auto; padding-bottom: max(60px, env(safe-area-inset-bottom)); animation: fadeIn 0.3s; }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
@@ -48,6 +49,7 @@ html, body {
 .status-partial { border-left: 4px solid #17a2b8 !important; }
 .stock-dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 5px; }
 .stock-g { background-color: #198754; box-shadow: 0 0 5px #198754; } .stock-y { background-color: #ffc107; box-shadow: 0 0 5px #ffc107; } .stock-r { background-color: #dc3545; box-shadow: 0 0 5px #dc3545; }
+.border-dashed { border-style: dashed !important; border-width: 2px !important; }
 
 .invoice-box { min-width: 320px; border: 3px solid #d32f2f; padding: 15px; background: #fff; font-family: "MingLiU", serif; overflow-x: auto; color: #d32f2f; }
 .invoice-header { text-align: center; border-bottom: 2px solid #d32f2f; margin-bottom: 10px; padding-bottom: 5px; }
@@ -58,6 +60,7 @@ html, body {
 .highlight-data { color: #0056b3 !important; font-weight: bold; font-family: sans-serif; }
 .letter-spacing-lg { letter-spacing: 3px; }
 
+/* Modal 相關 */
 .fullscreen-modal .modal-dialog { margin: 0; width: 100vw; max-width: none; height: 100dvh; }
 .fullscreen-modal .modal-content { height: 100dvh; border: none; border-radius: 0; display: flex; flex-direction: column; }
 .fullscreen-modal .modal-body { overflow-y: auto; flex-grow: 1; background: #f1f3f5; padding: 10px; }
@@ -84,32 +87,32 @@ html, body {
 }
 
 /* ==========================================================================
-   列印專屬樣式 (@media print) - 出貨單與訂貨單 (A5 橫式滿版)
+   列印專屬樣式 (@media print) - 出貨單、訂貨單、估價單
    ========================================================================== */
-#printArea, #printPoArea { display: none; }
+#printArea, #printPoArea, #printQuoteArea { display: none; }
 
 @media print {
     body { background: #fff !important; margin: 0; padding: 0; }
     
-    /* 隱藏所有不需要印出來的網頁元素 */
-    #btnRetrySync, #bgSyncIndicator, #toastBox, #miniLoading, #authScreen, #splashScreen, #homeMenu, #mainApp, .modal {
+    /* 隱藏所有不需要印出來的網頁元素與列印控制列 */
+    #btnRetrySync, #bgSyncIndicator, #toastBox, #miniLoading, #authScreen, #splashScreen, #homeMenu, #mainApp, .modal, #printControlBar {
         display: none !important;
     }
     
-    /* 控制出貨單與訂貨單的顯示 */
-    #printArea, #printPoArea {
+    /* 控制預設的版面顯示 */
+    #printArea, #printPoArea, #printQuoteArea {
         width: 100%;
         color: #000;
         font-family: "MingLiU", "微軟正黑體", sans-serif;
         page-break-after: avoid;
     }
     
-    /* 設定紙張為 A5 橫式 */
+    /* 確保只有觸發列印的那一個區塊會顯示 (透過 JS 控制) */
+    .print-active { display: block !important; }
+
+    /* 預設紙張為 A5 橫式 (出貨單/訂貨單使用，估價單則會被動態樣式覆蓋) */
     @page {
         size: A5 landscape;
         margin: 10mm;
     }
-
-    /* 確保只有觸發列印的那一個區塊會顯示 (透過 JS 控制) */
-    .print-active { display: block !important; }
 }
