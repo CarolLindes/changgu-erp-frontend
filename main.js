@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * 長固 ERP 系統 - 前端核心運算邏輯 (補齊遺失模組 + 精美擬真預覽列印)
+ * 長固 ERP 系統 - 前端核心運算邏輯 (終極修復版：找回遺失模組 + 完美預覽列印)
  * ============================================================================
  */
 
@@ -295,7 +295,6 @@ window.applyPrintStyle = function(size, layout) {
         styleNode.id = 'dynamicPrintStyle';
         document.head.appendChild(styleNode);
     }
-    // 強制設定紙張大小、關閉邊界，並確保預覽時的陰影在真正列印時會消失
     styleNode.innerHTML = `
     @media print { 
         @page { size: ${size} ${layout}; margin: 0mm; } 
@@ -306,7 +305,6 @@ window.applyPrintStyle = function(size, layout) {
 };
 
 window.showPrintPreview = function(areaId) {
-    // 隱藏主介面
     document.getElementById('mainApp').style.display = 'none';
     document.getElementById('homeMenu').style.display = 'none';
     
@@ -317,17 +315,14 @@ window.showPrintPreview = function(areaId) {
     document.getElementById('printPoArea').classList.remove('print-active');
     document.getElementById('printQuoteArea').classList.remove('print-active');
     
-    // 顯示目標列印區
     const targetArea = document.getElementById(areaId);
     targetArea.style.display = 'block';
     targetArea.classList.add('print-active');
     
-    // 建立頂部懸浮控制列
     let controlBar = document.getElementById('printControlBar');
     if (!controlBar) {
         controlBar = document.createElement('div');
         controlBar.id = 'printControlBar';
-        // 深色背景，讓白紙更凸顯
         controlBar.className = 'd-flex justify-content-center p-3 position-fixed w-100 top-0 d-print-none';
         controlBar.style.cssText = 'z-index: 10500; left: 0; background-color: #343a40; box-shadow: 0 4px 6px rgba(0,0,0,0.3);';
         controlBar.innerHTML = `
@@ -337,8 +332,6 @@ window.showPrintPreview = function(areaId) {
         document.body.appendChild(controlBar);
     }
     controlBar.style.display = 'flex';
-    
-    // 將網頁背景變暗，並往下推讓出控制列的空間
     document.body.style.backgroundColor = '#2c3034';
     document.body.style.paddingTop = '80px'; 
     window.scrollTo(0,0);
@@ -348,7 +341,6 @@ window.closePrintPreview = function() {
     let controlBar = document.getElementById('printControlBar');
     if(controlBar) controlBar.style.display = 'none';
     
-    // 復原背景與空間
     document.body.style.paddingTop = '0px';
     document.body.style.backgroundColor = ''; 
     
@@ -359,10 +351,8 @@ window.closePrintPreview = function() {
     document.getElementById('printPoArea').classList.remove('print-active');
     document.getElementById('printQuoteArea').classList.remove('print-active');
     
-    // 顯示主介面
     document.getElementById('mainApp').style.display = 'block';
 };
-
 
 // ============================================================================
 // 拖曳排序 (Drag & Drop) 邏輯
@@ -1194,190 +1184,7 @@ window.verifyQuotationToInvoice = function(gid) {
 };
 
 // ============================================================================
-// 🖨️ 動態切換版型列印 (估價單 A4 直立)
-// ============================================================================
-window.printQuotation = function(gid) {
-    const quotesInGroup = globalQuotes.filter(q => q.mergeId === gid || `Single_${q.rowIdx}` === gid);
-    if(quotesInGroup.length === 0) return;
-
-    applyPrintStyle('A4', 'portrait');
-
-    const client = quotesInGroup[0].client;
-    const printDate = quotesInGroup.length === 1 ? quotesInGroup[0].quoteDate.replace(/-/g, '/') : getTodayStr().replace(/-/g, '/');
-    const quoteNos = quotesInGroup.map(q => q.quoteNo).join(', ');
-    const useSeal = quotesInGroup.some(q => q.useSeal); 
-
-    let tbodyHtml = '';
-    let totalTaxInc = 0; 
-
-    quotesInGroup.forEach(q => {
-        let items = []; try { items = JSON.parse(q.jsonStr); } catch(e){}
-        items.forEach(item => {
-            let price = parseFloat(item.price) || 0;
-            let qty = parseFloat(item.qty) || 0;
-            let subtotal = Math.round(price * qty);
-            totalTaxInc += subtotal;
-
-            let brandModelDisplay = item.brandModel ? `<div style="font-size: 13px; color: #555;">${escapeQuotes(item.brandModel)}</div>` : '';
-            let memoDisplay = item.memo ? `<div style="font-size: 12px; color: #777; margin-top: 2px;">${escapeQuotes(item.memo)}</div>` : '';
-
-            tbodyHtml += `
-                <tr>
-                    <td style="border: 1px solid #333; padding: 10px 8px; text-align: left;">
-                        <div style="font-weight: bold; font-size: 15px;">${escapeQuotes(item.name)}</div>
-                        ${brandModelDisplay}
-                    </td>
-                    <td style="border: 1px solid #333; padding: 10px 8px; text-align: center; font-size: 15px;">${qty}</td>
-                    <td style="border: 1px solid #333; padding: 10px 8px; text-align: center; font-size: 15px;">${escapeQuotes(item.unit)}</td>
-                    <td style="border: 1px solid #333; padding: 10px 8px; text-align: right; font-size: 15px;">${price.toLocaleString()}</td>
-                    <td style="border: 1px solid #333; padding: 10px 8px; text-align: right; font-weight: bold; font-size: 15px;">${subtotal.toLocaleString()}</td>
-                    <td style="border: 1px solid #333; padding: 10px 8px; text-align: left; font-size: 13px;">${memoDisplay}</td>
-                </tr>
-            `;
-        });
-    });
-
-    let sealHtml = '';
-    if (useSeal) {
-        sealHtml = `<img src="https://drive.google.com/thumbnail?id=13O2Q2GFzhPfH13SqtFVf4HoiWMTteHtr&sz=w800" style="width: 55mm; position: absolute; right: 40px; top: -10px; mix-blend-mode: multiply; opacity: 0.85;">`;
-    }
-
-    let combinedMemo = quotesInGroup.map(q => q.memo).filter(x => x).join(' | ');
-    let totalMemoHtml = combinedMemo ? `<div style="margin-top: 15px; font-size: 14px; border: 1px solid #000; padding: 10px; background-color: #fcfcfc; color: #000;"><strong>備註事項：</strong><br>${escapeQuotes(combinedMemo).replace(/\n/g, '<br>')}</div>` : '';
-
-    const html = `
-        <div class="preview-paper" style="background-color: #ffffff; color: #000000; padding: 15mm 15mm; width: 100%; max-width: 210mm; min-height: 297mm; margin: 0 auto; box-sizing: border-box; font-family: 'MingLiU', '微軟正黑體', sans-serif; position: relative; box-shadow: 0 0 15px rgba(0,0,0,0.3);">
-            
-            <div style="text-align: center; margin-bottom: 20px;">
-                <div style="font-size: 28px; font-weight: 900; letter-spacing: 5px; color: #000;">長固實業有限公司</div>
-                <div style="font-size: 14px; margin-top: 5px; color: #000;">新北市三重區重新路五段609巷6號4樓</div>
-                <div style="font-size: 14px; color: #000;">電話：(04) 2326-9591 &nbsp;&nbsp;&nbsp; 傳真：(04) 2326-8576</div>
-                <div style="font-size: 22px; font-weight: bold; letter-spacing: 8px; margin-top: 15px; text-decoration: underline; text-underline-offset: 6px;">估價單</div>
-            </div>
-
-            <table style="width: 100%; border: none; margin-bottom: 15px; font-size: 15px; color: #000;">
-                <tr>
-                    <td style="width: 60%; vertical-align: bottom;">
-                        <div style="font-weight: bold; font-size: 18px; margin-bottom: 5px;">客戶名稱：${client}</div>
-                    </td>
-                    <td style="width: 40%; vertical-align: bottom; text-align: right; line-height: 1.6;">
-                        <div style="font-weight: bold;">估價日期：${printDate}</div>
-                        <div style="font-weight: bold;">估價單號：${quoteNos}</div>
-                    </td>
-                </tr>
-            </table>
-
-            <table style="width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; color: #000;">
-                <thead>
-                    <tr style="background-color: #f4f4f4;">
-                        <th style="border: 1px solid #333; padding: 10px; text-align: center;">品名</th>
-                        <th style="border: 1px solid #333; padding: 10px; width: 60px; text-align: center;">數量</th>
-                        <th style="border: 1px solid #333; padding: 10px; width: 60px; text-align: center;">單位</th>
-                        <th style="border: 1px solid #333; padding: 10px; width: 90px; text-align: center;">單價</th>
-                        <th style="border: 1px solid #333; padding: 10px; width: 110px; text-align: center;">小計</th>
-                        <th style="border: 1px solid #333; padding: 10px; width: 120px; text-align: center;">備註</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${tbodyHtml}
-                </tbody>
-                <tfoot>
-                    <tr>
-                        <td colspan="4" style="border: 1px solid #333; padding: 10px; text-align: right; font-weight: bold; font-size: 16px;">總金額 (含稅)：</td>
-                        <td style="border: 1px solid #333; padding: 10px; text-align: right; font-weight: bold; font-size: 16px;">${totalTaxInc.toLocaleString()}</td>
-                        <td style="border: 1px solid #333; padding: 10px;"></td>
-                    </tr>
-                </tfoot>
-            </table>
-
-            ${totalMemoHtml}
-
-            <div style="margin-top: 40px; font-size: 15px; color: #000; position: relative; height: 100px;">
-                ${sealHtml}
-            </div>
-            
-        </div>
-    `;
-
-    document.getElementById('printQuoteArea').innerHTML = html;
-    showPrintPreview('printQuoteArea');
-};
-
-// ============================================================================
-// 🖨️ 動態切換版型列印 (庫存、出貨單等 A5 橫式)
-// ============================================================================
-function printDeliveryNote(idx) {
-    const h = globalHistory.find(x => x.rowIdx === idx); if (!h) return;
-    const items = globalSalesDetails.filter(s => s.paperNo === h.paperNo && s.shipStatus !== '作廢');
-    const printDate = new Date(h.time);
-    const dateStr = isNaN(printDate.getTime()) ? getTodayStr().replace(/-/g, '/') : `${printDate.getFullYear()}年${printDate.getMonth() + 1}月${printDate.getDate()}日`;
-
-    applyPrintStyle('A5', 'landscape');
-
-    let tbodyHtml = '';
-    if (items.length > 0) {
-        items.forEach(item => {
-            const inv = globalInventory.find(v => v.name === item.name);
-            const lotExp = inv ? `${inv.lot||''} ${inv.expiry||''}`.trim() : '';
-            tbodyHtml += `<tr><td style="border: 1px solid #333; padding: 8px; text-align: left;">${item.name}</td><td style="border: 1px solid #333; padding: 8px; text-align: center;">${item.qty}</td><td style="border: 1px solid #333; padding: 8px; text-align: center;">0</td><td style="border: 1px solid #333; padding: 8px; text-align: right;">${Number(item.price).toLocaleString()}</td><td style="border: 1px solid #333; padding: 8px; text-align: right;">${Number(item.subtotal).toLocaleString()}<br><span style="font-size: 11px; color: #555;">${item.orderNo || ''}</span></td><td style="border: 1px solid #333; padding: 8px; text-align: center; font-size: 11px;">${lotExp}</td></tr>`;
-        });
-    } else { tbodyHtml = `<tr><td colspan="6" style="border: 1px solid #333; padding: 8px; text-align: center;">(無明細資料或為舊資料)</td></tr>`; }
-
-    const html = `
-        <div class="preview-paper" style="background-color: #ffffff; color: #000000; padding: 10mm 15mm; width: 100%; max-width: 297mm; min-height: 210mm; margin: 0 auto; box-sizing: border-box; font-family: 'MingLiU', '微軟正黑體', sans-serif; position: relative; box-shadow: 0 0 15px rgba(0,0,0,0.3);">
-            <table style="width: 100%; border: none; margin-bottom: 15px;"><tr><td style="width: 50%; vertical-align: top;"><div style="font-weight: bold; font-size: 16px;">TO:</div><div style="font-weight: bold; font-size: 22px; margin-top: 5px; letter-spacing: 2px;">${h.client}</div></td><td style="width: 50%; vertical-align: top; font-size: 14px; line-height: 1.6; text-align: right;"><div style="font-weight: bold; font-size: 16px;">FROM: 長固實業有限公司</div><div>新北市三重區重新路五段609巷6號4樓</div><div>TEL: (02) 2999-3881 &nbsp; 2999-3593</div><div>FAX: 886-2-2999-3495</div><div style="margin-top: 5px;">${dateStr} &nbsp;&nbsp; 1/1</div></td></tr></table>
-            <table style="width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px;"><thead><tr style="background-color: #f8f9fa;"><th style="border: 1px solid #333; padding: 8px; text-align: center;">品名</th><th style="border: 1px solid #333; padding: 8px; width: 60px; text-align: center;">數量</th><th style="border: 1px solid #333; padding: 8px; width: 60px; text-align: center;">欠貨</th><th style="border: 1px solid #333; padding: 8px; width: 80px; text-align: center;">單價</th><th style="border: 1px solid #333; padding: 8px; width: 120px; text-align: center;">小計 客戶訂單號</th><th style="border: 1px solid #333; padding: 8px; width: 100px; text-align: center;">批號/效期</th></tr></thead><tbody>${tbodyHtml}</tbody><tfoot><tr><td colspan="4" style="border: 1px solid #333; padding: 8px; text-align: right; font-weight: bold;">*總計*</td><td style="border: 1px solid #333; padding: 8px; text-align: right; font-weight: bold;">${Number(h.total).toLocaleString()}</td><td style="border: 1px solid #333; padding: 8px;"></td></tr></tfoot></table>
-            <div style="margin-top: 15px; font-size: 14px; line-height: 1.6;"><p style="margin-bottom: 5px;">以上貨品數量及單價請查核.</p><p style="margin-bottom: 15px;">附發票號碼: <strong style="font-size: 16px;">${h.paperNo || ''}</strong></p><div style="display: flex; justify-content: space-between; margin-top: 30px;"><div style="width: 45%;">簽收: <span style="border-bottom: 1px solid #000; display: inline-block; width: 75%;">&nbsp;</span></div><div style="width: 45%;">備考: <span style="border-bottom: 1px solid #000; display: inline-block; width: 75%;">&nbsp;</span></div></div></div>
-        </div>
-    `;
-    document.getElementById('printArea').innerHTML = html;
-    showPrintPreview('printArea');
-}
-
-function printPurchaseOrder(data) {
-    const totalAmount = parseFloat(data.poQty) * parseFloat(data.poUnitPrice || 0); const dateStr = data.poDate ? data.poDate.replace(/-/g, '/') : getTodayStr().replace(/-/g, '/');
-    
-    applyPrintStyle('A5', 'landscape');
-    
-    const html = `
-        <div class="preview-paper" style="background-color: #ffffff; color: #000000; padding: 10mm 15mm; width: 100%; max-width: 297mm; min-height: 210mm; margin: 0 auto; box-sizing: border-box; font-family: 'MingLiU', '微軟正黑體', sans-serif; position: relative; box-shadow: 0 0 15px rgba(0,0,0,0.3);">
-            <div style="text-align: center; font-size: 26px; font-weight: 900; letter-spacing: 5px; margin-bottom: 10px; color: #000;">長固實業有限公司 - 訂貨單</div>
-            <table style="width: 100%; border: none; margin-bottom: 15px; font-size: 14px; color: #000;">
-                <tr>
-                    <td style="width: 50%; vertical-align: top;">
-                        <div style="font-weight: bold; font-size: 16px;">TO: ${escapeQuotes(data.poSupplier)}</div>
-                        <div style="margin-top: 5px;">電話: ${escapeQuotes(data.poSupPhone)}</div>
-                        <div>傳真: ${escapeQuotes(data.poSupFax)}</div>
-                        <div style="margin-top: 10px; color: #000; font-size: 18px; font-weight: bold;">客戶: ${escapeQuotes(data.poClientName)}</div>
-                    </td>
-                    <td style="width: 50%; vertical-align: top; text-align: right; line-height: 1.6;">
-                        <div style="font-weight: bold;">訂貨日期: ${dateStr}</div>
-                        <div style="font-weight: bold; color: #d32f2f;">訂單號碼: ${escapeQuotes(data.poOrderNo || '無')}</div>
-                        <div style="margin-top: 5px;">統一編號: 86477073</div>
-                        <div>公司地址: 台中市西區中美街639號</div>
-                        <div>發票地址: 新北市三重區重新路5段609巷6號4樓</div>
-                        <div>電話: (04)23269591 &nbsp; FAX: (04)23268576</div>
-                    </td>
-                </tr>
-            </table>
-            <table style="width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 15px; color: #000;">
-                <thead><tr style="background-color: #f8f9fa;"><th style="border: 2px solid #000; padding: 10px; text-align: left;">長固代號 / 品名</th><th style="border: 2px solid #000; padding: 10px; width: 80px; text-align: center;">數量</th><th style="border: 2px solid #000; padding: 10px; width: 100px; text-align: right;">單價</th><th style="border: 2px solid #000; padding: 10px; width: 120px; text-align: right;">總計</th></tr></thead>
-                <tbody><tr><td style="border: 1px solid #000; padding: 15px 10px; text-align: left;"><div style="font-weight: bold; margin-bottom: 5px;">${escapeQuotes(data.poInternalCode)}</div><div>${escapeQuotes(data.poItemName)}</div></td><td style="border: 1px solid #000; padding: 15px 10px; text-align: center; font-size: 18px; font-weight: bold;">${data.poQty}</td><td style="border: 1px solid #000; padding: 15px 10px; text-align: right;">${Number(data.poUnitPrice).toLocaleString()}</td><td style="border: 1px solid #000; padding: 15px 10px; text-align: right; font-weight: bold;">${totalAmount.toLocaleString()}</td></tr></tbody>
-            </table>
-            <div style="margin-top: 15px; font-size: 14px; border: 1px solid #000; padding: 10px; background-color: #fcfcfc; color: #000;"><div style="margin-bottom: 5px;"><strong>📍 送貨地點：</strong>${escapeQuotes(data.poAddress)}</div><div style="margin-bottom: 5px;"><strong>📦 收貨單位：</strong>${escapeQuotes(data.poReceiveDept)}</div><div><strong>📝 備註事項：</strong>${escapeQuotes(data.poMemo)}</div></div>
-        </div>
-    `;
-    document.getElementById('printPoArea').innerHTML = html;
-    showPrintPreview('printPoArea');
-}
-
-window.reprintPurchaseOrderFast = function(idx) {
-    const l = globalInvLogs.find(x => x.rowIdx === idx); if (!l || !l.snapshot) return alert("無快照可列印！");
-    try { const snapData = JSON.parse(l.snapshot); printPurchaseOrder(snapData); } catch(e) { alert("快照資料解析失敗"); }
-}
-
-// ============================================================================
-// 庫存進階操作模組
+// 🖨️ 庫存模組 (復原完整)
 // ============================================================================
 window.renderInventory = debounce(function() {
     const term = document.getElementById('stkSearch').value.toLowerCase(); let arr = globalInventory; if(term) arr = arr.filter(v => v.name.toLowerCase().includes(term) || v.supplier.toLowerCase().includes(term) || String(v.internalCode).toLowerCase().includes(term));
@@ -1550,8 +1357,75 @@ window.confirmPurchaseOrder = function() {
 };
 
 // ============================================================================
-// 發票紀錄與報表管理
+// 🖨️ 發票紀錄與報表管理 (復原完整)
 // ============================================================================
+window.renderHistory = debounce(function() {
+    const fStaff = document.getElementById('histFilterStaff').value; const fClient = document.getElementById('histFilterClient').value; const fDate = document.getElementById('histFilterDate').value; const fStatus = document.getElementById('histFilterStatus').value; const term = document.getElementById('histSearch').value.toLowerCase();
+    let filtered = globalHistory;
+    if(fStaff) filtered = filtered.filter(h => h.staff === fStaff); if(fClient) filtered = filtered.filter(h => h.client === fClient); if(fStatus) filtered = filtered.filter(h => h.status === fStatus);
+    if(fDate) { const target = new Date(fDate).setHours(0,0,0,0); filtered = filtered.filter(h => { const d = new Date(h.time).setHours(0,0,0,0); return d === target; }); }
+    if(term) filtered = filtered.filter(h => h.client.toLowerCase().includes(term) || String(h.paperNo).toLowerCase().includes(term) || h.details.toLowerCase().includes(term));
+    const c = document.getElementById('histListContainer'); if(filtered.length === 0) return c.innerHTML = '<div class="text-center text-muted py-4">無紀錄</div>';
+    
+    c.innerHTML = filtered.map(h => {
+        const d = new Date(h.time); const dateStr = isNaN(d.getTime()) ? '未知' : `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`;
+        const isVoid = h.status === '作廢'; const isEdited = h.historyLog && h.historyLog.length > 2;
+        let badgeHTML = isVoid ? '<span class="badge bg-danger ms-1">已作廢</span>' : '';
+        if(isEdited && !isVoid) {
+            try { badgeHTML += `<span class="badge bg-warning text-dark ms-1" onclick="alert('修改紀錄：\\n${escapeQuotes(JSON.parse(h.historyLog).join('\\n'))}')" style="cursor:pointer;">⚠️ 已修改</span>`; } catch(e) { badgeHTML += `<span class="badge bg-warning text-dark ms-1">⚠️ 已修改</span>`; }
+        }
+        
+        if(h.orderNo && h.orderNo.includes('估價單核銷')) {
+            badgeHTML += `<span class="badge bg-primary ms-1">📑 估價單核銷</span>`;
+        }
+
+        const isBorrowed = String(h.paperNo).startsWith('[借用中]');
+        let paperNoHtml = h.paperNo ? (isBorrowed ? `<span class="text-danger">⚠️ ${h.paperNo}</span>` : `發票: ${h.paperNo}`) : '';
+
+        let actionBtns = '';
+        if (!isVoid) {
+            actionBtns += `<button class="btn btn-sm btn-outline-info me-1 fw-bold" onclick="printDeliveryNote(${h.rowIdx})">🖨️ 列印出單</button>`;
+            if (isBorrowed) actionBtns += `<button class="btn btn-sm btn-danger me-1 fw-bold" onclick="openSuppInvModal(${h.rowIdx}, '${escapeQuotes(h.paperNo)}')">📝 補登發票</button>`;
+            actionBtns += `<button class="btn btn-sm btn-outline-danger me-1" onclick="voidInv(${h.rowIdx}, '${escapeQuotes(h.paperNo)}')">作廢</button>`;
+            actionBtns += `<button class="btn btn-sm btn-outline-secondary" onclick="openEditInv(${h.rowIdx})">編輯</button>`;
+        }
+
+        return `<div class="item-row bg-white shadow-sm p-3 ${isVoid?'status-void':''}">
+            <div class="d-flex justify-content-between align-items-start border-bottom pb-2 mb-2">
+                <div><div class="fw-bold fs-6 text-dark">${h.client} ${badgeHTML}</div><div class="small text-muted">單號: ${h.orderNo||'--'} | 開立: ${h.staff}</div></div>
+                <div class="text-end"><div class="badge bg-light text-dark border">${dateStr}</div><div class="small mt-1 fw-bold ${isBorrowed?'text-danger':'text-primary'}">${paperNoHtml}</div></div>
+            </div>
+            <div class="history-details text-muted mb-3">${h.details}</div>
+            <div class="d-flex justify-content-between align-items-center">
+                <div>${actionBtns}</div>
+                <span class="fw-bold text-danger fs-5">$${Number(h.total).toLocaleString()}</span>
+            </div>
+        </div>`;
+    }).join('');
+}, 300);
+
+window.openSuppInvModal = function(idx, oldPaperNo) {
+    document.getElementById('supp_invRowIdx').value = idx; document.getElementById('supp_oldPaperNo').value = oldPaperNo; document.getElementById('supp_newPaperNo').value = '';
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('suppInvModal')).show();
+};
+
+window.confirmSupplementInvoice = function() {
+    const idx = parseInt(document.getElementById('supp_invRowIdx').value);
+    const oldPaperNo = document.getElementById('supp_oldPaperNo').value;
+    const newPaperNo = document.getElementById('supp_newPaperNo').value.trim().toUpperCase();
+    if (!newPaperNo) return alert("請輸入正確的發票號碼！");
+    
+    showLoading("連動更新中...");
+    callApi('supplementInvoiceNo', { rowIdx: idx, oldPaperNo: oldPaperNo, newPaperNo: newPaperNo, staff: myName })
+    .then(res => {
+        hideLoading();
+        bootstrap.Modal.getInstance(document.getElementById('suppInvModal')).hide();
+        showToast("✅ 發票號碼已成功補登並連動更新");
+        refreshData(); 
+    })
+    .catch(err => { hideLoading(); alert("補登失敗：" + err.message); });
+};
+
 window.voidInv = function(idx, pNo) { 
     if(confirm("確定作廢？系統將自動：\n1. 註銷此發票帳款\n2. 註銷銷售明細\n3. 【自動返還已出貨之庫存數量】")) { 
         const h = globalHistory.find(x=>x.rowIdx === idx); if(h) h.status = '作廢'; 
