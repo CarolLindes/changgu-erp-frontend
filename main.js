@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * 長固 ERP 系統 - 前端核心運算邏輯 (徹底大掃除 + 動態列印排版優化 + 估價單細節修正)
+ * 長固 ERP 系統 - 前端核心運算邏輯 (補齊遺失模組 + 預覽列印中心)
  * ============================================================================
  */
 
@@ -293,7 +293,63 @@ window.applyPrintStyle = function(size, layout) {
         styleNode.id = 'dynamicPrintStyle';
         document.head.appendChild(styleNode);
     }
-    styleNode.innerHTML = `@media print { @page { size: ${size} ${layout}; margin: 0mm; } body { background: #fff !important; } }`;
+    styleNode.innerHTML = `
+    @media print { 
+        @page { size: ${size} ${layout}; margin: 0mm; } 
+        body { background: #fff !important; padding-top: 0 !important; } 
+        #printControlBar { display: none !important; }
+    }`;
+};
+
+// ============================================================================
+// 【全新】預覽列印中心 (Preview Controller)
+// ============================================================================
+function showPrintPreview(areaId) {
+    document.getElementById('mainApp').style.display = 'none';
+    document.getElementById('homeMenu').style.display = 'none';
+    
+    document.getElementById('printArea').style.display = 'none';
+    document.getElementById('printPoArea').style.display = 'none';
+    document.getElementById('printQuoteArea').style.display = 'none';
+    
+    document.getElementById('printArea').classList.remove('print-active');
+    document.getElementById('printPoArea').classList.remove('print-active');
+    document.getElementById('printQuoteArea').classList.remove('print-active');
+    
+    const targetArea = document.getElementById(areaId);
+    targetArea.style.display = 'block';
+    targetArea.classList.add('print-active');
+    
+    let controlBar = document.getElementById('printControlBar');
+    if (!controlBar) {
+        controlBar = document.createElement('div');
+        controlBar.id = 'printControlBar';
+        controlBar.className = 'd-flex justify-content-center p-3 bg-dark position-fixed w-100 top-0 d-print-none';
+        controlBar.style.cssText = 'z-index: 10500; left: 0; box-shadow: 0 4px 6px rgba(0,0,0,0.3);';
+        controlBar.innerHTML = `
+            <button onclick="window.print()" class="btn btn-primary fw-bold px-4 py-2 me-3 fs-5 shadow-sm">🖨️ 確認呼叫印表機</button>
+            <button onclick="closePrintPreview()" class="btn btn-danger fw-bold px-4 py-2 fs-5 shadow-sm">❌ 關閉預覽並返回</button>
+        `;
+        document.body.appendChild(controlBar);
+    }
+    controlBar.style.display = 'flex';
+    document.body.style.paddingTop = '80px'; // 讓出控制列的空間
+    window.scrollTo(0,0);
+}
+
+window.closePrintPreview = function() {
+    let controlBar = document.getElementById('printControlBar');
+    if(controlBar) controlBar.style.display = 'none';
+    document.body.style.paddingTop = '0px';
+    
+    document.getElementById('printArea').style.display = 'none';
+    document.getElementById('printPoArea').style.display = 'none';
+    document.getElementById('printQuoteArea').style.display = 'none';
+    document.getElementById('printArea').classList.remove('print-active');
+    document.getElementById('printPoArea').classList.remove('print-active');
+    document.getElementById('printQuoteArea').classList.remove('print-active');
+    
+    document.getElementById('mainApp').style.display = 'block';
 };
 
 // ============================================================================
@@ -452,7 +508,6 @@ function triggerManualReport() {
 // ============================================================================
 // 訂單模組
 // ============================================================================
-
 window.triggerEmailScan = function() {
     showLoading("⚡ 正在連線信箱掃描新訂單...");
     callApi('scanEmailOrders', {}).then(res => {
@@ -535,7 +590,7 @@ window.renderOrderList = debounce(function() {
         let items = []; try { items = JSON.parse(o.jsonStr||'[]'); } catch(e) { items = []; }
         let orderFullyShipped = true; let hasPartial = false;
         let displayItems = items.map(i => {
-            let invoicedQty = globalSalesDetails.filter(d => d.orderNo === o.orderNo && d.name === i.name && d.shipStatus !== '作廢').reduce((sum, d) => sum + d.qty, 0);
+            let invoicedQty = globalSalesDetails.filter(d => { let dOrderNos = String(d.orderNo).split(',').map(s=>s.trim()); return dOrderNos.includes(o.orderNo) && d.name === i.name && d.shipStatus !== '作廢'; }).reduce((sum, d) => sum + d.qty, 0);
             let remaining = i.qty - invoicedQty; if (remaining > 0) orderFullyShipped = false; if (invoicedQty > 0) hasPartial = true;
             const p = globalCatalog.find(x => x.clientName === o.client && x.productName === i.name); const intCodeBadge = (p && p.internalCode) ? `<span class="badge bg-info text-dark ms-1">長固: ${p.internalCode}</span>` : '';
             if (invoicedQty === 0) return `<div>${i.name} ${intCodeBadge} <span class="badge bg-secondary">x${i.qty}</span></div>`; else return `<div>${i.name} ${intCodeBadge} <br><small class="text-primary fw-bold">需求: ${i.qty} | 已開: ${invoicedQty} | 剩餘: <span class="text-danger">${remaining}</span></small></div>`;
@@ -640,7 +695,7 @@ function saveEditOrder() {
     if(idx) { const od = globalOrders.find(x => x.rowIdx === idx); if(od){ od.client = c; od.orderNo = o; od.dept = d; od.jsonStr = j; od.deadline = deadline; od.source = src; od.mailUrl = mUrl; od.status = currStatus; } } 
     else { globalOrders.unshift({ rowIdx: Date.now(), time: Date.now(), client: c, orderNo: o, dept: d, status: "待出貨", jsonStr: j, deadline: deadline, source: src, mailUrl: mUrl }); }
     
-    pushToSyncQueue('saveOrderData', payload, null); updateOrderClientDropdown(); window.renderOrderList(); bootstrap.Modal.getInstance(document.getElementById('editOrdModal')).hide(); showToast("✅ 訂單儲存完成 (若與其他單號重複將會自動排查)");
+    pushToSyncQueue('saveOrderData', payload, null); updateOrderClientDropdown(); window.renderOrderList(); bootstrap.Modal.getInstance(document.getElementById('editOrdModal')).hide(); showToast("✅ 訂單儲存完成");
 }
 
 function deleteOrder() { const idx = parseInt(document.getElementById('e_ordRow').value); if(!idx) return; if(confirm('確定要作廢這筆訂單嗎？')) { const o = globalOrders.find(x=>x.rowIdx===idx); if(o) o.status = '已作廢'; pushToSyncQueue('updateOrderStatus', {rowIndices: [idx], status: '已作廢'}, null); updateOrderClientDropdown(); window.renderOrderList(); bootstrap.Modal.getInstance(document.getElementById('editOrdModal')).hide(); } }
@@ -1172,7 +1227,6 @@ window.printQuotation = function(gid) {
 
     let sealHtml = '';
     if (useSeal) {
-        // 【修正 1、3】更換新印章連結，並將寬度設定為真實物理尺寸 55mm，微調至最右下角
         sealHtml = `<img src="https://drive.google.com/thumbnail?id=13O2Q2GFzhPfH13SqtFVf4HoiWMTteHtr&sz=w800" style="width: 55mm; position: absolute; right: 40px; top: -10px; mix-blend-mode: multiply; opacity: 0.85;">`;
     }
 
@@ -1204,7 +1258,7 @@ window.printQuotation = function(gid) {
             <table style="width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; color: #000;">
                 <thead>
                     <tr style="background-color: #f4f4f4;">
-                        <th style="border: 1px solid #333; padding: 10px; text-align: center;">品名</th> <!-- 【修正 4】 -->
+                        <th style="border: 1px solid #333; padding: 10px; text-align: center;">品名</th>
                         <th style="border: 1px solid #333; padding: 10px; width: 60px; text-align: center;">數量</th>
                         <th style="border: 1px solid #333; padding: 10px; width: 60px; text-align: center;">單位</th>
                         <th style="border: 1px solid #333; padding: 10px; width: 90px; text-align: center;">單價</th>
@@ -1216,7 +1270,6 @@ window.printQuotation = function(gid) {
                     ${tbodyHtml}
                 </tbody>
                 <tfoot>
-                    <!-- 【修正 2】移除未稅與稅額行 -->
                     <tr>
                         <td colspan="4" style="border: 1px solid #333; padding: 10px; text-align: right; font-weight: bold; font-size: 16px;">總金額 (含稅)：</td>
                         <td style="border: 1px solid #333; padding: 10px; text-align: right; font-weight: bold; font-size: 16px;">${totalTaxInc.toLocaleString()}</td>
@@ -1227,7 +1280,6 @@ window.printQuotation = function(gid) {
 
             ${totalMemoHtml}
 
-            <!-- 【修正 5】移除公司文字，只保留用印 -->
             <div style="margin-top: 40px; font-size: 15px; color: #000; position: relative; height: 100px;">
                 ${sealHtml}
             </div>
@@ -1236,10 +1288,7 @@ window.printQuotation = function(gid) {
     `;
 
     document.getElementById('printQuoteArea').innerHTML = html;
-    document.getElementById('printQuoteArea').classList.add('print-active');
-    document.getElementById('printPoArea').classList.remove('print-active');
-    document.getElementById('printArea').classList.remove('print-active');
-    setTimeout(() => { window.print(); }, 500);
+    showPrintPreview('printQuoteArea');
 };
 
 // ============================================================================
@@ -1269,8 +1318,8 @@ function printDeliveryNote(idx) {
             <div style="margin-top: 15px; font-size: 14px; line-height: 1.6;"><p style="margin-bottom: 5px;">以上貨品數量及單價請查核.</p><p style="margin-bottom: 15px;">附發票號碼: <strong style="font-size: 16px;">${h.paperNo || ''}</strong></p><div style="display: flex; justify-content: space-between; margin-top: 30px;"><div style="width: 45%;">簽收: <span style="border-bottom: 1px solid #000; display: inline-block; width: 75%;">&nbsp;</span></div><div style="width: 45%;">備考: <span style="border-bottom: 1px solid #000; display: inline-block; width: 75%;">&nbsp;</span></div></div></div>
         </div>
     `;
-    document.getElementById('printArea').innerHTML = html; document.getElementById('printArea').classList.add('print-active'); document.getElementById('printPoArea').classList.remove('print-active'); document.getElementById('printQuoteArea').classList.remove('print-active');
-    setTimeout(() => { window.print(); }, 300);
+    document.getElementById('printArea').innerHTML = html;
+    showPrintPreview('printArea');
 }
 
 function printPurchaseOrder(data) {
@@ -1306,8 +1355,8 @@ function printPurchaseOrder(data) {
             <div style="margin-top: 15px; font-size: 14px; border: 1px solid #000; padding: 10px; background-color: #fcfcfc; color: #000;"><div style="margin-bottom: 5px;"><strong>📍 送貨地點：</strong>${escapeQuotes(data.poAddress)}</div><div style="margin-bottom: 5px;"><strong>📦 收貨單位：</strong>${escapeQuotes(data.poReceiveDept)}</div><div><strong>📝 備註事項：</strong>${escapeQuotes(data.poMemo)}</div></div>
         </div>
     `;
-    document.getElementById('printPoArea').innerHTML = html; document.getElementById('printPoArea').classList.add('print-active'); document.getElementById('printArea').classList.remove('print-active'); document.getElementById('printQuoteArea').classList.remove('print-active');
-    setTimeout(() => { window.print(); }, 300);
+    document.getElementById('printPoArea').innerHTML = html;
+    showPrintPreview('printPoArea');
 }
 
 window.reprintPurchaseOrderFast = function(idx) {
