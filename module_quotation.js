@@ -47,7 +47,6 @@ window.renderQuotationList = debounce(function() {
 
             let actionBtns = '';
             if (isPendingTab) {
-                // 【修復】列印估價單功能
                 actionBtns += `<button class="btn btn-sm btn-outline-info fw-bold me-1 text-dark" onclick="printQuotation('${gid}')">🖨️ 列印出單</button>`;
                 actionBtns += `<button class="btn btn-sm btn-outline-danger fw-bold me-1" onclick="voidQuotation('${gid}')">🗑️ 作廢</button>`;
                 if (!isMerged) {
@@ -381,13 +380,13 @@ window.verifyQuotationToInvoice = function(gid) {
     quotesInGroup.forEach(q => q.status = '已核銷');
     pushToSyncQueue('updateQuotationStatus', { rowIndices: ids, status: '已核銷' }, null);
 
-    if (typeof reRenderInvoiceItems === "function") reRenderInvoiceItems();
-    if (typeof goStep === "function") goStep(2); 
+    if (typeof window.reRenderInvoiceItems === "function") window.reRenderInvoiceItems();
+    if (typeof window.goStep === "function") window.goStep(2); 
     showToast("✅ 已將估價單品項全數載入發票系統！您可以自由刪減本次要開立的品項 (每張發票限5筆)。");
 };
 
 // ============================================================================
-// 【全新補齊】完美動態預覽列印估價單 (支援 A4 滿版與印章浮水印)
+// 列印估價單 (支援 A4 舒展排版、過濾日期、真實公司大印章 - 改用 Thumbnail API)
 // ============================================================================
 window.printQuotation = function(gid) {
     const quotesInGroup = globalQuotes.filter(q => q.mergeId === gid || `Single_${q.rowIdx}` === gid);
@@ -395,13 +394,17 @@ window.printQuotation = function(gid) {
 
     const clientName = quotesInGroup[0].client;
     const quoteNos = quotesInGroup.map(q => q.quoteNo).join(', ');
-    const quoteDate = quotesInGroup[0].quoteDate;
+    
+    // (1) 日期純淨化過濾 (只保留 YYYY/MM/DD)
+    const rawDate = quotesInGroup[0].quoteDate || getTodayStr();
+    const dateStr = rawDate.split('T')[0].replace(/-/g, '/');
+    
     const useSeal = quotesInGroup[0].useSeal;
     
-    // 合併所有的備註
+    // 合併備註
     const mainMemo = quotesInGroup.map(q => q.memo).filter(x => x).join(' / ');
 
-    // 取出所有品項
+    // 取出品項
     let allItems = [];
     quotesInGroup.forEach(q => {
         let items = []; try { items = JSON.parse(q.jsonStr); } catch(e){}
@@ -414,7 +417,7 @@ window.printQuotation = function(gid) {
     let tbodyHtml = allItems.map((item, idx) => {
         const price = parseFloat(item.price) || 0;
         const qty = parseFloat(item.qty) || 0;
-        const subtotal = Math.round(price * qty); // 系統自動含稅計算
+        const subtotal = Math.round(price * qty); 
         totalAmount += subtotal;
 
         let extDesc = [];
@@ -424,43 +427,44 @@ window.printQuotation = function(gid) {
 
         return `
             <tr>
-                <td style="border: 1px solid #000; padding: 10px; text-align: center;">${idx + 1}</td>
-                <td style="border: 1px solid #000; padding: 10px; text-align: left;">
+                <td style="border: 1px solid #000; padding: 12px; text-align: center;">${idx + 1}</td>
+                <td style="border: 1px solid #000; padding: 12px; text-align: left;">
                     <div style="font-weight: bold;">${escapeQuotes(item.name)}</div>
                     ${descHtml}
                 </td>
-                <td style="border: 1px solid #000; padding: 10px; text-align: center;">${qty}</td>
-                <td style="border: 1px solid #000; padding: 10px; text-align: center;">${escapeQuotes(item.unit)}</td>
-                <td style="border: 1px solid #000; padding: 10px; text-align: right;">$${price.toLocaleString()}</td>
-                <td style="border: 1px solid #000; padding: 10px; text-align: right; font-weight: bold;">$${subtotal.toLocaleString()}</td>
+                <td style="border: 1px solid #000; padding: 12px; text-align: center;">${qty}</td>
+                <td style="border: 1px solid #000; padding: 12px; text-align: center;">${escapeQuotes(item.unit)}</td>
+                <td style="border: 1px solid #000; padding: 12px; text-align: right;">$${price.toLocaleString()}</td>
+                <td style="border: 1px solid #000; padding: 12px; text-align: right; font-weight: bold;">$${subtotal.toLocaleString()}</td>
             </tr>
         `;
     }).join('');
 
-    // 大小章設定 (如果是 True 就顯示)
+    // (3) 完美替換真實大小章 (利用 mix-blend-mode 模擬印章蓋印效果) - 移除小章，只留大章
     const sealHtml = useSeal ? `
-        <div style="position: absolute; right: 80px; bottom: -20px; width: 140px; height: 140px; border: 4px solid rgba(211, 47, 47, 0.55); border-radius: 50%; display: flex; justify-content: center; align-items: center; color: rgba(211, 47, 47, 0.55); font-size: 1.2rem; font-weight: bold; transform: rotate(-15deg); pointer-events: none; z-index: 10;">
-            長固實業<br>報價專用章
+        <div style="position: absolute; right: 50px; bottom: 10px; display: flex; align-items: flex-end; pointer-events: none; z-index: 10; opacity: 0.95;">
+            <!-- 大章 -->
+            <img src="https://drive.google.com/thumbnail?id=1f6zlONs70zTGucx1h5ttJD1OLzyygXuu&sz=w800" alt="大章" style="width: 150px; height: auto; mix-blend-mode: multiply;">
         </div>
     ` : '';
 
-    // 生成完整 A4 排版 HTML
     const html = `
-        <div style="padding: 20px; max-width: 900px; margin: 0 auto; position: relative; font-family: 'MingLiU', '微軟正黑體', sans-serif; color: #000; background: #fff;">
-            <div style="text-align: center; border-bottom: 2px solid #000; padding-bottom: 15px; margin-bottom: 20px;">
-                <h2 style="margin: 0; font-weight: 900; letter-spacing: 5px; font-size: 28px;">長固實業有限公司</h2>
-                <h3 style="margin: 10px 0 0 0; font-weight: bold; letter-spacing: 15px; font-size: 22px;">估價單</h3>
+        <div style="padding: 10mm 15mm; max-width: 800px; margin: 0 auto; position: relative; font-family: 'MingLiU', '微軟正黑體', sans-serif; color: #000; background: #fff; box-sizing: border-box; min-height: 280mm; display: flex; flex-direction: column;">
+            
+            <div style="text-align: center; border-bottom: 2px solid #000; padding-bottom: 15px; margin-bottom: 30px;">
+                <h2 style="margin: 0; font-weight: 900; letter-spacing: 5px; font-size: 32px;">長固實業有限公司</h2>
+                <h3 style="margin: 15px 0 0 0; font-weight: bold; letter-spacing: 15px; font-size: 24px;">估價單</h3>
             </div>
 
-            <div style="display: flex; justify-content: space-between; margin-bottom: 15px; font-size: 15px; line-height: 1.6;">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 20px; font-size: 16px; line-height: 1.8;">
                 <div style="width: 55%;">
-                    <div style="font-size: 18px; border-bottom: 1px solid #000; padding-bottom: 5px; margin-bottom: 10px;">
-                        <strong>客戶名稱：${escapeQuotes(clientName)}</strong> <span style="font-size: 14px; margin-left: 10px;">鈞鑒</span>
+                    <div style="font-size: 20px; border-bottom: 1px solid #000; padding-bottom: 5px; margin-bottom: 15px;">
+                        <strong>客戶名稱：${escapeQuotes(clientName)}</strong>
                     </div>
                     <div><strong>估價單號：</strong>${escapeQuotes(quoteNos)}</div>
-                    <div><strong>估價日期：</strong>${quoteDate.replace(/-/g, '/')}</div>
+                    <div><strong>估價日期：</strong>${dateStr}</div>
                 </div>
-                <div style="width: 40%; text-align: right; font-size: 14px;">
+                <div style="width: 40%; text-align: right; font-size: 15px;">
                     <div><strong>統一編號：</strong>86477073</div>
                     <div><strong>公司地址：</strong>台中市西區中美街639號</div>
                     <div><strong>聯絡電話：</strong>(04) 2326-9591</div>
@@ -468,15 +472,15 @@ window.printQuotation = function(gid) {
                 </div>
             </div>
 
-            <table style="width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 15px; border: 2px solid #000;">
+            <table style="width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 16px; border: 2px solid #000;">
                 <thead>
                     <tr style="background-color: #f1f3f5;">
-                        <th style="border: 1px solid #000; border-bottom: 2px solid #000; padding: 10px; width: 60px; text-align: center;">項次</th>
-                        <th style="border: 1px solid #000; border-bottom: 2px solid #000; padding: 10px; text-align: center;">品名及規格</th>
-                        <th style="border: 1px solid #000; border-bottom: 2px solid #000; padding: 10px; width: 70px; text-align: center;">數量</th>
-                        <th style="border: 1px solid #000; border-bottom: 2px solid #000; padding: 10px; width: 70px; text-align: center;">單位</th>
-                        <th style="border: 1px solid #000; border-bottom: 2px solid #000; padding: 10px; width: 120px; text-align: center;">單價(含稅)</th>
-                        <th style="border: 1px solid #000; border-bottom: 2px solid #000; padding: 10px; width: 130px; text-align: center;">總價(含稅)</th>
+                        <th style="border: 1px solid #000; border-bottom: 2px solid #000; padding: 12px; width: 60px; text-align: center;">項次</th>
+                        <th style="border: 1px solid #000; border-bottom: 2px solid #000; padding: 12px; text-align: center;">品名及規格</th>
+                        <th style="border: 1px solid #000; border-bottom: 2px solid #000; padding: 12px; width: 70px; text-align: center;">數量</th>
+                        <th style="border: 1px solid #000; border-bottom: 2px solid #000; padding: 12px; width: 70px; text-align: center;">單位</th>
+                        <th style="border: 1px solid #000; border-bottom: 2px solid #000; padding: 12px; width: 120px; text-align: center;">單價(含稅)</th>
+                        <th style="border: 1px solid #000; border-bottom: 2px solid #000; padding: 12px; width: 130px; text-align: center;">總價(含稅)</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -484,21 +488,19 @@ window.printQuotation = function(gid) {
                 </tbody>
                 <tfoot>
                     <tr>
-                        <td colspan="5" style="border: 1px solid #000; padding: 12px; text-align: right; font-weight: bold; letter-spacing: 2px;">總金額 (含稅)</td>
-                        <td style="border: 1px solid #000; padding: 12px; text-align: right; font-weight: bold; font-size: 18px; color: #d32f2f;">$${totalAmount.toLocaleString()}</td>
+                        <td colspan="5" style="border: 1px solid #000; padding: 15px; text-align: right; font-weight: bold; letter-spacing: 2px;">總金額 (含稅)</td>
+                        <td style="border: 1px solid #000; padding: 15px; text-align: right; font-weight: bold; font-size: 18px; color: #000;">$${totalAmount.toLocaleString()}</td>
                     </tr>
                 </tfoot>
             </table>
 
-            <div style="margin-top: 20px; font-size: 14px; border: 1px solid #000; padding: 15px; position: relative; min-height: 120px;">
-                <div style="font-weight: bold; margin-bottom: 5px;">備註事項：</div>
-                <div style="white-space: pre-wrap; line-height: 1.6;">${escapeQuotes(mainMemo) || '無'}</div>
-                ${sealHtml}
-            </div>
+            <!-- 利用 flex-grow 佔據剩餘空間，將備註往下推 -->
+            <div style="flex-grow: 1;"></div>
 
-            <div style="margin-top: 60px; display: flex; justify-content: space-between; font-size: 16px; padding: 0 40px;">
-                <div>客戶簽章：___________________</div>
-                <div>業務經辦：&nbsp;${myName}</div>
+            <div style="margin-top: 40px; font-size: 15px; border: 1px solid #000; padding: 20px; position: relative; min-height: 180px;">
+                <div style="font-weight: bold; margin-bottom: 10px; font-size: 16px;">備註事項：</div>
+                <div style="white-space: pre-wrap; line-height: 1.8;">${escapeQuotes(mainMemo) || '無'}</div>
+                ${sealHtml}
             </div>
         </div>
     `;
@@ -506,10 +508,8 @@ window.printQuotation = function(gid) {
     const printQuoteArea = document.getElementById('printQuoteArea');
     if (printQuoteArea) {
         printQuoteArea.innerHTML = html;
-        
-        // 【關鍵】估價單套用 A4 直式 (Portrait) 排版
-        if (typeof applyPrintStyle === 'function') applyPrintStyle('A4', 'portrait');
-        if (typeof showPrintPreview === 'function') showPrintPreview('printQuoteArea');
+        if (typeof window.applyPrintStyle === 'function') window.applyPrintStyle('A4', 'portrait');
+        if (typeof window.showPrintPreview === 'function') window.showPrintPreview('printQuoteArea');
     } else {
         alert('系統錯誤：找不到估價單列印區塊');
     }
