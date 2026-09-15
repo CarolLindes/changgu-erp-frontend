@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * 長固 ERP 系統 - 前端核心運算邏輯 (補齊遺失模組 + 預覽列印中心)
+ * 長固 ERP 系統 - 前端核心運算邏輯 (補齊遺失模組 + 精美擬真預覽列印)
  * ============================================================================
  */
 
@@ -285,7 +285,9 @@ function debounce(func, delay = 300) {
     };
 }
 
-// 動態注入 CSS 隱藏瀏覽器標頭與控制紙張大小
+// ============================================================================
+// 【全新優化】動態切換紙張版型與預覽列印系統
+// ============================================================================
 window.applyPrintStyle = function(size, layout) {
     let styleNode = document.getElementById('dynamicPrintStyle');
     if (!styleNode) {
@@ -293,39 +295,41 @@ window.applyPrintStyle = function(size, layout) {
         styleNode.id = 'dynamicPrintStyle';
         document.head.appendChild(styleNode);
     }
+    // 強制設定紙張大小、關閉邊界，並確保預覽時的陰影在真正列印時會消失
     styleNode.innerHTML = `
     @media print { 
         @page { size: ${size} ${layout}; margin: 0mm; } 
         body { background: #fff !important; padding-top: 0 !important; } 
         #printControlBar { display: none !important; }
+        .preview-paper { box-shadow: none !important; margin: 0 !important; max-width: none !important; }
     }`;
 };
 
-// ============================================================================
-// 【全新】預覽列印中心 (Preview Controller)
-// ============================================================================
-function showPrintPreview(areaId) {
+window.showPrintPreview = function(areaId) {
+    // 隱藏主介面
     document.getElementById('mainApp').style.display = 'none';
     document.getElementById('homeMenu').style.display = 'none';
     
     document.getElementById('printArea').style.display = 'none';
     document.getElementById('printPoArea').style.display = 'none';
     document.getElementById('printQuoteArea').style.display = 'none';
-    
     document.getElementById('printArea').classList.remove('print-active');
     document.getElementById('printPoArea').classList.remove('print-active');
     document.getElementById('printQuoteArea').classList.remove('print-active');
     
+    // 顯示目標列印區
     const targetArea = document.getElementById(areaId);
     targetArea.style.display = 'block';
     targetArea.classList.add('print-active');
     
+    // 建立頂部懸浮控制列
     let controlBar = document.getElementById('printControlBar');
     if (!controlBar) {
         controlBar = document.createElement('div');
         controlBar.id = 'printControlBar';
-        controlBar.className = 'd-flex justify-content-center p-3 bg-dark position-fixed w-100 top-0 d-print-none';
-        controlBar.style.cssText = 'z-index: 10500; left: 0; box-shadow: 0 4px 6px rgba(0,0,0,0.3);';
+        // 深色背景，讓白紙更凸顯
+        controlBar.className = 'd-flex justify-content-center p-3 position-fixed w-100 top-0 d-print-none';
+        controlBar.style.cssText = 'z-index: 10500; left: 0; background-color: #343a40; box-shadow: 0 4px 6px rgba(0,0,0,0.3);';
         controlBar.innerHTML = `
             <button onclick="window.print()" class="btn btn-primary fw-bold px-4 py-2 me-3 fs-5 shadow-sm">🖨️ 確認呼叫印表機</button>
             <button onclick="closePrintPreview()" class="btn btn-danger fw-bold px-4 py-2 fs-5 shadow-sm">❌ 關閉預覽並返回</button>
@@ -333,14 +337,20 @@ function showPrintPreview(areaId) {
         document.body.appendChild(controlBar);
     }
     controlBar.style.display = 'flex';
-    document.body.style.paddingTop = '80px'; // 讓出控制列的空間
+    
+    // 將網頁背景變暗，並往下推讓出控制列的空間
+    document.body.style.backgroundColor = '#2c3034';
+    document.body.style.paddingTop = '80px'; 
     window.scrollTo(0,0);
-}
+};
 
 window.closePrintPreview = function() {
     let controlBar = document.getElementById('printControlBar');
     if(controlBar) controlBar.style.display = 'none';
+    
+    // 復原背景與空間
     document.body.style.paddingTop = '0px';
+    document.body.style.backgroundColor = ''; 
     
     document.getElementById('printArea').style.display = 'none';
     document.getElementById('printPoArea').style.display = 'none';
@@ -349,8 +359,10 @@ window.closePrintPreview = function() {
     document.getElementById('printPoArea').classList.remove('print-active');
     document.getElementById('printQuoteArea').classList.remove('print-active');
     
+    // 顯示主介面
     document.getElementById('mainApp').style.display = 'block';
 };
+
 
 // ============================================================================
 // 拖曳排序 (Drag & Drop) 邏輯
@@ -1234,7 +1246,7 @@ window.printQuotation = function(gid) {
     let totalMemoHtml = combinedMemo ? `<div style="margin-top: 15px; font-size: 14px; border: 1px solid #000; padding: 10px; background-color: #fcfcfc; color: #000;"><strong>備註事項：</strong><br>${escapeQuotes(combinedMemo).replace(/\n/g, '<br>')}</div>` : '';
 
     const html = `
-        <div style="padding: 15mm 15mm; width: 100%; box-sizing: border-box; font-family: 'MingLiU', '微軟正黑體', sans-serif; position: relative; min-height: 90vh;">
+        <div class="preview-paper" style="background-color: #ffffff; color: #000000; padding: 15mm 15mm; width: 100%; max-width: 210mm; min-height: 297mm; margin: 0 auto; box-sizing: border-box; font-family: 'MingLiU', '微軟正黑體', sans-serif; position: relative; box-shadow: 0 0 15px rgba(0,0,0,0.3);">
             
             <div style="text-align: center; margin-bottom: 20px;">
                 <div style="font-size: 28px; font-weight: 900; letter-spacing: 5px; color: #000;">長固實業有限公司</div>
@@ -1312,7 +1324,7 @@ function printDeliveryNote(idx) {
     } else { tbodyHtml = `<tr><td colspan="6" style="border: 1px solid #333; padding: 8px; text-align: center;">(無明細資料或為舊資料)</td></tr>`; }
 
     const html = `
-        <div style="padding: 10mm 15mm; width: 100%; box-sizing: border-box;">
+        <div class="preview-paper" style="background-color: #ffffff; color: #000000; padding: 10mm 15mm; width: 100%; max-width: 297mm; min-height: 210mm; margin: 0 auto; box-sizing: border-box; font-family: 'MingLiU', '微軟正黑體', sans-serif; position: relative; box-shadow: 0 0 15px rgba(0,0,0,0.3);">
             <table style="width: 100%; border: none; margin-bottom: 15px;"><tr><td style="width: 50%; vertical-align: top;"><div style="font-weight: bold; font-size: 16px;">TO:</div><div style="font-weight: bold; font-size: 22px; margin-top: 5px; letter-spacing: 2px;">${h.client}</div></td><td style="width: 50%; vertical-align: top; font-size: 14px; line-height: 1.6; text-align: right;"><div style="font-weight: bold; font-size: 16px;">FROM: 長固實業有限公司</div><div>新北市三重區重新路五段609巷6號4樓</div><div>TEL: (02) 2999-3881 &nbsp; 2999-3593</div><div>FAX: 886-2-2999-3495</div><div style="margin-top: 5px;">${dateStr} &nbsp;&nbsp; 1/1</div></td></tr></table>
             <table style="width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px;"><thead><tr style="background-color: #f8f9fa;"><th style="border: 1px solid #333; padding: 8px; text-align: center;">品名</th><th style="border: 1px solid #333; padding: 8px; width: 60px; text-align: center;">數量</th><th style="border: 1px solid #333; padding: 8px; width: 60px; text-align: center;">欠貨</th><th style="border: 1px solid #333; padding: 8px; width: 80px; text-align: center;">單價</th><th style="border: 1px solid #333; padding: 8px; width: 120px; text-align: center;">小計 客戶訂單號</th><th style="border: 1px solid #333; padding: 8px; width: 100px; text-align: center;">批號/效期</th></tr></thead><tbody>${tbodyHtml}</tbody><tfoot><tr><td colspan="4" style="border: 1px solid #333; padding: 8px; text-align: right; font-weight: bold;">*總計*</td><td style="border: 1px solid #333; padding: 8px; text-align: right; font-weight: bold;">${Number(h.total).toLocaleString()}</td><td style="border: 1px solid #333; padding: 8px;"></td></tr></tfoot></table>
             <div style="margin-top: 15px; font-size: 14px; line-height: 1.6;"><p style="margin-bottom: 5px;">以上貨品數量及單價請查核.</p><p style="margin-bottom: 15px;">附發票號碼: <strong style="font-size: 16px;">${h.paperNo || ''}</strong></p><div style="display: flex; justify-content: space-between; margin-top: 30px;"><div style="width: 45%;">簽收: <span style="border-bottom: 1px solid #000; display: inline-block; width: 75%;">&nbsp;</span></div><div style="width: 45%;">備考: <span style="border-bottom: 1px solid #000; display: inline-block; width: 75%;">&nbsp;</span></div></div></div>
@@ -1328,7 +1340,7 @@ function printPurchaseOrder(data) {
     applyPrintStyle('A5', 'landscape');
     
     const html = `
-        <div style="padding: 10mm 15mm; width: 100%; box-sizing: border-box; font-family: 'MingLiU', '微軟正黑體', sans-serif;">
+        <div class="preview-paper" style="background-color: #ffffff; color: #000000; padding: 10mm 15mm; width: 100%; max-width: 297mm; min-height: 210mm; margin: 0 auto; box-sizing: border-box; font-family: 'MingLiU', '微軟正黑體', sans-serif; position: relative; box-shadow: 0 0 15px rgba(0,0,0,0.3);">
             <div style="text-align: center; font-size: 26px; font-weight: 900; letter-spacing: 5px; margin-bottom: 10px; color: #000;">長固實業有限公司 - 訂貨單</div>
             <table style="width: 100%; border: none; margin-bottom: 15px; font-size: 14px; color: #000;">
                 <tr>
@@ -1364,7 +1376,183 @@ window.reprintPurchaseOrderFast = function(idx) {
     try { const snapData = JSON.parse(l.snapshot); printPurchaseOrder(snapData); } catch(e) { alert("快照資料解析失敗"); }
 }
 
-function voidInv(idx, pNo) { 
+// ============================================================================
+// 庫存進階操作模組
+// ============================================================================
+window.renderInventory = debounce(function() {
+    const term = document.getElementById('stkSearch').value.toLowerCase(); let arr = globalInventory; if(term) arr = arr.filter(v => v.name.toLowerCase().includes(term) || v.supplier.toLowerCase().includes(term) || String(v.internalCode).toLowerCase().includes(term));
+    let totalVal = 0; let alertCount = 0; globalInventory.forEach(v => { totalVal += (v.qty * v.cost); if(v.qty <= v.alertQty) alertCount++; });
+    document.getElementById('stkTotalValue').innerText = `$${totalVal.toLocaleString()}`; document.getElementById('stkAlertCount').innerText = `${alertCount} 項`;
+    const c = document.getElementById('stkListContainer'); if(arr.length === 0) return c.innerHTML = '<div class="text-center text-muted py-4">無庫存資料</div>';
+    c.innerHTML = arr.map(v => {
+        let dot = 'stock-g'; let alertHTML = ''; if (v.qty <= 0) dot = 'stock-r'; else if (v.qty <= v.alertQty) dot = 'stock-y';
+        if (v.qty <= v.alertQty) alertHTML = `<div class="small text-danger fw-bold mt-1">⚠️ 低於安全庫存 (${v.alertQty})</div>`;
+        return `<div class="item-row bg-white shadow-sm"><div class="d-flex justify-content-between align-items-start mb-2"><div><div class="fw-bold fs-6 text-dark"><span class="stock-dot ${dot}"></span>${v.name} <span class="badge bg-secondary ms-1">${v.internalCode||''}</span></div><div class="small text-primary mt-1 fw-bold">對應資材碼: ${v.assetCodeCombined||'無'}</div><div class="small text-muted mt-1">效期: ${v.expiry||'--'} | 批號: ${v.lot||'--'}</div>${alertHTML}</div><div class="text-end"><div class="fs-4 fw-bold ${dot==='stock-r'?'text-danger':(dot==='stock-y'?'text-warning':'text-success')}">${v.qty}</div><div class="small text-muted">庫存數量</div></div></div><button class="btn btn-sm btn-outline-info w-100 fw-bold" onclick="openAdjustModal('${escapeQuotes(v.name)}')">進貨 / 盤點</button></div>`;
+    }).join('');
+}, 300);
+
+window.renderInvLogs = debounce(function() {
+    const fIn = document.getElementById('logFilterIn').value; const fOut = document.getElementById('logFilterOut').value; const fStart = document.getElementById('logFilterStart').value; const fEnd = document.getElementById('logFilterEnd').value; const fName = document.getElementById('logFilterName').value; const term = document.getElementById('stkLogSearch').value.toLowerCase();
+    let arr = globalInvLogs; if(fIn || fOut) arr = arr.filter(l => (fIn && l.type.includes(fIn)) || (fOut && l.type.includes(fOut)));
+    if(fStart) { const startT = new Date(fStart).setHours(0,0,0,0); arr = arr.filter(l => new Date(l.time).setHours(0,0,0,0) >= startT); }
+    if(fEnd) { const endT = new Date(fEnd).setHours(23,59,59,999); arr = arr.filter(l => new Date(l.time).getTime() <= endT); }
+    if(fName) arr = arr.filter(l => l.name === fName); if(term) arr = arr.filter(l => l.name.toLowerCase().includes(term) || l.staff.toLowerCase().includes(term) || l.memo.toLowerCase().includes(term) || String(l.invoiceNo).toLowerCase().includes(term) || String(l.orderNo).toLowerCase().includes(term));
+    const c = document.getElementById('stkLogContainer'); if(arr.length === 0) return c.innerHTML = '<div class="text-center text-muted py-4">無符合條件的異動紀錄</div>';
+    
+    c.innerHTML = arr.map(l => {
+        const d = new Date(l.time); const dateStr = isNaN(d.getTime()) ? '' : `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; 
+        const isAdd = l.qtyChange > 0;
+        let extInfo = [];
+        if (l.invoiceNo) extInfo.push(`發票: ${l.invoiceNo}`);
+        if (l.orderNo) extInfo.push(`單號: ${l.orderNo}`);
+        if (l.arrivalDate) extInfo.push(`進貨日: ${l.arrivalDate}`);
+        let extHtml = extInfo.length > 0 ? `<div class="small text-primary fw-bold mt-1">${extInfo.join(' | ')}</div>` : '';
+        
+        let actionBtns = `<button class="btn btn-sm btn-outline-secondary fw-bold" onclick="openEditInvLogModal(${l.rowIdx})">✏️ 編輯</button>`;
+        if (l.type === "向廠商訂貨" && l.snapshot) {
+            actionBtns = `<button class="btn btn-sm btn-outline-info fw-bold me-1 text-dark" onclick="reprintPurchaseOrderFast(${l.rowIdx})">🖨️ 列印</button>` + actionBtns;
+        }
+
+        return `<div class="p-3 bg-white border rounded mb-2 shadow-sm d-flex justify-content-between align-items-center">
+            <div>
+                <div class="fw-bold text-dark">${l.name} <span class="badge ${isAdd?'bg-success':(l.qtyChange<0?'bg-danger':'bg-warning text-dark')}">${l.type}</span></div>
+                <div class="small text-muted mt-1">${dateStr} | ${l.staff}</div>
+                ${extHtml}
+                <div class="small text-secondary mt-1">${l.memo}</div>
+            </div>
+            <div class="text-end">
+                <div class="fs-5 fw-bold ${isAdd?'text-success':(l.qtyChange<0?'text-danger':'text-warning')}">${isAdd?'+':''}${l.qtyChange}</div>
+                <div class="small text-muted mb-2">結存: ${l.newQty}</div>
+                <div>${actionBtns}</div>
+            </div>
+        </div>`;
+    }).join('');
+}, 300);
+
+window.openEditInvLogModal = function(idx) {
+    const l = globalInvLogs.find(x => x.rowIdx === idx); if(!l) return;
+    document.getElementById('e_logRowIdx').value = idx;
+    document.getElementById('e_logInvoiceNo').value = l.invoiceNo || '';
+    document.getElementById('e_logArrivalDate').value = l.arrivalDate || '';
+    document.getElementById('e_logOrderNo').value = l.orderNo || '';
+    document.getElementById('e_logMemo').value = l.memo || '';
+    document.getElementById('e_logSnapshot').value = l.snapshot || '';
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('editInvLogModal')).show();
+};
+
+window.saveEditInvLog = function() {
+    const idx = parseInt(document.getElementById('e_logRowIdx').value);
+    const invoiceNo = document.getElementById('e_logInvoiceNo').value.trim();
+    const arrivalDate = document.getElementById('e_logArrivalDate').value;
+    const orderNo = document.getElementById('e_logOrderNo').value.trim();
+    const memo = document.getElementById('e_logMemo').value.trim();
+    const l = globalInvLogs.find(x => x.rowIdx === idx);
+    if(l) { l.invoiceNo = invoiceNo; l.arrivalDate = arrivalDate; l.orderNo = orderNo; l.memo = memo; }
+    pushToSyncQueue('editInvLogRecord', { rowIdx: idx, invoiceNo, arrivalDate, orderNo, memo }, null);
+    window.renderInvLogs();
+    bootstrap.Modal.getInstance(document.getElementById('editInvLogModal')).hide();
+    showToast("💾 異動紀錄已更新");
+};
+
+window.openAdjustModal = function(nameStr) {
+    document.getElementById('adjInvoiceNo').value = ''; 
+    document.getElementById('adjArrivalDate').value = getTodayStr(); 
+    if(nameStr) { const v = globalInventory.find(x => x.name === nameStr); document.getElementById('adjRowIdx').value = v.rowIdx; document.getElementById('adjName').value = v.name; document.getElementById('adjName').onclick = null; document.getElementById('adjName').classList.remove('fake-input-btn'); document.getElementById('adjInternalCode').value = v.internalCode || ''; document.getElementById('adjAlert').value = v.alertQty; document.getElementById('adjCost').value = v.cost; document.getElementById('adjSup').value = v.supplier; } 
+    else { document.getElementById('adjRowIdx').value = ''; document.getElementById('adjName').value = ''; document.getElementById('adjName').onclick = () => openSearchModal('item_adj', selectProductForAdj); document.getElementById('adjName').classList.add('fake-input-btn'); document.getElementById('adjInternalCode').value = ''; document.getElementById('adjAlert').value = '10'; document.getElementById('adjCost').value = '0'; document.getElementById('adjSup').value = ''; }
+    document.getElementById('adjQty').value = ''; document.getElementById('adjLot').value = ''; document.getElementById('adjExp').value = ''; document.getElementById('adjMemo').value = ''; bootstrap.Modal.getOrCreateInstance(document.getElementById('adjInvModal')).show();
+};
+
+window.selectProductForAdj = function(val) { 
+    document.getElementById('adjName').value = val; const p = globalCatalog.find(x => x.productName === val); 
+    if(p) {
+        let intCode = p.internalCode || p.assetCode || '';
+        document.getElementById('adjInternalCode').value = intCode;
+        if (intCode) {
+            const parts = intCode.split('-');
+            if (parts.length > 1) {
+                const supCodeMatch = parts[1];
+                const s = globalSuppliers.find(x => x.code === supCodeMatch);
+                if (s) document.getElementById('adjSup').value = s.name;
+            }
+        }
+    } 
+};
+
+window.saveInventoryAdjust = function() {
+    const idx = document.getElementById('adjRowIdx').value; const name = document.getElementById('adjName').value.trim(); const internalCode = document.getElementById('adjInternalCode').value.trim(); const changeQty = parseFloat(document.getElementById('adjQty').value); const alertQty = parseFloat(document.getElementById('adjAlert').value) || 0; const cost = parseFloat(document.getElementById('adjCost').value) || 0; const sup = document.getElementById('adjSup').value.trim(); const lot = document.getElementById('adjLot').value.trim(); const exp = document.getElementById('adjExp').value; const type = document.getElementById('adjType').value; const memo = document.getElementById('adjMemo').value.trim();
+    const invoiceNo = document.getElementById('adjInvoiceNo').value.trim(); const arrivalDate = document.getElementById('adjArrivalDate').value;
+    if(!name || isNaN(changeQty) || changeQty === 0) return alert("請選定品名並輸入非零異動數量");
+    const payload = { name: name, internalCode: internalCode, changeQty: changeQty, alertQty: alertQty, cost: cost, supplier: sup, lot: lot, expiry: exp, type: type, memo: memo, invoiceNo: invoiceNo, arrivalDate: arrivalDate, staff: myName };
+    if(idx) { const v = globalInventory.find(x => x.rowIdx === parseInt(idx)); if(v) { v.qty += changeQty; v.alertQty = alertQty; v.cost = cost; v.supplier = sup; if(lot) v.lot=lot; if(exp) v.expiry=exp; if(internalCode) v.internalCode=internalCode; } } 
+    else { globalInventory.push({rowIdx: Date.now(), name: name, internalCode: internalCode, qty: changeQty, alertQty: alertQty, cost: cost, supplier: sup, lot: lot, expiry: exp}); }
+    globalInvLogs.unshift({time: Date.now(), staff: myName, name: name, type: type, qtyChange: changeQty, newQty: idx ? globalInventory.find(x => x.rowIdx === parseInt(idx)).qty : changeQty, invoiceNo: invoiceNo, arrivalDate: arrivalDate, memo: memo});
+    populateLogDropdowns(); window.renderInventory(); window.renderInvLogs(); bootstrap.Modal.getInstance(document.getElementById('adjInvModal')).hide(); pushToSyncQueue('adjustInventory', payload, null);
+};
+
+window.renderShipments = function() {
+    const c = document.getElementById('stkShipContainer'); const pending = globalSalesDetails.filter(s => s.shipStatus !== '已結案' && s.shipStatus !== '作廢');
+    if(pending.length === 0) return c.innerHTML = '<div class="text-center text-muted py-4">✅ 所有已開立發票之品項皆已全數出貨完畢</div>';
+    c.innerHTML = pending.map(s => {
+        let remain = s.qty - s.shippedQty;
+        return `<div class="item-row bg-white shadow-sm mb-2">
+            <div class="d-flex justify-content-between mb-2">
+                <div><div class="fw-bold text-dark fs-6">${s.name}</div><div class="small text-muted mt-1">${s.client} | 發票: ${s.paperNo}</div></div>
+                <div>
+                    <button class="btn btn-sm btn-outline-warning text-dark fw-bold me-1" onclick="openPurchaseOrderModal(${s.rowIdx})">🛒 訂貨</button>
+                    <button class="btn btn-sm btn-primary fw-bold" onclick="openShipModal(${s.rowIdx})">📦 出貨</button>
+                </div>
+            </div>
+            <div class="d-flex gap-3 small"><span class="text-secondary">總訂購: ${s.qty}</span><span class="text-success">已出: ${s.shippedQty}</span><span class="text-danger fw-bold">欠貨: ${remain}</span></div>
+        </div>`;
+    }).join('');
+};
+
+window.openShipModal = function(rowIdx) {
+    const s = globalSalesDetails.find(x => x.rowIdx === rowIdx); if(!s) return;
+    document.getElementById('shipRowIdx').value = rowIdx; document.getElementById('shipItemName').innerText = s.name; document.getElementById('shipTotalQty').innerText = s.qty; document.getElementById('shipDoneQty').innerText = s.shippedQty;
+    const remain = s.qty - s.shippedQty; document.getElementById('shipRemainQty').innerText = remain; document.getElementById('shipNowQty').value = remain; document.getElementById('shipNowQty').max = remain;
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('shipModal')).show();
+};
+
+window.confirmShipment = function() {
+    const rowIdx = parseInt(document.getElementById('shipRowIdx').value); const qty = parseFloat(document.getElementById('shipNowQty').value);
+    if(isNaN(qty) || qty <= 0) return alert("數量錯誤"); const s = globalSalesDetails.find(x => x.rowIdx === rowIdx); if(!s) return; if(qty > (s.qty - s.shippedQty)) return alert("出貨量不可大於欠貨量");
+    s.shippedQty += qty; if(s.shippedQty >= s.qty) s.shipStatus = '已結案'; else s.shipStatus = '部分出貨';
+    let inv = globalInventory.find(x => x.name === s.name); if (inv) inv.qty -= qty; else globalInventory.push({rowIdx:0, name: s.name, qty: -qty, alertQty: 0, cost: 0, supplier: '', internalCode: '', lot: '', expiry: ''});
+    let currentInvQty = inv ? inv.qty : -qty; globalInvLogs.unshift({ time: Date.now(), staff: myName, name: s.name, type: '分批出貨', qtyChange: -qty, newQty: currentInvQty, orderNo: s.paperNo, memo: `單號: ${s.paperNo}` });
+    populateLogDropdowns(); window.renderInvLogs(); window.renderInventory(); renderShipments(); bootstrap.Modal.getInstance(document.getElementById('shipModal')).hide(); pushToSyncQueue('updateShipment', {updates: [{rowIdx: rowIdx, paperNo: s.paperNo, name: s.name, shipQty: qty, totalQty: s.qty}], staff: myName}, null); showToast("🚚 出貨與庫存扣抵完成");
+};
+
+window.openPurchaseOrderModal = function(salesRowIdx) {
+    const s = globalSalesDetails.find(x => x.rowIdx === salesRowIdx); if(!s) return;
+    document.getElementById('poDate').value = getTodayStr(); document.getElementById('poSupplier').value = ''; document.getElementById('poSupPhone').value = ''; document.getElementById('poSupFax').value = ''; document.getElementById('poMemo').value = ''; document.getElementById('poItemName').value = s.name; document.getElementById('poClientName').value = s.client; document.getElementById('poOrderNo').value = s.orderNo || '';
+    const remainQty = s.qty - s.shippedQty; document.getElementById('poQty').value = remainQty;
+    const p = globalCatalog.find(x => x.clientName === s.client && x.productName === s.name);
+    if (p) {
+        let intCode = p.internalCode || p.assetCode || ''; document.getElementById('poInternalCode').value = intCode;
+        let inv = globalInventory.find(x => x.name === s.name); document.getElementById('poUnitPrice').value = inv ? (inv.cost || 0) : 0;
+        if (intCode) { const parts = intCode.split('-'); if (parts.length > 1) { const supplier = globalSuppliers.find(x => x.code === parts[1]); if (supplier) { document.getElementById('poSupplier').value = supplier.name || ''; document.getElementById('poSupPhone').value = supplier.phone || ''; document.getElementById('poSupFax').value = supplier.fax || ''; } } }
+    }
+    const cObj = globalClients.find(x => x.name === s.client); document.getElementById('poAddress').value = cObj ? (cObj.address || '') : '';
+    const deptSelect = document.getElementById('poReceiveDept'); deptSelect.innerHTML = '';
+    if (cObj && cObj.receiveDept) { const depts = cObj.receiveDept.split(/[,，\n]+/).map(str => str.trim()).filter(x => x); deptSelect.innerHTML = depts.length > 0 ? depts.map(d => `<option value="${d}">${d}</option>`).join('') : `<option value="">無資料</option>`; } else { deptSelect.innerHTML = `<option value="">無資料</option>`; }
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('purchaseOrderModal')).show();
+};
+
+window.confirmPurchaseOrder = function() {
+    const qty = parseFloat(document.getElementById('poQty').value); if (isNaN(qty) || qty <= 0) return alert("請輸入正確的訂貨數量！");
+    const snapData = { poDate: document.getElementById('poDate').value, poOrderNo: document.getElementById('poOrderNo').value, poSupplier: document.getElementById('poSupplier').value, poSupPhone: document.getElementById('poSupPhone').value, poSupFax: document.getElementById('poSupFax').value, poItemName: document.getElementById('poItemName').value, poInternalCode: document.getElementById('poInternalCode').value, poUnitPrice: document.getElementById('poUnitPrice').value, poClientName: document.getElementById('poClientName').value, poReceiveDept: document.getElementById('poReceiveDept').value, poAddress: document.getElementById('poAddress').value, poQty: qty, poMemo: document.getElementById('poMemo').value };
+    const payload = { name: snapData.poItemName, staff: myName, orderNo: snapData.poOrderNo, orderDate: snapData.poDate, memo: snapData.poMemo, snapshot: JSON.stringify(snapData) };
+    let inv = globalInventory.find(x => x.name === snapData.poItemName); let currentQty = inv ? inv.qty : 0;
+    globalInvLogs.unshift({ rowIdx: Date.now(), time: Date.now(), staff: myName, name: snapData.poItemName, type: '向廠商訂貨', qtyChange: 0, newQty: currentQty, orderNo: snapData.poOrderNo, arrivalDate: snapData.poDate, memo: snapData.poMemo, snapshot: payload.snapshot });
+    pushToSyncQueue('submitPurchaseOrder', payload, null); window.renderInvLogs(); bootstrap.Modal.getInstance(document.getElementById('purchaseOrderModal')).hide(); showToast("🛒 訂貨單已記錄！即將列印...");
+    setTimeout(() => { printPurchaseOrder(snapData); }, 500);
+};
+
+// ============================================================================
+// 發票紀錄與報表管理
+// ============================================================================
+window.voidInv = function(idx, pNo) { 
     if(confirm("確定作廢？系統將自動：\n1. 註銷此發票帳款\n2. 註銷銷售明細\n3. 【自動返還已出貨之庫存數量】")) { 
         const h = globalHistory.find(x=>x.rowIdx === idx); if(h) h.status = '作廢'; 
         globalSalesDetails.forEach(sd => { 
@@ -1379,19 +1567,22 @@ function voidInv(idx, pNo) {
         populateLogDropdowns(); window.renderHistory(); window.renderInventory(); window.renderInvLogs(); renderShipments(); generateReport(); 
         pushToSyncQueue('updateInvoiceRecord', {action:'void', rowIdx: idx, staff: myName, paperNo: pNo}, null); showToast("🗑️ 已作廢並返還庫存");
     } 
-}
-function openEditInv(idx) { const h = globalHistory.find(x=>x.rowIdx === idx); if(!h) return; document.getElementById('e_invRow').value = idx; document.getElementById('e_invPaper').value = h.paperNo; document.getElementById('e_invOrder').value = h.orderNo; document.getElementById('e_invNet').value = h.net; document.getElementById('e_invTotal').value = h.total; document.getElementById('e_invDetails').value = h.details; bootstrap.Modal.getOrCreateInstance(document.getElementById('editInvModal')).show(); }
-function saveEditInvoice() { const idx = parseInt(document.getElementById('e_invRow').value); const h = globalHistory.find(x=>x.rowIdx === idx); const data = { client: h.client, taxId: h.taxId, paperNo: document.getElementById('e_invPaper').value.toUpperCase(), orderNo: document.getElementById('e_invOrder').value, net: document.getElementById('e_invNet').value, tax: Math.round(document.getElementById('e_invTotal').value - document.getElementById('e_invNet').value), total: document.getElementById('e_invTotal').value, details: document.getElementById('e_invDetails').value }; if(h) { Object.assign(h, data); h.historyLog = "[\"修改紀錄存在\"]"; } window.renderHistory(); bootstrap.Modal.getInstance(document.getElementById('editInvModal')).hide(); pushToSyncQueue('updateInvoiceRecord', {action:'edit', rowIdx: idx, staff: myName, data: data}, null); }
-function setReportDate(days) { const e = new Date(); const s = new Date(); s.setDate(s.getDate() - (days - 1)); document.getElementById('repEnd').valueAsDate = e; document.getElementById('repStart').valueAsDate = s; generateReport(); }
-function setReportMonth() { const val = document.getElementById('repMonthPicker').value; if(!val) return; const [year, month] = val.split('-'); document.getElementById('repStart').valueAsDate = new Date(year, month - 1, 1); document.getElementById('repEnd').valueAsDate = new Date(year, month, 0); generateReport(); }
-function generateReport() {
+};
+
+window.openEditInv = function(idx) { const h = globalHistory.find(x=>x.rowIdx === idx); if(!h) return; document.getElementById('e_invRow').value = idx; document.getElementById('e_invPaper').value = h.paperNo; document.getElementById('e_invOrder').value = h.orderNo; document.getElementById('e_invNet').value = h.net; document.getElementById('e_invTotal').value = h.total; document.getElementById('e_invDetails').value = h.details; bootstrap.Modal.getOrCreateInstance(document.getElementById('editInvModal')).show(); };
+window.saveEditInvoice = function() { const idx = parseInt(document.getElementById('e_invRow').value); const h = globalHistory.find(x=>x.rowIdx === idx); const data = { client: h.client, taxId: h.taxId, paperNo: document.getElementById('e_invPaper').value.toUpperCase(), orderNo: document.getElementById('e_invOrder').value, net: document.getElementById('e_invNet').value, tax: Math.round(document.getElementById('e_invTotal').value - document.getElementById('e_invNet').value), total: document.getElementById('e_invTotal').value, details: document.getElementById('e_invDetails').value }; if(h) { Object.assign(h, data); h.historyLog = "[\"修改紀錄存在\"]"; } window.renderHistory(); bootstrap.Modal.getInstance(document.getElementById('editInvModal')).hide(); pushToSyncQueue('updateInvoiceRecord', {action:'edit', rowIdx: idx, staff: myName, data: data}, null); };
+window.setReportDate = function(days) { const e = new Date(); const s = new Date(); s.setDate(s.getDate() - (days - 1)); document.getElementById('repEnd').valueAsDate = e; document.getElementById('repStart').valueAsDate = s; generateReport(); };
+window.setReportMonth = function() { const val = document.getElementById('repMonthPicker').value; if(!val) return; const [year, month] = val.split('-'); document.getElementById('repStart').valueAsDate = new Date(year, month - 1, 1); document.getElementById('repEnd').valueAsDate = new Date(year, month, 0); generateReport(); };
+
+window.generateReport = function() {
     const sVal = document.getElementById('repStart').value; const eVal = document.getElementById('repEnd').value; if(!sVal || !eVal) return;
     const sDate = new Date(sVal); sDate.setHours(0,0,0,0); const eDate = new Date(eVal); eDate.setHours(23,59,59,999);
     let rCount=0, rNet=0, rTotal=0; const clientStats = {};
     globalHistory.forEach(h => { const d = new Date(h.time); if(!isNaN(d.getTime()) && d >= sDate && d <= eDate && h.status !== '作廢') { rCount++; rNet += Number(h.net); rTotal += Number(h.total); if(!clientStats[h.client]) clientStats[h.client] = 0; clientStats[h.client] += Number(h.total); } });
     document.getElementById('repCount').innerText = `${rCount} 張`; document.getElementById('repNet').innerText = `$${rNet.toLocaleString()}`; document.getElementById('repTotal').innerText = `$${rTotal.toLocaleString()}`;
-}
-function exportReportToEmail() {
+};
+
+window.exportReportToEmail = function() {
     const sVal = document.getElementById('repStart').value; const eVal = document.getElementById('repEnd').value; if(!sVal || !eVal) return alert("請先設定日期");
     const email = prompt("接收報表的 Email："); if(!email) return; showLoading("產生 Excel 中...");
     const sDate = new Date(sVal); sDate.setHours(0,0,0,0); const eDate = new Date(eVal); eDate.setHours(23,59,59,999);
@@ -1400,7 +1591,7 @@ function exportReportToEmail() {
     globalSalesDetails.forEach(s => { const d = new Date(s.time); if(!isNaN(d.getTime()) && d >= sDate && d <= eDate && s.shipStatus !== '作廢') { lines.push({ time: `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()}`, paperNo: s.paperNo, client: s.client, orderNo: s.orderNo, name: s.name, qty: s.qty, price: 0, shipStatus: s.shipStatus, shippedQty: s.shippedQty }); } });
     const payload = { email: email, dateRange: `${sVal} ~ ${eVal}`, summary: { count: rCount, net: rNet, tax: rTax, total: rTotal }, clientStats: Object.keys(clientStats).map(k=>({name:k, total:clientStats[k]})).sort((a,b)=>b.total-a.total), details: details.reverse(), lineItems: lines.reverse() };
     callApi('exportExcelReport', payload).then(res => { hideLoading(); alert(`✅ 報表已寄送至 ${email}`); }).catch(err => { hideLoading(); alert("匯出失敗：" + err.message); });
-}
+};
 
 // ============================================================================
 // 通用搜尋與管理員模組
@@ -1428,25 +1619,25 @@ window.renderAdminClients = debounce(function() {
     document.getElementById('admClientList').innerHTML = globalClients.filter(c => c.name.toLowerCase().includes(term) || String(c.taxId).includes(term)).map(c => `<div class="item-row bg-white d-flex justify-content-between align-items-center shadow-sm"><div><div class="fw-bold text-dark fs-6">${c.name}</div><div class="small text-muted mt-1">統編: ${c.taxId||'無'}</div></div><button class="btn btn-outline-danger btn-sm fw-bold px-3" onclick="openEditClientModal('${escapeQuotes(c.name)}', '${escapeQuotes(c.taxId)}')">📝 編輯</button></div>`).join(''); 
 }, 300);
 
-function openNewClientModal() { document.getElementById('addClientName').value = ''; document.getElementById('addClientTaxId').value = ''; document.getElementById('addClientAddress').value = ''; document.getElementById('addClientReceiveDept').value = ''; bootstrap.Modal.getOrCreateInstance(document.getElementById('addClientModal')).show(); }
-function submitNewClientOptimistic() { const name = document.getElementById('addClientName').value.trim(); const taxId = document.getElementById('addClientTaxId').value.trim(); const address = document.getElementById('addClientAddress').value.trim(); const receiveDept = document.getElementById('addClientReceiveDept').value.trim(); if(!name) return alert('名稱必填'); globalClients.push({ name, taxId, address, receiveDept }); populateAdminClientFilter(); window.renderAdminClients(); bootstrap.Modal.getInstance(document.getElementById('addClientModal')).hide(); pushToSyncQueue('addClientData', {clientName: name, taxId, address, receiveDept}, null); }
-function openEditClientModal(name, taxId) { 
+window.openNewClientModal = function() { document.getElementById('addClientName').value = ''; document.getElementById('addClientTaxId').value = ''; document.getElementById('addClientAddress').value = ''; document.getElementById('addClientReceiveDept').value = ''; bootstrap.Modal.getOrCreateInstance(document.getElementById('addClientModal')).show(); };
+window.submitNewClientOptimistic = function() { const name = document.getElementById('addClientName').value.trim(); const taxId = document.getElementById('addClientTaxId').value.trim(); const address = document.getElementById('addClientAddress').value.trim(); const receiveDept = document.getElementById('addClientReceiveDept').value.trim(); if(!name) return alert('名稱必填'); globalClients.push({ name, taxId, address, receiveDept }); populateAdminClientFilter(); window.renderAdminClients(); bootstrap.Modal.getInstance(document.getElementById('addClientModal')).hide(); pushToSyncQueue('addClientData', {clientName: name, taxId, address, receiveDept}, null); };
+window.openEditClientModal = function(name, taxId) { 
     const c = globalClients.find(x => x.name === name);
     document.getElementById('editClientOldName').value = name; document.getElementById('editClientName').value = name; document.getElementById('editClientTaxId').value = taxId; 
     document.getElementById('editClientAddress').value = c ? (c.address || '') : '';
     document.getElementById('editClientReceiveDept').value = c ? (c.receiveDept || '') : '';
     bootstrap.Modal.getOrCreateInstance(document.getElementById('editClientModal')).show(); 
-}
-function submitEditClientOptimistic() { const old = document.getElementById('editClientOldName').value; const name = document.getElementById('editClientName').value.trim(); const tax = document.getElementById('editClientTaxId').value.trim(); const address = document.getElementById('editClientAddress').value.trim(); const receiveDept = document.getElementById('editClientReceiveDept').value.trim(); if(!name) return; const c = globalClients.find(x => x.name === old); if(c) { c.name = name; c.taxId = tax; c.address = address; c.receiveDept = receiveDept; } globalCatalog.forEach(p => { if(p.clientName === old) p.clientName = name; }); populateAdminClientFilter(); window.renderAdminClients(); window.renderAdminItems(); bootstrap.Modal.getInstance(document.getElementById('editClientModal')).hide(); pushToSyncQueue('updateClientData', {oldName: old, newName: name, newTaxId: tax, address, receiveDept}, null); }
+};
+window.submitEditClientOptimistic = function() { const old = document.getElementById('editClientOldName').value; const name = document.getElementById('editClientName').value.trim(); const tax = document.getElementById('editClientTaxId').value.trim(); const address = document.getElementById('editClientAddress').value.trim(); const receiveDept = document.getElementById('editClientReceiveDept').value.trim(); if(!name) return; const c = globalClients.find(x => x.name === old); if(c) { c.name = name; c.taxId = tax; c.address = address; c.receiveDept = receiveDept; } globalCatalog.forEach(p => { if(p.clientName === old) p.clientName = name; }); populateAdminClientFilter(); window.renderAdminClients(); window.renderAdminItems(); bootstrap.Modal.getInstance(document.getElementById('editClientModal')).hide(); pushToSyncQueue('updateClientData', {oldName: old, newName: name, newTaxId: tax, address, receiveDept}, null); };
 
 window.renderAdminItems = debounce(function() { 
     const f = document.getElementById('admItemFilterSelect').value; const t = document.getElementById('admItemSearch').value.toLowerCase(); let arr = globalCatalog; if(f) arr = arr.filter(p => p.clientName === f); if(t) arr = arr.filter(p => p.productName.toLowerCase().includes(t) || p.clientName.toLowerCase().includes(t)); document.getElementById('admItemList').innerHTML = arr.length ? arr.map(p => `<div class="item-row bg-white d-flex justify-content-between align-items-center shadow-sm"><div><div class="fw-bold text-dark fs-6 mb-2">${p.productName} <span class="badge bg-secondary ms-1">${p.internalCode||''}</span></div><div class="d-flex align-items-center"><span class="badge bg-light text-dark border me-2 align-self-center">${p.clientName}</span><div class="bg-success text-white px-2 py-1 rounded shadow-sm d-inline-block"><span class="fw-bold">NT$ ${p.price}</span></div><span class="text-muted small fw-bold ms-1">/ ${p.unit}</span></div></div><button class="btn btn-outline-primary btn-sm fw-bold px-3 ms-2" onclick="openAdminItemModal(${p.rowIndex})">📝</button></div>`).join('') : '<div class="text-center text-muted py-4">查無對應品項</div>'; 
 }, 300);
 
-function openAdminItemModal(idx) { const m = document.getElementById('editItemModal'); const ipt = document.getElementById('editItemClientDisplay'); if(idx) { const p = globalCatalog.find(x => x.rowIndex === idx); document.getElementById('editItemRowIndex').value = idx; ipt.value = p.clientName; document.getElementById('editItemClientVal').value = p.clientName; ipt.onclick = null; ipt.classList.remove('fake-input-btn'); document.getElementById('editItemName').value = p.productName; document.getElementById('editItemInternalCode').value = p.internalCode || ''; document.getElementById('editItemUnit').value = p.unit; document.getElementById('editItemPrice').value = p.price; } else { document.getElementById('editItemRowIndex').value = ''; ipt.value = ''; ipt.onclick = triggerItemClientSelect; ipt.classList.add('fake-input-btn'); document.getElementById('editItemName').value = ''; document.getElementById('editItemInternalCode').value = ''; document.getElementById('editItemUnit').value = '式'; document.getElementById('editItemPrice').value = ''; } bootstrap.Modal.getOrCreateInstance(m).show(); }
-function triggerItemClientSelect() { bootstrap.Modal.getInstance(document.getElementById('editItemModal')).hide(); openSearchModal('admin_client', (val) => { document.getElementById('editItemClientDisplay').value = val; document.getElementById('editItemClientVal').value = val; setTimeout(()=> bootstrap.Modal.getOrCreateInstance(document.getElementById('editItemModal')).show(), 400); }); }
+window.openAdminItemModal = function(idx) { const m = document.getElementById('editItemModal'); const ipt = document.getElementById('editItemClientDisplay'); if(idx) { const p = globalCatalog.find(x => x.rowIndex === idx); document.getElementById('editItemRowIndex').value = idx; ipt.value = p.clientName; document.getElementById('editItemClientVal').value = p.clientName; ipt.onclick = null; ipt.classList.remove('fake-input-btn'); document.getElementById('editItemName').value = p.productName; document.getElementById('editItemInternalCode').value = p.internalCode || ''; document.getElementById('editItemUnit').value = p.unit; document.getElementById('editItemPrice').value = p.price; } else { document.getElementById('editItemRowIndex').value = ''; ipt.value = ''; ipt.onclick = triggerItemClientSelect; ipt.classList.add('fake-input-btn'); document.getElementById('editItemName').value = ''; document.getElementById('editItemInternalCode').value = ''; document.getElementById('editItemUnit').value = '式'; document.getElementById('editItemPrice').value = ''; } bootstrap.Modal.getOrCreateInstance(m).show(); };
+window.triggerItemClientSelect = function() { bootstrap.Modal.getInstance(document.getElementById('editItemModal')).hide(); openSearchModal('admin_client', (val) => { document.getElementById('editItemClientDisplay').value = val; document.getElementById('editItemClientVal').value = val; setTimeout(()=> bootstrap.Modal.getOrCreateInstance(document.getElementById('editItemModal')).show(), 400); }); };
 
-function submitEditItemOptimistic() { 
+window.submitEditItemOptimistic = function() { 
     const idx = document.getElementById('editItemRowIndex').value; 
     const client = document.getElementById('editItemClientVal').value; 
     const name = document.getElementById('editItemName').value.trim(); 
@@ -1456,31 +1647,12 @@ function submitEditItemOptimistic() {
     
     if(!client || !name || !price) return alert('必填未填'); 
     
-    const payload = { 
-        rowIndex: idx ? parseInt(idx) : null, 
-        clientName: client, 
-        productName: name, 
-        internalCode: internalCode, 
-        unit: unit, 
-        price: Number(price) 
-    }; 
+    const payload = { rowIndex: idx ? parseInt(idx) : null, clientName: client, productName: name, internalCode: internalCode, unit: unit, price: Number(price) }; 
     
-    if(idx) { 
-        const p = globalCatalog.find(x => x.rowIndex === payload.rowIndex); 
-        if(p) Object.assign(p, payload); 
-    } else { 
-        globalCatalog.push({ 
-            rowIndex: Date.now(), 
-            clientName: client, 
-            productName: name, 
-            internalCode: internalCode, 
-            unit: unit, 
-            price: Number(price) 
-        }); 
-    } 
+    if(idx) { const p = globalCatalog.find(x => x.rowIndex === payload.rowIndex); if(p) Object.assign(p, payload); } 
+    else { globalCatalog.push({ rowIndex: Date.now(), clientName: client, productName: name, internalCode: internalCode, unit: unit, price: Number(price) }); } 
     
     window.renderAdminItems(); 
     bootstrap.Modal.getInstance(document.getElementById('editItemModal')).hide(); 
-    
     pushToSyncQueue('saveAdminItem', payload, null); 
-}
+};
