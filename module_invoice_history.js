@@ -27,6 +27,12 @@ window.selectClientForInvoice = function(name) {
     document.getElementById('invAiNotice').style.display = 'none'; 
 };
 
+window.borrowInvoiceNo = function() { 
+    const tempNo = "[借用中]-" + Math.floor(Math.random() * 10000000); 
+    document.getElementById('invPaperNo').value = tempNo; 
+    showToast("✅ 已帶入借用單號，請繼續開立，日後可至紀錄補登"); 
+};
+
 // ============================================================================
 // 發票模組 - 品項拖曳與渲染
 // ============================================================================
@@ -224,12 +230,25 @@ window.resetInvoiceSystem = function() {
 // ============================================================================
 // 歷史紀錄與報表模組
 // ============================================================================
+// 【修復】補回遺失的歷史紀錄下拉選單函數，並加入空值防護
+window.updateHistoryDropdowns = function() { 
+    const staffs = [...new Set(globalHistory.map(h => h.staff || '').filter(x => x))].sort(); 
+    const clients = [...new Set(globalHistory.map(h => h.client || '').filter(x => x))].sort(); 
+    if(document.getElementById('histFilterStaff')) {
+        document.getElementById('histFilterStaff').innerHTML = '<option value="">👤 員工</option>' + staffs.map(s => `<option value="${escapeQuotes(s)}">${s}</option>`).join(''); 
+    }
+    if(document.getElementById('histFilterClient')) {
+        document.getElementById('histFilterClient').innerHTML = '<option value="">🏢 客戶</option>' + clients.map(c => `<option value="${escapeQuotes(c)}">${c}</option>`).join(''); 
+    }
+};
+
 window.renderHistory = debounce(function() {
     const fStaff = document.getElementById('histFilterStaff').value; 
     const fClient = document.getElementById('histFilterClient').value; 
     const fDate = document.getElementById('histFilterDate').value; 
     const fStatus = document.getElementById('histFilterStatus').value; 
-    const term = document.getElementById('histSearch').value.toLowerCase();
+    // 【修復】加上空值防護
+    const term = (document.getElementById('histSearch').value || '').toLowerCase();
     
     let filtered = globalHistory;
     if(fStaff) filtered = filtered.filter(h => h.staff === fStaff); 
@@ -239,7 +258,15 @@ window.renderHistory = debounce(function() {
         const target = new Date(fDate).setHours(0,0,0,0); 
         filtered = filtered.filter(h => { const d = new Date(h.time).setHours(0,0,0,0); return d === target; }); 
     }
-    if(term) filtered = filtered.filter(h => h.client.toLowerCase().includes(term) || String(h.paperNo).toLowerCase().includes(term) || h.details.toLowerCase().includes(term));
+    
+    // 【修復】全面空值防護，防止 toLowerCase 報錯
+    if(term) {
+        filtered = filtered.filter(h => 
+            (h.client || '').toLowerCase().includes(term) || 
+            String(h.paperNo || '').toLowerCase().includes(term) || 
+            (h.details || '').toLowerCase().includes(term)
+        );
+    }
     
     const c = document.getElementById('histListContainer'); 
     if(filtered.length === 0) return c.innerHTML = '<div class="text-center text-muted py-4">無紀錄</div>';
@@ -250,22 +277,67 @@ window.renderHistory = debounce(function() {
         const isVoid = h.status === '作廢'; 
         const isEdited = h.historyLog && h.historyLog.length > 2;
         let badgeHTML = isVoid ? '<span class="badge bg-danger ms-1">已作廢</span>' : '';
-        if(isEdited && !isVoid) badgeHTML += `<span class="badge bg-warning text-dark ms-1" onclick="alert('修改紀錄：\\n${escapeQuotes(JSON.parse(h.historyLog).join('\\n'))}')" style="cursor:pointer;">⚠️ 已修改</span>`;
+        if(isEdited && !isVoid) {
+            try { 
+                badgeHTML += `<span class="badge bg-warning text-dark ms-1" onclick="alert('修改紀錄：\\n${escapeQuotes(JSON.parse(h.historyLog).join('\\n'))}')" style="cursor:pointer;">⚠️ 已修改</span>`; 
+            } catch(e) { 
+                badgeHTML += `<span class="badge bg-warning text-dark ms-1">⚠️ 已修改</span>`; 
+            }
+        }
+        
+        if(h.orderNo && String(h.orderNo).includes('估價單核銷')) {
+            badgeHTML += `<span class="badge bg-primary ms-1">📑 估價單核銷</span>`;
+        }
+
+        const isBorrowed = String(h.paperNo).startsWith('[借用中]');
+        let paperNoHtml = h.paperNo ? (isBorrowed ? `<span class="text-danger">⚠️ ${h.paperNo}</span>` : `發票: ${h.paperNo}`) : '';
+
+        let actionBtns = '';
+        if (!isVoid) {
+            actionBtns += `<button class="btn btn-sm btn-outline-info me-1 fw-bold" onclick="printDeliveryNote(${h.rowIdx})">🖨️ 列印出單</button>`;
+            if (isBorrowed) actionBtns += `<button class="btn btn-sm btn-danger me-1 fw-bold" onclick="openSuppInvModal(${h.rowIdx}, '${escapeQuotes(h.paperNo)}')">📝 補登發票</button>`;
+            actionBtns += `<button class="btn btn-sm btn-outline-danger me-1" onclick="voidInv(${h.rowIdx}, '${escapeQuotes(h.paperNo)}')">作廢</button>`;
+            actionBtns += `<button class="btn btn-sm btn-outline-secondary" onclick="openEditInv(${h.rowIdx})">編輯</button>`;
+        }
+
         return `<div class="item-row bg-white shadow-sm p-3 ${isVoid?'status-void':''}">
             <div class="d-flex justify-content-between align-items-start border-bottom pb-2 mb-2">
                 <div><div class="fw-bold fs-6 text-dark">${h.client} ${badgeHTML}</div><div class="small text-muted">單號: ${h.orderNo||'--'} | 開立: ${h.staff}</div></div>
-                <div class="text-end"><div class="badge bg-light text-dark border">${dateStr}</div><div class="small text-muted mt-1 fw-bold text-danger">${h.paperNo?'發票: '+h.paperNo:''}</div></div>
+                <div class="text-end"><div class="badge bg-light text-dark border">${dateStr}</div><div class="small mt-1 fw-bold ${isBorrowed?'text-danger':'text-primary'}">${paperNoHtml}</div></div>
             </div>
             <div class="history-details text-muted mb-3">${h.details}</div>
             <div class="d-flex justify-content-between align-items-center">
-                <div>${!isVoid ? `<button class="btn btn-sm btn-outline-info me-1 fw-bold" onclick="printDeliveryNote(${h.rowIdx})">🖨️ 列印出單</button><button class="btn btn-sm btn-outline-danger me-1" onclick="voidInv(${h.rowIdx}, '${escapeQuotes(h.paperNo)}')">作廢</button><button class="btn btn-sm btn-outline-secondary" onclick="openEditInv(${h.rowIdx})">編輯</button>` : ''}</div>
+                <div>${actionBtns}</div>
                 <span class="fw-bold text-danger fs-5">$${Number(h.total).toLocaleString()}</span>
             </div>
         </div>`;
     }).join('');
 }, 300);
 
-// 【修復】徹底確保列印出貨單的函數為全域可用
+window.openSuppInvModal = function(idx, oldPaperNo) {
+    document.getElementById('supp_invRowIdx').value = idx; 
+    document.getElementById('supp_oldPaperNo').value = oldPaperNo; 
+    document.getElementById('supp_newPaperNo').value = '';
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('suppInvModal')).show();
+};
+
+window.confirmSupplementInvoice = function() {
+    const idx = parseInt(document.getElementById('supp_invRowIdx').value);
+    const oldPaperNo = document.getElementById('supp_oldPaperNo').value;
+    const newPaperNo = document.getElementById('supp_newPaperNo').value.trim().toUpperCase();
+    if (!newPaperNo) return alert("請輸入正確的發票號碼！");
+    
+    showLoading("連動更新中...");
+    callApi('supplementInvoiceNo', { rowIdx: idx, oldPaperNo: oldPaperNo, newPaperNo: newPaperNo, staff: myName })
+    .then(res => {
+        hideLoading();
+        bootstrap.Modal.getInstance(document.getElementById('suppInvModal')).hide();
+        showToast("✅ 發票號碼已成功補登並連動更新");
+        refreshData(); 
+    })
+    .catch(err => { hideLoading(); alert("補登失敗：" + err.message); });
+};
+
 window.printDeliveryNote = function(idx) {
     const h = globalHistory.find(x => x.rowIdx === idx); 
     if (!h) return;
@@ -348,13 +420,12 @@ window.printDeliveryNote = function(idx) {
         </div>
     `;
 
-    document.getElementById('printArea').innerHTML = html;
-    
-    // 切換列印模式：顯示出貨單，隱藏訂購單
-    document.getElementById('printArea').classList.add('print-active');
-    if (document.getElementById('printPoArea')) document.getElementById('printPoArea').classList.remove('print-active');
-    
-    setTimeout(() => { window.print(); }, 300);
+    const printArea = document.getElementById('printArea');
+    if(printArea) {
+        printArea.innerHTML = html;
+        if (typeof window.applyPrintStyle === 'function') window.applyPrintStyle('A5', 'landscape');
+        if (typeof window.showPrintPreview === 'function') window.showPrintPreview('printArea');
+    }
 };
 
 window.voidInv = function(idx, pNo) { 
@@ -373,7 +444,13 @@ window.voidInv = function(idx, pNo) {
             } 
         });
         
-        populateLogDropdowns(); window.renderHistory(); window.renderInventory(); window.renderInvLogs(); renderShipments(); generateReport(); 
+        if(typeof window.populateLogDropdowns === 'function') window.populateLogDropdowns(); 
+        window.renderHistory(); 
+        if(typeof window.renderInventory === 'function') window.renderInventory(); 
+        if(typeof window.renderInvLogs === 'function') window.renderInvLogs(); 
+        if(typeof window.renderShipments === 'function') window.renderShipments(); 
+        window.generateReport(); 
+        
         pushToSyncQueue('updateInvoiceRecord', {action:'void', rowIdx: idx, staff: myName, paperNo: pNo}, null); 
         showToast("🗑️ 已作廢並返還庫存");
     } 
