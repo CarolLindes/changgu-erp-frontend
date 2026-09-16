@@ -313,6 +313,25 @@ window.confirmShipment = function() {
     showToast("🚚 出貨與庫存扣抵完成");
 };
 
+// 【修改 3】動態替換客戶輸入框為「下拉選單」，並支援收件單位與地址的即時連動
+window.triggerPoClientChange = function(clientName) {
+    const cObj = globalClients.find(x => x.name === clientName);
+    document.getElementById('poAddress').value = cObj ? (cObj.address || '') : '';
+    
+    const deptSelect = document.getElementById('poReceiveDept');
+    deptSelect.innerHTML = '';
+    if (cObj && cObj.receiveDept) {
+        const depts = cObj.receiveDept.split(/[,，\n]+/).map(str => str.trim()).filter(x => x);
+        if (depts.length > 0) {
+            deptSelect.innerHTML = depts.map(d => `<option value="${d}">${d}</option>`).join('');
+        } else {
+            deptSelect.innerHTML = `<option value="">無資料</option>`;
+        }
+    } else {
+        deptSelect.innerHTML = `<option value="">無資料</option>`;
+    }
+};
+
 window.openPurchaseOrderModal = function(salesRowIdx) {
     const s = globalSalesDetails.find(x => x.rowIdx === salesRowIdx); if(!s) return;
     
@@ -321,9 +340,7 @@ window.openPurchaseOrderModal = function(salesRowIdx) {
     document.getElementById('poSupPhone').value = '';
     document.getElementById('poSupFax').value = '';
     document.getElementById('poMemo').value = '';
-    
     document.getElementById('poItemName').value = s.name;
-    document.getElementById('poClientName').value = s.client;
     document.getElementById('poOrderNo').value = s.orderNo || '';
     
     const remainQty = s.qty - s.shippedQty;
@@ -352,21 +369,26 @@ window.openPurchaseOrderModal = function(salesRowIdx) {
         }
     }
 
-    const cObj = globalClients.find(x => x.name === s.client);
-    document.getElementById('poAddress').value = cObj ? (cObj.address || '') : '';
-    
-    const deptSelect = document.getElementById('poReceiveDept');
-    deptSelect.innerHTML = '';
-    if (cObj && cObj.receiveDept) {
-        const depts = cObj.receiveDept.split(/[,，\n]+/).map(str => str.trim()).filter(x => x);
-        if (depts.length > 0) {
-            deptSelect.innerHTML = depts.map(d => `<option value="${d}">${d}</option>`).join('');
-        } else {
-            deptSelect.innerHTML = `<option value="">無資料</option>`;
-        }
-    } else {
-        deptSelect.innerHTML = `<option value="">無資料</option>`;
+    // 確保 poClientName 是一個 Select 下拉選單 (如果原本是 Input 就動態替換掉)
+    let poClientEl = document.getElementById('poClientName');
+    if (poClientEl.tagName.toLowerCase() !== 'select') {
+        let newSelect = document.createElement('select');
+        newSelect.id = 'poClientName';
+        newSelect.className = (poClientEl.className || '').replace('form-control', 'form-select');
+        if (!newSelect.className.includes('form-select')) newSelect.className += ' form-select';
+        newSelect.onchange = function() { window.triggerPoClientChange(this.value); };
+        poClientEl.parentNode.replaceChild(newSelect, poClientEl);
+        poClientEl = newSelect;
     }
+    
+    // 注入全域客戶清單
+    poClientEl.innerHTML = '<option value="">請選擇客戶...</option>' + globalClients.map(c => `<option value="${escapeQuotes(c.name)}">${c.name}</option>`).join('');
+    
+    // 設定預設為該筆出貨明細的客戶
+    poClientEl.value = s.client;
+    
+    // 手動觸發一次連動機制，將預設客戶的「地址」與「收貨單位」填入
+    window.triggerPoClientChange(s.client);
 
     bootstrap.Modal.getOrCreateInstance(document.getElementById('purchaseOrderModal')).show();
 };
@@ -384,7 +406,7 @@ window.confirmPurchaseOrder = function() {
         poItemName: document.getElementById('poItemName').value,
         poInternalCode: document.getElementById('poInternalCode').value,
         poUnitPrice: document.getElementById('poUnitPrice').value,
-        poClientName: document.getElementById('poClientName').value,
+        poClientName: document.getElementById('poClientName').value, // 現在從下拉選單取值
         poReceiveDept: document.getElementById('poReceiveDept').value,
         poAddress: document.getElementById('poAddress').value,
         poQty: qty,
@@ -439,7 +461,6 @@ window.printPurchaseOrder = function(data) {
     const totalAmount = parseFloat(data.poQty) * parseFloat(data.poUnitPrice || 0);
     const dateStr = data.poDate ? data.poDate.replace(/-/g, '/') : getTodayStr().replace(/-/g, '/');
 
-    // 【排版終極優化】加上 padding: 15mm 20mm 的安全出血邊界，保護內容不被印表機物理裁切
     const html = `
         <div style="max-width: 800px; margin: 0 auto; background: #fff; padding: 15mm 20mm; box-sizing: border-box; font-family: 'MingLiU', '微軟正黑體', sans-serif; color: #000;">
             <div style="text-align: center; font-size: 26px; font-weight: 900; letter-spacing: 5px; margin-bottom: 10px; color: #000;">長固實業有限公司 - 訂貨單</div>
