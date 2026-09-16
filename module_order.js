@@ -9,31 +9,27 @@
 // ============================================================================
 
 window.triggerEmailScan = function() {
-    showLoading("⚡ 正在連線信箱掃描新訂單...");
+    showLoading("⚡ 正在喚醒 AI 機器人...");
     callApi('scanEmailOrders', {}).then(res => {
         hideLoading();
         
-        // 嘗試解析後端回傳的訂單陣列 (支援 res.orders 或 res 本身是陣列的格式)
-        let ordersToSave = res.orders || (Array.isArray(res) ? res : []);
-        
-        if (ordersToSave && ordersToSave.length > 0) {
-            // 改用不卡畫面的 Toast 提示，體驗更順暢
-            showToast(`✅ 成功解析 ${ordersToSave.length} 筆訂單，正在背景寫入系統...`);
-            
-            // 將 AI 解析出來的訂單，排入背景佇列依序寫入資料庫
-            ordersToSave.forEach(order => {
-                if (!order.source) order.source = '📧 信箱全自動辨識';
-                // 使用系統最穩定的 saveOrderData 接口，會自動配對資材碼與防呆
-                pushToSyncQueue('saveOrderData', order, null);
-            });
+        // 【升級版非同步處理】
+        // 由於後端已經改為背景獨立執行，前端不再需要等待訂單資料回傳，
+        // 只要瞬間彈出安撫提示，讓畫面立刻恢復順暢操作即可！
+        if (res && res.msg) {
+            showToast(res.msg);
         } else {
-            showToast(res.msg || "✅ 信箱掃描完成，目前無新訂單。");
+            showToast("✅ 已成功喚醒 AI 機器人！系統將於背景獨立執行解析，請留意 Telegram 進度通知。");
         }
         
-        refreshData(); 
     }).catch(err => {
         hideLoading();
-        alert("掃描失敗：" + err.message);
+        // 攔截並優化超時或連線錯誤的安撫提示
+        if (err.message && err.message.toLowerCase().includes('timeout')) {
+            showToast("⏳ 系統已轉由背景繼續解析，請稍後（約1~3分鐘）點擊上方刷新按鈕查看最新訂單！");
+        } else {
+            alert("喚醒失敗：" + err.message);
+        }
     });
 };
 
