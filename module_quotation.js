@@ -4,6 +4,14 @@
  * ============================================================================
  */
 
+// 【新增】強大的日期淨化器：專門處理後台傳來的複雜台北標準時間，確保輸出純淨的 YYYY-MM-DD
+window.cleanDateStr = function(rawDate) {
+    if (!rawDate) return getTodayStr();
+    const d = new Date(rawDate);
+    if (isNaN(d.getTime())) return getTodayStr();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+};
+
 window.renderQuotationList = debounce(function() {
     const searchTerm = document.getElementById('quoSearchInput').value.toLowerCase();
     
@@ -39,8 +47,12 @@ window.renderQuotationList = debounce(function() {
             let allItemsDesc = group.quotes.map(q => {
                 let items = []; try { items = JSON.parse(q.jsonStr); } catch(e){}
                 let itemsStr = items.map(i => `<div>${i.name} <span class="badge bg-light text-dark border ms-1">x${i.qty}</span></div>`).join('');
+                
+                // 【套用日期淨化器】確保列表顯示乾淨的 YYYY/MM/DD
+                const cleanDate = cleanDateStr(q.quoteDate).replace(/-/g, '/');
+                
                 return `<div class="mt-2 pt-2 border-top">
-                            <span class="small fw-bold text-secondary">單號: ${q.quoteNo} (${q.quoteDate})</span>
+                            <span class="small fw-bold text-secondary">單號: ${q.quoteNo} (${cleanDate})</span>
                             <div class="small text-muted mt-1">${itemsStr}</div>
                         </div>`;
             }).join('');
@@ -93,7 +105,10 @@ window.openQuotationModal = function(idx) {
     if(idx) {
         const q = globalQuotes.find(x => x.rowIdx === idx);
         document.getElementById('e_quoRow').value = idx;
-        document.getElementById('e_quoDate').value = q.quoteDate;
+        
+        // 【套用日期淨化器】確保編輯時，原本的日期能正確塞入 <input type="date"> 中，不會消失或變成今天
+        document.getElementById('e_quoDate').value = cleanDateStr(q.quoteDate);
+        
         document.getElementById('e_quoNo').value = q.quoteNo;
         document.getElementById('e_quoClient').value = q.client;
         document.getElementById('e_quoUseSeal').checked = q.useSeal;
@@ -386,7 +401,7 @@ window.verifyQuotationToInvoice = function(gid) {
 };
 
 // ============================================================================
-// 列印估價單 (支援 A4 舒展排版、過濾日期、真實公司大印章 - 改用 Thumbnail API)
+// 列印估價單 (支援 A4 舒展排版、過濾日期、真實公司大印章)
 // ============================================================================
 window.printQuotation = function(gid) {
     const quotesInGroup = globalQuotes.filter(q => q.mergeId === gid || `Single_${q.rowIdx}` === gid);
@@ -395,9 +410,9 @@ window.printQuotation = function(gid) {
     const clientName = quotesInGroup[0].client;
     const quoteNos = quotesInGroup.map(q => q.quoteNo).join(', ');
     
-    // (1) 日期純淨化過濾 (只保留 YYYY/MM/DD)
+    // 【套用日期淨化器】確保列印紙本的日期永遠乾淨，顯示 YYYY/MM/DD
     const rawDate = quotesInGroup[0].quoteDate || getTodayStr();
-    const dateStr = rawDate.split('T')[0].replace(/-/g, '/');
+    const dateStr = cleanDateStr(rawDate).replace(/-/g, '/');
     
     const useSeal = quotesInGroup[0].useSeal;
     
@@ -440,10 +455,8 @@ window.printQuotation = function(gid) {
         `;
     }).join('');
 
-    // (3) 完美替換真實大小章 (利用 mix-blend-mode 模擬印章蓋印效果) - 移除小章，只留大章
     const sealHtml = useSeal ? `
         <div style="position: absolute; right: 50px; bottom: 10px; display: flex; align-items: flex-end; pointer-events: none; z-index: 10; opacity: 0.95;">
-            <!-- 大章 -->
             <img src="https://drive.google.com/thumbnail?id=1f6zlONs70zTGucx1h5ttJD1OLzyygXuu&sz=w800" alt="大章" style="width: 150px; height: auto; mix-blend-mode: multiply;">
         </div>
     ` : '';
@@ -494,7 +507,6 @@ window.printQuotation = function(gid) {
                 </tfoot>
             </table>
 
-            <!-- 利用 flex-grow 佔據剩餘空間，將備註往下推 -->
             <div style="flex-grow: 1;"></div>
 
             <div style="margin-top: 40px; font-size: 15px; border: 1px solid #000; padding: 20px; position: relative; min-height: 180px;">
