@@ -22,6 +22,7 @@ window.renderDeliveryList = debounce(function() {
         arr = arr.filter(d => 
             (d.client || '').toLowerCase().includes(term) ||
             (d.paperNo || '').toLowerCase().includes(term) ||
+            (d.orderNo || '').toLowerCase().includes(term) ||
             (d.itemsStr || '').toLowerCase().includes(term) ||
             (d.memo || '').toLowerCase().includes(term)
         );
@@ -46,7 +47,8 @@ function buildDeliveryHtml(dataArr, isPending) {
         let items = []; try { items = JSON.parse(d.itemsStr); } catch(e){}
         let itemsHtml = items.map(i => {
             let lotBadge = i.batchTarget ? `<span class="badge bg-info text-dark ms-1">批號: ${i.batchTarget}</span>` : '';
-            return `<div class="mt-1 text-secondary">▪ ${i.name} <span class="badge bg-light border text-dark ms-1">x${i.qty}</span> ${lotBadge}</div>`;
+            let expBadge = i.exp ? `<span class="badge bg-secondary ms-1">效期: ${i.exp}</span>` : '';
+            return `<div class="mt-1 text-secondary">▪ ${i.name} <span class="badge bg-light border text-dark ms-1">x${i.qty}</span> ${lotBadge} ${expBadge}</div>`;
         }).join('');
 
         let badgeStatus = '';
@@ -83,7 +85,7 @@ function buildDeliveryHtml(dataArr, isPending) {
                     ${checkboxHtml}
                     <div>
                         <div class="fw-bold text-dark fs-6">${d.client} ${badgeStatus} ${methodBadge}</div>
-                        <div class="small text-muted mt-1">發票/單號: <span class="fw-bold">${d.paperNo}</span></div>
+                        <div class="small text-muted mt-1">訂單號碼: <span class="fw-bold text-dark">${d.orderNo || '無'}</span> | 發票編號: <span class="fw-bold text-primary">${d.paperNo || '無'}</span></div>
                     </div>
                 </div>
                 <div class="text-end d-flex flex-wrap justify-content-end gap-1" style="max-width: 250px;">
@@ -109,6 +111,13 @@ window.groupExecuteDelivery = function() {
 window.openDeliveryActionModal = function(rowIndices) {
     document.getElementById('da_rowIndices').value = JSON.stringify(rowIndices);
     document.getElementById('da_date').value = getTodayStr();
+    
+    // 動態新增兩個送貨方式選項（若尚未存在）
+    const methodSelect = document.getElementById('da_method');
+    if (!methodSelect.querySelector('option[value="工廠直送"]')) {
+        methodSelect.insertAdjacentHTML('beforeend', '<option value="工廠直送">工廠直送</option><option value="親自取貨">親自取貨</option>');
+    }
+    
     document.getElementById('da_method').value = '';
     document.getElementById('da_memo').value = '';
 
@@ -133,24 +142,61 @@ window.confirmDeliveryAction = function() {
 
     if (!date || !method) return alert("送貨日期與送貨方式為必填！");
 
+    // 【智慧合併邏輯】：前端先行合併預覽，後端同步處理
+    let clientGroups = {};
     ids.forEach(idx => {
-        const d = globalDeliveries.find(x => x.rowIdx === idx);
-        if (d) {
-            d.status = '已送貨';
-            d.deliveryDate = date;
-            d.deliveryMethod = method;
-            d.memo = memo;
-            
-            // 寫入後端
-            pushToSyncQueue('updateDeliveryInfo', {
-                rowIdx: idx, status: '已送貨', deliveryDate: date, deliveryMethod: method, memo: memo
-            }, null);
+        let d = globalDeliveries.find(x => x.rowIdx === idx);
+        if(d) {
+            if(!clientGroups[d.client]) clientGroups[d.client] = [];
+            clientGroups[d.client].push(d);
         }
     });
 
+    for (let client in clientGroups) {
+        let group = clientGroups[client];
+        if (group.length === 1) {
+            let d = group[0];
+            d.status = '已送貨'; d.deliveryDate = date; d.deliveryMethod = method; d.memo = memo;
+        } else {
+            // 合併多筆品項為一張單據
+            let mainD = group[0];
+            let mergedItems = [];
+            let pNos = new Set(mainD.paperNo.split(',').map(s=>s.trim()).filter(x=>x));
+            let oNos = new Set((mainD.orderNo||'').split(',').map(s=>s.trim()).filter(x=>x));
+            let lots = new Set((mainD.lot||'').split(',').map(s=>s.trim()).filter(x=>x));
+            let exps = new Set((mainD.expiry||'').split(',').map(s=>s.trim()).filter(x=>x));
+
+            group.forEach((d, index) => {
+                let items = []; try { items = JSON.parse(d.itemsStr); } catch(e){}
+                if(index > 0) {
+                    d.paperNo.split(',').map(s=>s.trim()).filter(x=>x).forEach(x=>pNos.add(x));
+                    (d.orderNo||'').split(',').map(s=>s.trim()).filter(x=>x).forEach(x=>oNos.add(x));
+                    (d.lot||'').split(',').map(s=>s.trim()).filter(x=>x).forEach(x=>lots.add(x));
+                    (d.expiry||'').split(',').map(s=>s.trim()).filter(x=>x).forEach(x=>exps.add(x));
+                    // 移除被合併的子項目
+                    globalDeliveries = globalDeliveries.filter(x => x.rowIdx !== d.rowIdx); 
+                }
+                mergedItems.push(...items);
+            });
+            mainD.paperNo = Array.from(pNos).join(', ');
+            mainD.orderNo = Array.from(oNos).join(', ');
+            mainD.lot = Array.from(lots).join(', ');
+            mainD.expiry = Array.from(exps).join(', ');
+            mainD.itemsStr = JSON.stringify(mergedItems);
+            mainD.status = '已送貨';
+            mainD.deliveryDate = date;
+            mainD.deliveryMethod = method;
+            mainD.memo = memo;
+        }
+    }
+
+    pushToSyncQueue('batchExecuteDeliveries', {
+        rowIndices: ids, deliveryDate: date, deliveryMethod: method, memo: memo
+    }, null);
+
     window.renderDeliveryList();
     bootstrap.Modal.getInstance(document.getElementById('deliveryActionModal')).hide();
-    showToast("🚚 送貨資訊已儲存並移至已送貨區！");
+    showToast("🚚 批次送貨處理完成！(同客戶之單據已自動智慧合併)");
 };
 
 // ============================================================================
@@ -284,23 +330,12 @@ function buildDeliveryPrintHtml(idx, isPreviewMode) {
 
     let items = []; try { items = JSON.parse(d.itemsStr); } catch(e){}
     
-    // 【優化 1】將時間格式轉換為純淨的 YYYY/M/D 格式
-    let dateStr = d.deliveryDate ? d.deliveryDate : getTodayStr();
-    let dObj = new Date(dateStr);
-    if (!isNaN(dObj.getTime())) {
-        dateStr = `${dObj.getFullYear()}/${dObj.getMonth() + 1}/${dObj.getDate()}`;
-    } else {
-        dateStr = dateStr.replace(/-/g, '/');
-    }
-
-    // 【優化 2】透過發票號碼去歷史紀錄反查真實的「訂單號碼」
-    const hRec = globalHistory.find(x => x.paperNo === d.paperNo && d.paperNo !== '');
-    const actualOrderNo = hRec && hRec.orderNo ? hRec.orderNo : '';
-
+    // 計算單號與排版空間
+    const dateStr = d.deliveryDate ? d.deliveryDate.replace(/-/g, '/') : getTodayStr().replace(/-/g, '/');
     let totalAmount = 0;
     const totalRows = Math.max(items.length, 5); // 至少保留 5 行的空間讓版面好看
 
-    // 取得商品單價以計算金額 (透過 globalCatalog 對應)
+    // 取得商品單價以計算金額
     let tbodyHtml = '';
     for (let i = 0; i < totalRows; i++) {
         if (i < items.length) {
@@ -312,10 +347,11 @@ function buildDeliveryPrintHtml(idx, isPreviewMode) {
 
             let specDesc = item.name;
             if (item.batchTarget) specDesc += ` <span style="font-size: 0.85em; color: #555;">(批號: ${item.batchTarget})</span>`;
+            if (item.exp) specDesc += ` <span style="font-size: 0.85em; color: #555;">(效期: ${item.exp})</span>`;
 
             tbodyHtml += `
                 <tr>
-                    <td style="border: 1px solid #000; padding: 5px; text-align: center;">${item.internalCode || ''}</td>
+                    <td style="border: 1px solid #000; padding: 5px; text-align: center;">${item.orderNo || ''}</td>
                     <td style="border: 1px solid #000; padding: 5px; text-align: left;">${specDesc}</td>
                     <td style="border: 1px solid #000; padding: 5px; text-align: center;">${item.qty}</td>
                     <td style="border: 1px solid #000; padding: 5px; text-align: right;">${price.toLocaleString()}</td>
@@ -338,8 +374,7 @@ function buildDeliveryPrintHtml(idx, isPreviewMode) {
         }
     }
 
-    // A5 橫向排版 (高度較扁，寬度較寬)
-    // isPreviewMode 如果是 true，將縮小比例以符合手機畫面
+    // A5 橫向排版
     const containerStyle = isPreviewMode 
         ? `width: 100%; min-width: 600px; transform: scale(0.9); transform-origin: top left; font-family: 'MingLiU', '微軟正黑體', sans-serif; color: #000;` 
         : `width: 100%; max-width: 1000px; margin: 0 auto; background: #fff; padding: 10mm 15mm; box-sizing: border-box; font-family: 'MingLiU', '微軟正黑體', sans-serif; color: #000; min-height: 130mm; display: flex; flex-direction: column;`;
@@ -355,17 +390,16 @@ function buildDeliveryPrintHtml(idx, isPreviewMode) {
 
             <!-- 客戶與日期 -->
             <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 5px; font-size: 16px; font-weight: bold;">
-                <div style="width: 60%;">客 戶 名 稱：<span style="border-bottom: 1px solid #000; display: inline-block; width: 70%; padding-bottom: 2px;">${escapeQuotes(d.client)}</span>
-                    <div style="margin-top: 5px; font-size: 14px; font-weight: bold; color: #d32f2f;">訂單號碼：${escapeQuotes(actualOrderNo || '無')}</div>
-                </div>
-                <div style="width: 30%; text-align: right;">${dateStr}</div>
+                <div style="width: 60%;">客 戶 名 稱：<span style="border-bottom: 1px solid #000; display: inline-block; width: 70%; padding-bottom: 2px;">${escapeQuotes(d.client)}</span></div>
+                <div style="width: 30%; text-align: right;">${dateStr.split('/')[0]} 年 ${dateStr.split('/')[1]} 月 ${dateStr.split('/')[2]} 日</div>
             </div>
 
             <!-- 核心明細表格 -->
             <table style="width: 100%; border-collapse: collapse; font-size: 15px; border: 2px solid #000; flex-grow: 1;">
                 <thead>
                     <tr>
-                        <th style="border: 1px solid #000; padding: 8px; width: 15%; text-align: center;">編  號</th>
+                        <!-- 【變更】項次改為訂單號碼 -->
+                        <th style="border: 1px solid #000; padding: 8px; width: 15%; text-align: center;">訂單號碼</th>
                         <th style="border: 1px solid #000; padding: 8px; width: 35%; text-align: center;">品  名  規  格</th>
                         <th style="border: 1px solid #000; padding: 8px; width: 8%; text-align: center;">數 量</th>
                         <th style="border: 1px solid #000; padding: 8px; width: 12%; text-align: center;">單 價</th>
@@ -378,12 +412,20 @@ function buildDeliveryPrintHtml(idx, isPreviewMode) {
                 </tbody>
                 <tfoot>
                     <tr>
-                        <td colspan="4" style="border: 1px solid #000; padding: 8px; font-weight: bold; text-align: right;">發票編號：${escapeQuotes(d.paperNo || '')}</td>
+                        <!-- 【去敏】徹底移除原本的發票編號欄位顯示，改留白維持排版 -->
+                        <td colspan="4" style="border: 1px solid #000; padding: 8px; font-weight: bold; text-align: right;"></td>
                         <td style="border: 1px solid #000; padding: 8px; font-weight: bold; text-align: right; background-color: #f9f9f9;">${totalAmount.toLocaleString()}</td>
                         <td style="border: 1px solid #000; padding: 8px; text-align: center; font-weight: bold;">總 計 新 台 幣</td>
                     </tr>
                 </tfoot>
             </table>
+            
+            <div style="margin-top: 15px; font-size: 14px; line-height: 1.6;">
+                <p style="margin-bottom: 15px;">以上貨品數量及單價請查核.</p>
+                <div style="margin-top: 30px;">
+                    <div style="width: 45%;">簽收: <span style="border-bottom: 1px solid #000; display: inline-block; width: 75%;">&nbsp;</span></div>
+                </div>
+            </div>
         </div>
     `;
 }
