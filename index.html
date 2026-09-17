@@ -237,7 +237,27 @@
               </div>
               <input type="search" class="form-control mb-3" id="stkLogSearch" placeholder="🔍 關鍵字模糊搜尋 (操作人員、備註等)..." oninput="renderInvLogs()"><div id="stkLogContainer"></div>
             </div>
-            <div class="tab-pane fade" id="tabStkShip"><div class="alert alert-info small py-2 mb-3">列出所有「開立發票」後，但尚未完成實際出貨的品項明細 (支援分批出貨與叫貨)。</div><div id="stkShipContainer"></div></div>
+            
+            <!-- 【升級】欠貨出貨/訂貨模組增加雙層過濾器 -->
+            <div class="tab-pane fade" id="tabStkShip">
+              <div class="alert alert-info small py-2 mb-3">列出所有「開立發票」後，但尚未完成實際出貨的品項明細 (支援分批出貨與叫貨)。</div>
+              <div class="p-2 bg-light border rounded mb-3">
+                <input type="search" class="form-control mb-2 fw-bold" id="stkShipSearch" placeholder="🔍 模糊搜尋：單號、品名、客戶..." oninput="renderShipments()">
+                <div class="row g-2">
+                  <div class="col-6">
+                    <select class="form-select form-select-sm fw-bold text-secondary" id="stkShipFilterClient" onchange="renderShipments()">
+                      <option value="">🏢 所有客戶</option>
+                    </select>
+                  </div>
+                  <div class="col-6">
+                    <select class="form-select form-select-sm fw-bold text-secondary" id="stkShipFilterName" onchange="renderShipments()">
+                      <option value="">📦 所有品名</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+              <div id="stkShipContainer"></div>
+            </div>
           </div>
         </div>
       </div>
@@ -257,6 +277,8 @@
                   <option value="業務送貨">業務送貨</option>
                   <option value="台中公司送貨">台中公司送貨</option>
                   <option value="台北公司送貨">台北公司送貨</option>
+                  <option value="工廠直送">工廠直送</option>
+                  <option value="親自取貨">親自取貨</option>
                 </select>
               </div>
               <div class="col-6">
@@ -331,10 +353,8 @@
   <div class="modal fade" id="editOrdModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered modal-lg"><div class="modal-content"><div class="modal-header bg-warning"><h5 class="modal-title fw-bold">📦 編輯/建立訂單</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" id="e_ordRow"><div class="mb-3"><label class="small text-muted fw-bold">客戶名稱 <span class="text-danger">*</span></label><input type="text" class="form-control fake-input-btn fw-bold" id="e_ordClient" readonly placeholder="點此選擇客戶..." onclick="openSearchModal('client_ord', selectClientForOrder)"></div><div class="row g-2 mb-3"><div class="col-4"><label class="small text-muted fw-bold">訂單號碼</label><input type="text" class="form-control" id="e_ordNo" placeholder="選填"></div><div class="col-4"><label class="small text-muted fw-bold">申請單位</label><input type="text" class="form-control" id="e_ordDept" placeholder="選填"></div><div class="col-4"><label class="small text-muted fw-bold">出貨期限</label><input type="date" class="form-control text-danger fw-bold" id="e_ordDeadline"></div></div><label class="small text-muted fw-bold border-bottom pb-1 d-block mb-2">品項明細 (雙代碼對照) <span class="text-danger">*</span> <span class="text-primary small fw-normal">(可按住左側把手拖曳排序)</span></label><div id="e_ordItemsContainer"></div><button class="btn btn-outline-primary w-100 fw-bold py-2 mb-4 shadow-sm" onclick="addOrderManualItemRow()">+ 新增品項</button><div class="d-flex gap-2"><button class="btn btn-danger w-50 fw-bold" id="btnDeleteOrd" onclick="deleteOrder()" style="display:none;">作廢刪除</button><button class="btn btn-warning w-100 fw-bold shadow-sm" id="btnSaveOrd" onclick="saveEditOrder()">確認儲存</button></div></div></div></div></div>
   <div class="modal fade" id="adjInvModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header bg-info text-white"><h5 class="modal-title fw-bold">📦 庫存進貨與盤點</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" id="adjRowIdx"><div class="mb-3"><label class="small fw-bold text-muted">品名 (點擊搜尋) <span class="text-danger">*</span></label><input type="text" class="form-control fake-input-btn fw-bold" id="adjName" readonly placeholder="點此搜尋品項..." onclick="openSearchModal('item_adj', selectProductForAdj)"></div><div class="mb-2"><label class="small fw-bold text-muted">長固代號 (自動帶入)</label><input type="text" class="form-control bg-light text-secondary" id="adjInternalCode" readonly placeholder="選定品名後自動帶出"></div><div class="row g-2 mb-2"><div class="col-6"><label class="small fw-bold text-muted">發票號碼 (選填)</label><input type="text" class="form-control" id="adjInvoiceNo" placeholder="廠商出貨發票"></div><div class="col-6"><label class="small fw-bold text-muted">進貨日期 (選填)</label><input type="date" class="form-control" id="adjArrivalDate"></div></div><div class="row g-2 mb-2"><div class="col-6"><label class="small fw-bold text-muted">異動數量 (+/-)</label><input type="number" class="form-control text-primary fw-bold" id="adjQty" inputmode="numeric" step="any"></div><div class="col-6"><label class="small fw-bold text-muted">安全庫存</label><input type="number" class="form-control text-danger fw-bold" id="adjAlert" inputmode="numeric" step="any"></div></div><div class="row g-2 mb-2"><div class="col-6"><label class="small fw-bold text-muted">進貨成本</label><input type="number" class="form-control" id="adjCost" inputmode="numeric" step="any"></div><div class="col-6"><label class="small fw-bold text-muted">供應商</label><input type="text" class="form-control" id="adjSup" placeholder="自動帶入或手填"></div></div><div class="row g-2 mb-3"><div class="col-6"><label class="small fw-bold text-muted">生產批號 (選填)</label><input type="text" class="form-control" id="adjLot"></div><div class="col-6"><label class="small fw-bold text-muted">有效期限 (選填)</label><input type="date" class="form-control" id="adjExp"></div></div><div class="mb-3"><label class="small fw-bold text-muted">異動原因</label><select class="form-select mb-2" id="adjType"><option>進貨入庫</option><option>盤點校正</option><option>退貨</option></select></div><div class="mb-4"><label class="small fw-bold text-muted">備註</label><input type="text" class="form-control" id="adjMemo"></div><button class="btn btn-info text-white w-100 fw-bold py-2" onclick="saveInventoryAdjust()">💾 確認異動</button></div></div></div></div>
   
-  <!-- 【升級】確認出貨視窗 (加入批號選擇與顯示連動) -->
   <div class="modal fade" id="shipModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header bg-primary text-white"><h5 class="modal-title fw-bold">🚚 確認出貨數量與批號</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" id="shipRowIdx"><h6 id="shipItemName" class="fw-bold mb-3 border-bottom pb-2"></h6><div class="d-flex justify-content-between mb-3"><span class="text-muted">訂購數：<strong id="shipTotalQty">0</strong></span><span class="text-muted">已出：<strong id="shipDoneQty">0</strong></span><span class="text-danger fw-bold">尚欠數：<strong id="shipRemainQty" class="fs-5">0</strong></span></div><div class="mb-3"><label class="fw-bold small text-muted">選擇出貨批號</label><select class="form-select fw-bold border-primary" id="shipBatchSelect" onchange="updateShipBatchInfo()"></select></div><div class="row g-2 mb-3 bg-light p-2 rounded border"><div class="col-6"><label class="fw-bold small text-muted">該批號效期</label><div id="shipBatchExp" class="text-dark fw-bold">--</div></div><div class="col-6"><label class="fw-bold small text-muted">該批號庫存量</label><div id="shipBatchStock" class="text-success fw-bold fs-5">0</div></div></div><div class="mb-3"><label class="fw-bold">本次實際出貨數量</label><input type="number" class="form-control form-control-lg text-primary fw-bold text-center" id="shipNowQty" min="0" step="any" inputmode="numeric"></div><button class="btn btn-primary w-100 fw-bold py-3 fs-5 shadow-sm" onclick="confirmShipment()">確認扣庫出貨</button></div></div></div></div>
   
-  <!-- 【全新】修改異動紀錄批號視窗 -->
   <div class="modal fade" id="editBatchModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header bg-warning"><h5 class="modal-title fw-bold">📝 修改出貨批號</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><div class="alert alert-warning small fw-bold">注意：修改批號將會自動「返還舊批號庫存」並「重新扣除新批號庫存」。</div><input type="hidden" id="eb_logRowIdx"><input type="hidden" id="eb_itemName"><input type="hidden" id="eb_changeQty"><input type="hidden" id="eb_oldLot"><div class="mb-3"><label class="small fw-bold text-muted">目前批號</label><input type="text" class="form-control bg-light fw-bold" id="eb_currentLotDisplay" readonly></div><div class="mb-4"><label class="small fw-bold text-primary">選擇要變更為哪一個批號？</label><select class="form-select fw-bold border-primary form-select-lg" id="eb_newBatchSelect"></select></div><button class="btn btn-warning w-100 fw-bold py-3 shadow-sm" onclick="confirmEditBatch()">確認修改並自動運算庫存</button></div></div></div></div>
 
   <div class="modal fade" id="editInvModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header bg-warning"><h5 class="modal-title fw-bold">✏️ 編輯發票紀錄</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" id="e_invRow"><div class="mb-2"><label class="small text-muted fw-bold">發票號碼</label><input type="text" class="form-control fw-bold" id="e_invPaper" style="text-transform: uppercase;"></div><div class="mb-2"><label class="small text-muted fw-bold">訂單號碼</label><input type="text" class="form-control" id="e_invOrder"></div><div class="row g-2 mb-2"><div class="col-6"><label class="small text-muted fw-bold">銷售額(未稅)</label><input type="number" class="form-control" id="e_invNet"></div><div class="col-6"><label class="small text-muted fw-bold">總計(含稅)</label><input type="number" class="form-control text-danger fw-bold" id="e_invTotal"></div></div><div class="mb-3"><label class="small text-muted fw-bold">購買明細</label><textarea class="form-control" id="e_invDetails" rows="4"></textarea></div><button class="btn btn-warning w-100 fw-bold py-2" onclick="saveEditInvoice()">確認修改</button></div></div></div></div>
@@ -424,6 +444,7 @@
           </div>
           <div class="mb-3">
             <label class="small fw-bold text-muted">送貨方式 <span class="text-danger">*</span></label>
+            <!-- 擴充「工廠直送」與「親自取貨」選項 -->
             <select class="form-select form-select-lg fw-bold" id="da_method">
               <option value="">請選擇送貨方式...</option>
               <option value="新竹貨運">新竹貨運</option>
@@ -432,6 +453,8 @@
               <option value="業務送貨">業務送貨</option>
               <option value="台中公司送貨">台中公司送貨</option>
               <option value="台北公司送貨">台北公司送貨</option>
+              <option value="工廠直送">工廠直送</option>
+              <option value="親自取貨">親自取貨</option>
             </select>
           </div>
           <div class="mb-4">
@@ -499,7 +522,6 @@
   <script src="module_invoice_history.js"></script>
   <script src="module_inventory_admin.js"></script>
   <script src="module_quotation.js"></script>
-  <!-- 【全新】匯入送貨追蹤與電子簽收模組 -->
   <script src="module_delivery.js"></script>
 
 </body>
