@@ -80,7 +80,6 @@ window.renderInventory = debounce(function() {
         
         if (v.qty <= v.alertQty) alertHTML = `<div class="small text-danger fw-bold mt-1">⚠️ 低於安全庫存 (${v.alertQty})</div>`;
         
-        // 【套用安全防護罩】
         let batches = window.parseBatchesSafely(v.batchesStr, v.qty);
         let batchDisplay = '';
         if (batches.length === 1) {
@@ -226,7 +225,6 @@ window.openEditBatchModal = function(idx) {
     select.innerHTML = '<option value="">不分批 (退回總庫存)</option>';
     
     if (inv && inv.batchesStr) {
-        // 【套用安全防護罩】
         let batches = window.parseBatchesSafely(inv.batchesStr, inv.qty);
         batches.forEach(b => {
             select.innerHTML += `<option value="${escapeQuotes(b.lot)}" data-exp="${escapeQuotes(b.exp)}">${b.lot} (目前庫存: ${b.qty}, 效期: ${b.exp})</option>`;
@@ -315,7 +313,6 @@ window.selectProductForAdj = function(val) {
         }
     } 
     
-    // 【修復】檢查是否已存在庫存清單中，若有則自動帶入 rowIdx 與其他既有參數
     const existingInv = globalInventory.find(x => x.name === val);
     if (existingInv) {
         document.getElementById('adjRowIdx').value = existingInv.rowIdx;
@@ -350,17 +347,16 @@ window.saveInventoryAdjust = function() {
         invoiceNo: invoiceNo, arrivalDate: arrivalDate, staff: myName 
     };
 
-    let currentNewQty = changeQty; // 【修復】獨立安全變數
+    let currentNewQty = changeQty;
 
     if(idx) { 
         const v = globalInventory.find(x => x.rowIdx === parseInt(idx)); 
         if(v) { 
             v.qty += changeQty; 
-            currentNewQty = v.qty; // 使用安全變數取代危險的 find().qty
+            currentNewQty = v.qty; 
             v.alertQty = alertQty; v.cost = cost; v.supplier = sup; 
             if(internalCode) v.internalCode = internalCode; 
             
-            // 【套用安全防護罩】
             let batches = window.parseBatchesSafely(v.batchesStr, v.qty);
             if (lot || exp) {
                 let bIdx = batches.findIndex(b => b.lot === lot && b.exp === exp);
@@ -387,19 +383,64 @@ window.saveInventoryAdjust = function() {
     if(typeof window.populateLogDropdowns === 'function') window.populateLogDropdowns(); 
     window.renderInventory(); 
     window.renderInvLogs(); 
-    bootstrap.Modal.getOrCreateInstance(document.getElementById('adjInvModal')).hide(); // 【修復】絕對安全的視窗關閉機制
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('adjInvModal')).hide(); 
     pushToSyncQueue('adjustInventory', payload, null);
 };
 
 // ============================================================================
 // 欠貨出貨與批號連動選擇 (Shipment)
 // ============================================================================
-window.renderShipments = function() {
+let lastPendingShipmentCount = -1;
+
+window.updateShipmentDropdowns = function(pendingArr) {
+    const clients = [...new Set(pendingArr.map(s => s.client).filter(x => x))].sort();
+    const names = [...new Set(pendingArr.map(s => s.name).filter(x => x))].sort();
+
+    const clientSelect = document.getElementById('stkShipFilterClient');
+    if (clientSelect) {
+        const currentClient = clientSelect.value;
+        clientSelect.innerHTML = '<option value="">🏢 所有客戶</option>' + clients.map(c => `<option value="${escapeQuotes(c)}">${c}</option>`).join('');
+        if (clients.includes(currentClient)) clientSelect.value = currentClient;
+    }
+
+    const nameSelect = document.getElementById('stkShipFilterName');
+    if (nameSelect) {
+        const currentName = nameSelect.value;
+        nameSelect.innerHTML = '<option value="">📦 所有品名</option>' + names.map(n => `<option value="${escapeQuotes(n)}">${n}</option>`).join('');
+        if (names.includes(currentName)) nameSelect.value = currentName;
+    }
+};
+
+window.renderShipments = debounce(function() {
     const c = document.getElementById('stkShipContainer'); 
-    const pending = globalSalesDetails.filter(s => s.shipStatus !== '已結案' && s.shipStatus !== '作廢');
-    if(pending.length === 0) return c.innerHTML = '<div class="text-center text-muted py-4">✅ 所有已開立發票之品項皆已全數出貨完畢</div>';
+    const pendingAll = globalSalesDetails.filter(s => s.shipStatus !== '已結案' && s.shipStatus !== '作廢');
     
-    c.innerHTML = pending.map(s => {
+    // 【雙層篩選器動態載入】只要未結案項目總數有變動，就重新整理一次下拉選單
+    if (pendingAll.length !== lastPendingShipmentCount) {
+        window.updateShipmentDropdowns(pendingAll);
+        lastPendingShipmentCount = pendingAll.length;
+    }
+
+    const term = (document.getElementById('stkShipSearch').value || '').toLowerCase();
+    const fClient = document.getElementById('stkShipFilterClient').value;
+    const fName = document.getElementById('stkShipFilterName').value;
+
+    let filtered = pendingAll;
+
+    if (fClient) filtered = filtered.filter(s => s.client === fClient);
+    if (fName) filtered = filtered.filter(s => s.name === fName);
+    if (term) {
+        filtered = filtered.filter(s => 
+            (s.client || '').toLowerCase().includes(term) ||
+            (s.name || '').toLowerCase().includes(term) ||
+            (s.paperNo || '').toLowerCase().includes(term) ||
+            (s.orderNo || '').toLowerCase().includes(term)
+        );
+    }
+    
+    if(filtered.length === 0) return c.innerHTML = '<div class="text-center text-muted py-4">✅ 無符合條件的欠貨項目</div>';
+    
+    c.innerHTML = filtered.map(s => {
         let remain = s.qty - s.shippedQty;
         return `<div class="item-row bg-white shadow-sm mb-2">
             <div class="d-flex justify-content-between mb-2">
@@ -412,7 +453,7 @@ window.renderShipments = function() {
             <div class="d-flex gap-3 small"><span class="text-secondary">總訂購: ${s.qty}</span><span class="text-success">已出: ${s.shippedQty}</span><span class="text-danger fw-bold">欠貨: ${remain}</span></div>
         </div>`;
     }).join('');
-};
+}, 300);
 
 window.openShipModal = function(rowIdx) {
     const s = globalSalesDetails.find(x => x.rowIdx === rowIdx); if(!s) return;
@@ -429,7 +470,6 @@ window.openShipModal = function(rowIdx) {
     const batchSelect = document.getElementById('shipBatchSelect');
     batchSelect.innerHTML = '';
     if (inv && inv.batchesStr) {
-        // 【套用安全防護罩】
         let batches = window.parseBatchesSafely(inv.batchesStr, inv.qty);
         if (batches.length > 0) {
             batchSelect.innerHTML = '<option value="">不指定批號 (自動扣減總庫存)</option>' +
@@ -475,7 +515,6 @@ window.confirmShipment = function() {
     if (inv) {
         inv.qty -= qty;
         if (batchTarget) {
-            // 【套用安全防護罩】
             let batches = window.parseBatchesSafely(inv.batchesStr, inv.qty + qty);
             let bIdx = batches.findIndex(b => b.lot === batchTarget);
             if (bIdx >= 0) {
@@ -496,8 +535,7 @@ window.confirmShipment = function() {
     
     if(typeof window.populateLogDropdowns === 'function') window.populateLogDropdowns(); 
     window.renderInvLogs(); window.renderInventory(); window.renderShipments(); 
-    bootstrap.Modal.getOrCreateInstance(document.getElementById('shipModal')).show(); 
-    bootstrap.Modal.getOrCreateInstance(document.getElementById('shipModal')).hide(); // 修復關閉
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('shipModal')).hide(); 
     
     pushToSyncQueue('updateShipment', {
         updates: [{rowIdx: rowIdx, paperNo: s.paperNo, client: s.client, name: s.name, shipQty: qty, totalQty: s.qty, batchTarget: batchTarget}], 
