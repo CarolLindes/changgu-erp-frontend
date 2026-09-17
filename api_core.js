@@ -23,7 +23,7 @@ let globalInventory = [];
 let globalSalesDetails = []; 
 let globalInvLogs = []; 
 let globalQuotes = []; 
-let globalDeliveries = []; // 【全新】送貨追蹤總表全域陣列
+let globalDeliveries = []; 
 let emailSettingsData = { list: [], selected: [] };
 
 let myLastSyncTime = 0;
@@ -82,7 +82,6 @@ function triggerSync() {
     const task = bgSyncQueue[0];
     
     clearTimeout(syncTimeoutTimer);
-    // 【優化】將 timeout 縮短到 28 秒，提早攔截 Google 30 秒的硬性超時限制
     syncTimeoutTimer = setTimeout(() => {
         console.warn("同步超時(已達28秒)，準備於背景重試", task.action);
         task.retry += 1;
@@ -207,7 +206,6 @@ function translateTaskDesc(t) {
         case 'unmergeQuotations': return `✂️ 解除合併估價單`;
         case 'updateQuotationStatus': return `🔄 更改估價單狀態 | 新狀態: ${p.status}`;
         case 'splitAndVoidQuotationItems': return `🗑️ 拆分作廢估價單品項 | 單號: ${p.quoteNo}`;
-        // 【全新】送貨與批號系統翻譯
         case 'updateDeliveryInfo': return `🚚 更新送貨資訊 | 狀態: ${p.status||''}`;
         case 'updateDeliveryStatus': return `📦 送貨狀態變更 | 動作: ${p.action === 'sign' ? '簽收結案' : '退回待送'}`;
         case 'editInvLogBatch': return `🔄 修改出貨批號 | 品名: ${p.name||'未知'} -> 新批號: ${p.newLot||'不分批'}`;
@@ -259,7 +257,7 @@ function silentRefreshData() {
     callApi('getInitData', {}).then(res => {
         globalClients = res.clients||[]; globalSuppliers = res.suppliers||[]; globalCatalog = res.catalog||[]; globalHistory = res.history||[]; globalOrders = res.orders||[]; globalInventory = res.inventory||[]; globalSalesDetails = res.salesDetails||[]; globalInvLogs = res.invLogs||[];
         globalQuotes = res.quotes || []; 
-        globalDeliveries = res.deliveries || []; // 【同步更新】
+        globalDeliveries = res.deliveries || []; 
         if (res.emailSettings) emailSettingsData = res.emailSettings;
         myLastSyncTime = res.serverSyncTime || Date.now();
         
@@ -288,7 +286,6 @@ function silentRefreshData() {
         if(document.getElementById('sys-quotation') && document.getElementById('sys-quotation').style.display === 'block') {
             if (typeof window.renderQuotationList === "function") window.renderQuotationList(); 
         }
-        // 【新增連動】
         if(document.getElementById('sys-delivery') && document.getElementById('sys-delivery').style.display === 'block') {
             if (typeof window.renderDeliveryList === "function") window.renderDeliveryList(); 
         }
@@ -317,7 +314,7 @@ function debounce(func, delay = 300) {
 }
 
 // ============================================================================
-// 【強制隱藏浮水印】動態切換紙張版型與防擠壓預覽系統
+// 動態切換紙張版型與防擠壓預覽系統
 // ============================================================================
 window.applyPrintStyle = function(size, layout) {
     let styleNode = document.getElementById('dynamicPrintStyle');
@@ -328,7 +325,6 @@ window.applyPrintStyle = function(size, layout) {
     }
     
     styleNode.innerHTML = `
-    /* 【關鍵修正】強制在最頂層宣告邊界為 0，徹底消滅頁首頁尾浮水印 */
     @page { size: ${size} ${layout}; margin: 0mm !important; }
 
     @media screen {
@@ -351,7 +347,6 @@ window.showPrintPreview = function(areaId) {
     document.getElementById('mainApp').style.display = 'none';
     document.getElementById('homeMenu').style.display = 'none';
     
-    // 【擴充】包含 printDeliveryArea
     ['printArea', 'printPoArea', 'printQuoteArea', 'printDeliveryArea'].forEach(id => {
         const el = document.getElementById(id);
         if(el) {
@@ -403,7 +398,6 @@ window.closePrintPreview = function() {
             el.style.width = '';
             el.style.overflowX = '';
             el.style.padding = '';
-            // 【優化】使用 replaceChildren() 徹底且安全地清空 DOM 節點，防止事件監聽器殘留
             el.replaceChildren(); 
         }
     });
@@ -462,14 +456,27 @@ window.onload = function() {
         document.getElementById('splashScreen').style.display = 'none'; 
         document.getElementById('authScreen').style.display = 'flex'; 
     }
+    
+    // ============================================================================
+    // 【升級】智能心跳與靜默同步系統 (每 15 秒觸發)
+    // ============================================================================
     setInterval(() => { 
         if(document.getElementById('mainApp') && document.getElementById('mainApp').style.display === 'block') { 
-            callApi('heartbeat', { uid: myUid }).then(count => { 
+            callApi('heartbeat', { uid: myUid }).then(res => { 
+                let count = typeof res === 'object' ? res.count : res;
+                let sTime = typeof res === 'object' ? res.serverSyncTime : null;
+                
                 if(document.getElementById('mqOnline')) document.getElementById('mqOnline').innerText = `👥 ${count} 人`; 
                 if(document.getElementById('navOnlineCount')) document.getElementById('navOnlineCount').innerText = `👥 ${count}`; 
+                
+                // 靜默更新：若遠端有更新，且本地沒有正在上傳的佇列，便在背景無感刷新
+                if (sTime && sTime > myLastSyncTime && !isSyncing && bgSyncQueue.length === 0) {
+                    console.log("偵測到背景資料更新，執行靜默同步...");
+                    silentRefreshData();
+                }
             }).catch(e => console.log('心跳同步失敗', e)); 
         } 
-    }, 60000);
+    }, 15000); 
 };
 
 window.loginSystem = function() {
@@ -497,7 +504,7 @@ window.initSystemData = function() {
         clearInterval(intv); setProgress(100, '✅ 準備完成！');
         globalClients = res.clients || []; globalSuppliers = res.suppliers || []; globalCatalog = res.catalog || []; globalHistory = res.history || []; globalOrders = res.orders || []; globalInventory = res.inventory || []; globalSalesDetails = res.salesDetails || []; globalInvLogs = res.invLogs || [];
         globalQuotes = res.quotes || []; 
-        globalDeliveries = res.deliveries || []; // 【同步更新】
+        globalDeliveries = res.deliveries || []; 
         if (res.emailSettings) emailSettingsData = res.emailSettings;
         myLastSyncTime = res.serverSyncTime || Date.now();
         
@@ -529,7 +536,7 @@ window.refreshData = function() {
     callApi('getInitData', {}).then(res => {
         globalClients = res.clients||[]; globalSuppliers = res.suppliers||[]; globalCatalog = res.catalog||[]; globalHistory = res.history||[]; globalOrders = res.orders||[]; globalInventory = res.inventory||[]; globalSalesDetails = res.salesDetails||[]; globalInvLogs = res.invLogs||[];
         globalQuotes = res.quotes || []; 
-        globalDeliveries = res.deliveries || []; // 【同步更新】
+        globalDeliveries = res.deliveries || []; 
         if (res.emailSettings) emailSettingsData = res.emailSettings;
         myLastSyncTime = res.serverSyncTime || Date.now();
         
@@ -560,7 +567,6 @@ window.refreshData = function() {
         if(document.getElementById('sys-quotation') && document.getElementById('sys-quotation').style.display === 'block') {
             if (typeof window.renderQuotationList === "function") window.renderQuotationList(); 
         }
-        // 【新增連動】
         if(document.getElementById('sys-delivery') && document.getElementById('sys-delivery').style.display === 'block') {
             if (typeof window.renderDeliveryList === "function") window.renderDeliveryList(); 
         }
@@ -571,7 +577,6 @@ window.enterSystem = function(modId) {
     document.getElementById('homeMenu').style.display = 'none'; document.getElementById('mainApp').style.display = 'block';
     document.querySelectorAll('.sys-module').forEach(el => el.style.display = 'none'); document.getElementById(`sys-${modId}`).style.display = 'block';
     
-    // 【擴充】新增 title
     const titles = {'order':'📦 訂單辨識建檔', 'invoice':'📝 開立發票', 'inventory': '🏭 產品庫存管理', 'history':'📊 紀錄與報表', 'admin':'⚙️ 管理員後台', 'quotation': '📑 開立估價單', 'delivery': '🚚 送貨與電子簽收'}; 
     
     if(document.getElementById('sysTitle')) document.getElementById('sysTitle').innerText = titles[modId]; 
@@ -596,7 +601,6 @@ window.enterSystem = function(modId) {
     if(modId === 'quotation') {
         if (typeof window.renderQuotationList === "function") window.renderQuotationList(); 
     }
-    // 【新增連動】
     if(modId === 'delivery') {
         if (typeof window.renderDeliveryList === "function") window.renderDeliveryList(); 
     }
