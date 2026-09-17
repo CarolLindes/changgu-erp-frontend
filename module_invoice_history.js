@@ -190,7 +190,7 @@ window.submitInvoiceOptimistic = function() {
         globalSalesDetails.unshift({ 
             rowIdx: tempIdx, time: invDateTimestamp, paperNo: paperNo, client: payload.clientName, 
             orderNo: orderNo, name: pi.name, qty: pi.qty, price: pi.price, subtotal: pi.subtotal, 
-            shippedQty: 0, shipStatus: '待出貨' 
+            shippedQty: 0, shipStatus: '待出貨', lot: '', expiry: ''
         }); 
     });
     
@@ -336,7 +336,7 @@ window.confirmSupplementInvoice = function() {
 };
 
 // ============================================================================
-// 出貨單列印 (已優化：日期淨化、訂單號碼移位、移除備考、加入安全縮排)
+// 出貨單列印 (已完美結合明細中的批號與效期)
 // ============================================================================
 window.printDeliveryNote = function(idx) {
     const h = globalHistory.find(x => x.rowIdx === idx); 
@@ -348,21 +348,14 @@ window.printDeliveryNote = function(idx) {
     let tbodyHtml = '';
     if (items.length > 0) {
         items.forEach(item => {
-            const inv = globalInventory.find(v => v.name === item.name);
-            
-            // 【日期淨化】把效期的台北標準時間轉換為乾淨的 YYYY/MM/DD
+            // 【完美升級】直接使用明細裡綁定的批號與效期 (經過 Code.gs 自動升級與回填)
             let expClean = '';
-            if (inv && inv.expiry) {
-                let d = new Date(inv.expiry);
-                if (!isNaN(d.getTime())) {
-                    expClean = `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`;
-                } else {
-                    expClean = inv.expiry; // 若為純文字則保留
-                }
+            if (item.expiry) {
+                // 如果是格式化日期就淨化它，如果不是就保留原樣
+                expClean = (typeof cleanDateStr === 'function') ? cleanDateStr(item.expiry).replace(/-/g, '/') : item.expiry;
             }
-            const lotExp = inv ? `${inv.lot||''} ${expClean}`.trim() : '';
+            const lotExp = `${item.lot || ''} ${expClean}`.trim();
 
-            // 【版面優化】移除 td 裡面的訂單號碼
             tbodyHtml += `
                 <tr>
                     <td style="border: 1px solid #333; padding: 8px; text-align: left;">${item.name}</td>
@@ -385,7 +378,6 @@ window.printDeliveryNote = function(idx) {
                     <td style="width: 50%; vertical-align: top;">
                         <div style="font-weight: bold; font-size: 16px;">TO:</div>
                         <div style="font-weight: bold; font-size: 22px; margin-top: 5px; letter-spacing: 2px;">${h.client}</div>
-                        <!-- 【版面優化】將訂單號碼移至此處 -->
                         <div style="margin-top: 10px; font-weight: bold; font-size: 15px; color: #d32f2f;">訂單號碼: ${escapeQuotes(h.orderNo || '無')}</div>
                     </td>
                     <td style="width: 50%; vertical-align: top; font-size: 14px; line-height: 1.6; text-align: right;">
@@ -405,7 +397,6 @@ window.printDeliveryNote = function(idx) {
                         <th style="border: 1px solid #333; padding: 8px; width: 60px; text-align: center;">數量</th>
                         <th style="border: 1px solid #333; padding: 8px; width: 60px; text-align: center;">欠貨</th>
                         <th style="border: 1px solid #333; padding: 8px; width: 80px; text-align: center;">單價</th>
-                        <!-- 【版面優化】表頭移除「客戶訂單號」字樣 -->
                         <th style="border: 1px solid #333; padding: 8px; width: 120px; text-align: center;">小計</th>
                         <th style="border: 1px solid #333; padding: 8px; width: 100px; text-align: center;">批號/效期</th>
                     </tr>
@@ -426,7 +417,6 @@ window.printDeliveryNote = function(idx) {
                 <p style="margin-bottom: 5px;">以上貨品數量及單價請查核.</p>
                 <p style="margin-bottom: 15px;">附發票號碼: <strong style="font-size: 16px;">${h.paperNo || ''}</strong></p>
                 <div style="margin-top: 30px;">
-                    <!-- 【版面優化】移除備考，只留簽收線條 -->
                     <div style="width: 45%;">簽收: <span style="border-bottom: 1px solid #000; display: inline-block; width: 75%;">&nbsp;</span></div>
                 </div>
             </div>
