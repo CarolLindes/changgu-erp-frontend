@@ -59,6 +59,8 @@
       <div class="home-card c-inv" onclick="enterSystem('invoice')"><div class="fs-1 mb-2">📝</div><h6 class="fw-bold text-primary mb-1">開立發票作業</h6></div>
       <div class="home-card c-quo" onclick="enterSystem('quotation')" style="border-bottom-color: #6f42c1; grid-column: span 2;"><div class="fs-1 mb-2">📑</div><h5 class="fw-bold mb-1" style="color: #6f42c1;">開立估價單</h5></div>
       <div class="home-card c-stk" onclick="enterSystem('inventory')"><div class="fs-1 mb-2">🏭</div><h5 class="fw-bold text-info mb-1">產品庫存管理</h5></div>
+      <!-- 全新送貨追蹤模組入口 -->
+      <div class="home-card c-del" onclick="enterSystem('delivery')" style="border-bottom-color: #fd7e14; grid-column: span 2;"><div class="fs-1 mb-2">🚚</div><h5 class="fw-bold mb-1" style="color: #fd7e14;">送貨與電子簽收</h5></div>
       <div class="home-card c-rep" onclick="enterSystem('history')"><div class="fs-1 mb-2">📊</div><h5 class="fw-bold text-success mb-1">發票紀錄與報表</h5></div>
       <div class="home-card c-mgr" onclick="enterSystem('admin')"><div class="fs-1 mb-2">⚙️</div><h5 class="fw-bold text-danger mb-1">管理員後台</h5></div>
     </div>
@@ -240,6 +242,54 @@
         </div>
       </div>
 
+      <!-- 🚚 全新送貨追蹤模組 -->
+      <div id="sys-delivery" class="sys-module" style="display:none;">
+        <div class="step-card active border-top border-4" style="border-color: #fd7e14;">
+          <div class="p-2 bg-light border rounded mb-3">
+            <input type="search" class="form-control mb-2 fw-bold" id="delSearchInput" placeholder="🔍 搜尋：客戶、品名、單號..." oninput="renderDeliveryList()">
+            <div class="row g-2 mt-2">
+              <div class="col-6">
+                <select class="form-select form-select-sm fw-bold text-secondary" id="delFilterMethod" onchange="renderDeliveryList()">
+                  <option value="">🚚 所有送貨方式</option>
+                  <option value="新竹貨運">新竹貨運</option>
+                  <option value="郵局寄送">郵局寄送</option>
+                  <option value="便利袋">便利袋</option>
+                  <option value="業務送貨">業務送貨</option>
+                  <option value="台中公司送貨">台中公司送貨</option>
+                  <option value="台北公司送貨">台北公司送貨</option>
+                </select>
+              </div>
+              <div class="col-6">
+                <select class="form-select form-select-sm fw-bold text-secondary" id="delFilterStatus" onchange="renderDeliveryList()">
+                  <option value="">所有狀態</option>
+                  <option value="待送貨">🟡 待送貨</option>
+                  <option value="已送貨">🟢 已送貨</option>
+                  <option value="已結案">✅ 已結案(簽收)</option>
+                </select>
+              </div>
+            </div>
+            <div class="d-flex justify-content-between align-items-center mt-3 border-top pt-2">
+              <span class="small text-muted fw-bold">批次操作 (勾選待送貨)：</span>
+              <button class="btn btn-sm btn-primary fw-bold" onclick="groupExecuteDelivery()">🚚 批次執行送貨</button>
+            </div>
+          </div>
+          
+          <ul class="nav nav-pills nav-fill mb-3" id="delTabs">
+            <li class="nav-item"><button class="nav-link active fw-bold py-2" data-bs-toggle="pill" data-bs-target="#tabDelPending">🟡 待送貨</button></li>
+            <li class="nav-item"><button class="nav-link fw-bold py-2" data-bs-toggle="pill" data-bs-target="#tabDelCompleted">🟢 已送貨 / 已結案</button></li>
+          </ul>
+          
+          <div class="tab-content">
+            <div class="tab-pane fade show active" id="tabDelPending">
+              <div id="delPendingListContainer"></div>
+            </div>
+            <div class="tab-pane fade" id="tabDelCompleted">
+              <div id="delCompletedListContainer"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- 📊 報表模組 -->
       <div id="sys-history" class="sys-module" style="display:none;">
         <div class="step-card active border-top border-4 border-success">
@@ -280,20 +330,25 @@
   <!-- 各類表單彈跳視窗 -->
   <div class="modal fade" id="editOrdModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered modal-lg"><div class="modal-content"><div class="modal-header bg-warning"><h5 class="modal-title fw-bold">📦 編輯/建立訂單</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" id="e_ordRow"><div class="mb-3"><label class="small text-muted fw-bold">客戶名稱 <span class="text-danger">*</span></label><input type="text" class="form-control fake-input-btn fw-bold" id="e_ordClient" readonly placeholder="點此選擇客戶..." onclick="openSearchModal('client_ord', selectClientForOrder)"></div><div class="row g-2 mb-3"><div class="col-4"><label class="small text-muted fw-bold">訂單號碼</label><input type="text" class="form-control" id="e_ordNo" placeholder="選填"></div><div class="col-4"><label class="small text-muted fw-bold">申請單位</label><input type="text" class="form-control" id="e_ordDept" placeholder="選填"></div><div class="col-4"><label class="small text-muted fw-bold">出貨期限</label><input type="date" class="form-control text-danger fw-bold" id="e_ordDeadline"></div></div><label class="small text-muted fw-bold border-bottom pb-1 d-block mb-2">品項明細 (雙代碼對照) <span class="text-danger">*</span> <span class="text-primary small fw-normal">(可按住左側把手拖曳排序)</span></label><div id="e_ordItemsContainer"></div><button class="btn btn-outline-primary w-100 fw-bold py-2 mb-4 shadow-sm" onclick="addOrderManualItemRow()">+ 新增品項</button><div class="d-flex gap-2"><button class="btn btn-danger w-50 fw-bold" id="btnDeleteOrd" onclick="deleteOrder()" style="display:none;">作廢刪除</button><button class="btn btn-warning w-100 fw-bold shadow-sm" id="btnSaveOrd" onclick="saveEditOrder()">確認儲存</button></div></div></div></div></div>
   <div class="modal fade" id="adjInvModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header bg-info text-white"><h5 class="modal-title fw-bold">📦 庫存進貨與盤點</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" id="adjRowIdx"><div class="mb-3"><label class="small fw-bold text-muted">品名 (點擊搜尋) <span class="text-danger">*</span></label><input type="text" class="form-control fake-input-btn fw-bold" id="adjName" readonly placeholder="點此搜尋品項..." onclick="openSearchModal('item_adj', selectProductForAdj)"></div><div class="mb-2"><label class="small fw-bold text-muted">長固代號 (自動帶入)</label><input type="text" class="form-control bg-light text-secondary" id="adjInternalCode" readonly placeholder="選定品名後自動帶出"></div><div class="row g-2 mb-2"><div class="col-6"><label class="small fw-bold text-muted">發票號碼 (選填)</label><input type="text" class="form-control" id="adjInvoiceNo" placeholder="廠商出貨發票"></div><div class="col-6"><label class="small fw-bold text-muted">進貨日期 (選填)</label><input type="date" class="form-control" id="adjArrivalDate"></div></div><div class="row g-2 mb-2"><div class="col-6"><label class="small fw-bold text-muted">異動數量 (+/-)</label><input type="number" class="form-control text-primary fw-bold" id="adjQty" inputmode="numeric" step="any"></div><div class="col-6"><label class="small fw-bold text-muted">安全庫存</label><input type="number" class="form-control text-danger fw-bold" id="adjAlert" inputmode="numeric" step="any"></div></div><div class="row g-2 mb-2"><div class="col-6"><label class="small fw-bold text-muted">進貨成本</label><input type="number" class="form-control" id="adjCost" inputmode="numeric" step="any"></div><div class="col-6"><label class="small fw-bold text-muted">供應商</label><input type="text" class="form-control" id="adjSup" placeholder="自動帶入或手填"></div></div><div class="row g-2 mb-3"><div class="col-6"><label class="small fw-bold text-muted">生產批號 (選填)</label><input type="text" class="form-control" id="adjLot"></div><div class="col-6"><label class="small fw-bold text-muted">有效期限 (選填)</label><input type="date" class="form-control" id="adjExp"></div></div><div class="mb-3"><label class="small fw-bold text-muted">異動原因</label><select class="form-select mb-2" id="adjType"><option>進貨入庫</option><option>盤點校正</option><option>退貨</option></select></div><div class="mb-4"><label class="small fw-bold text-muted">備註</label><input type="text" class="form-control" id="adjMemo"></div><button class="btn btn-info text-white w-100 fw-bold py-2" onclick="saveInventoryAdjust()">💾 確認異動</button></div></div></div></div>
-  <div class="modal fade" id="shipModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header bg-primary text-white"><h5 class="modal-title fw-bold">🚚 確認出貨數量</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" id="shipRowIdx"><h6 id="shipItemName" class="fw-bold mb-3"></h6><div class="d-flex justify-content-between mb-2"><span class="text-muted">訂購總數：<strong id="shipTotalQty">0</strong></span><span class="text-muted">已出貨：<strong id="shipDoneQty">0</strong></span><span class="text-danger fw-bold">尚欠數：<strong id="shipRemainQty">0</strong></span></div><div class="mb-3"><label class="fw-bold">本次實際出貨數量</label><input type="number" class="form-control form-control-lg text-primary fw-bold text-center" id="shipNowQty" min="0" step="any" inputmode="numeric"></div><button class="btn btn-primary w-100 fw-bold py-2" onclick="confirmShipment()">確認扣庫出貨</button></div></div></div></div>
+  
+  <!-- 【升級】確認出貨視窗 (加入批號選擇與顯示連動) -->
+  <div class="modal fade" id="shipModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header bg-primary text-white"><h5 class="modal-title fw-bold">🚚 確認出貨數量與批號</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" id="shipRowIdx"><h6 id="shipItemName" class="fw-bold mb-3 border-bottom pb-2"></h6><div class="d-flex justify-content-between mb-3"><span class="text-muted">訂購數：<strong id="shipTotalQty">0</strong></span><span class="text-muted">已出：<strong id="shipDoneQty">0</strong></span><span class="text-danger fw-bold">尚欠數：<strong id="shipRemainQty" class="fs-5">0</strong></span></div><div class="mb-3"><label class="fw-bold small text-muted">選擇出貨批號</label><select class="form-select fw-bold border-primary" id="shipBatchSelect" onchange="updateShipBatchInfo()"></select></div><div class="row g-2 mb-3 bg-light p-2 rounded border"><div class="col-6"><label class="fw-bold small text-muted">該批號效期</label><div id="shipBatchExp" class="text-dark fw-bold">--</div></div><div class="col-6"><label class="fw-bold small text-muted">該批號庫存量</label><div id="shipBatchStock" class="text-success fw-bold fs-5">0</div></div></div><div class="mb-3"><label class="fw-bold">本次實際出貨數量</label><input type="number" class="form-control form-control-lg text-primary fw-bold text-center" id="shipNowQty" min="0" step="any" inputmode="numeric"></div><button class="btn btn-primary w-100 fw-bold py-3 fs-5 shadow-sm" onclick="confirmShipment()">確認扣庫出貨</button></div></div></div></div>
+  
+  <!-- 【全新】修改異動紀錄批號視窗 -->
+  <div class="modal fade" id="editBatchModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header bg-warning"><h5 class="modal-title fw-bold">📝 修改出貨批號</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><div class="alert alert-warning small fw-bold">注意：修改批號將會自動「返還舊批號庫存」並「重新扣除新批號庫存」。</div><input type="hidden" id="eb_logRowIdx"><input type="hidden" id="eb_itemName"><input type="hidden" id="eb_changeQty"><input type="hidden" id="eb_oldLot"><div class="mb-3"><label class="small fw-bold text-muted">目前批號</label><input type="text" class="form-control bg-light fw-bold" id="eb_currentLotDisplay" readonly></div><div class="mb-4"><label class="small fw-bold text-primary">選擇要變更為哪一個批號？</label><select class="form-select fw-bold border-primary form-select-lg" id="eb_newBatchSelect"></select></div><button class="btn btn-warning w-100 fw-bold py-3 shadow-sm" onclick="confirmEditBatch()">確認修改並自動運算庫存</button></div></div></div></div>
+
   <div class="modal fade" id="editInvModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header bg-warning"><h5 class="modal-title fw-bold">✏️ 編輯發票紀錄</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" id="e_invRow"><div class="mb-2"><label class="small text-muted fw-bold">發票號碼</label><input type="text" class="form-control fw-bold" id="e_invPaper" style="text-transform: uppercase;"></div><div class="mb-2"><label class="small text-muted fw-bold">訂單號碼</label><input type="text" class="form-control" id="e_invOrder"></div><div class="row g-2 mb-2"><div class="col-6"><label class="small text-muted fw-bold">銷售額(未稅)</label><input type="number" class="form-control" id="e_invNet"></div><div class="col-6"><label class="small text-muted fw-bold">總計(含稅)</label><input type="number" class="form-control text-danger fw-bold" id="e_invTotal"></div></div><div class="mb-3"><label class="small text-muted fw-bold">購買明細</label><textarea class="form-control" id="e_invDetails" rows="4"></textarea></div><button class="btn btn-warning w-100 fw-bold py-2" onclick="saveEditInvoice()">確認修改</button></div></div></div></div>
   
   <div class="modal fade" id="addClientModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header bg-light"><h5 class="modal-title fw-bold text-danger">➕ 新增全新客戶</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><div class="mb-3"><label class="fw-bold text-muted small">客戶名稱 <span class="text-danger">*</span></label><input type="text" class="form-control fw-bold" id="addClientName"></div><div class="mb-3"><label class="fw-bold text-muted small">統一編號</label><input type="text" class="form-control fw-bold" id="addClientTaxId" inputmode="numeric"></div><div class="mb-3"><label class="fw-bold text-muted small">送貨地址</label><input type="text" class="form-control" id="addClientAddress" placeholder="輸入完整地址"></div><div class="mb-4"><label class="fw-bold text-muted small">收貨單位 <span class="fw-normal">(多個請用「逗號」或「換行」隔開)</span></label><textarea class="form-control" id="addClientReceiveDept" rows="3" placeholder="例如：總務室, 開刀房, 檢驗科..."></textarea></div><button class="btn btn-danger w-100 fw-bold py-3 fs-5 shadow-sm" onclick="submitNewClientOptimistic()">💾 建立客戶</button></div></div></div></div>
   <div class="modal fade" id="editItemModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header bg-light"><h5 class="modal-title fw-bold text-primary" id="editItemModalTitle">📝 編輯品項</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" id="editItemRowIndex"><div class="mb-3"><label class="fw-bold text-muted small">歸屬客戶 <span class="text-danger">*</span></label><input type="text" class="form-control fake-input-btn fw-bold" id="editItemClientDisplay" readonly onclick="triggerItemClientSelect()"><input type="hidden" id="editItemClientVal"></div><div class="mb-3"><label class="fw-bold text-muted small">長固代號 / 資材碼</label><input type="text" class="form-control" id="editItemInternalCode" placeholder="此商品的系統身分證 (選填)"></div><div class="mb-3"><label class="fw-bold text-muted small">合約品名 <span class="text-danger">*</span></label><input type="text" class="form-control fw-bold" id="editItemName"></div><div class="row g-2 mb-4"><div class="col-4"><label class="fw-bold text-muted small">單位</label><input type="text" class="form-control fw-bold" id="editItemUnit"></div><div class="col-8"><label class="fw-bold text-muted small">單價(含稅) <span class="text-danger">*</span></label><input type="number" step="any" class="form-control fw-bold text-end" id="editItemPrice" inputmode="decimal"></div></div><button class="btn btn-primary w-100 fw-bold py-3 fs-5 shadow-sm" onclick="submitEditItemOptimistic()">💾 儲存</button></div></div></div></div>
   <div class="modal fade" id="editClientModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header bg-light"><h5 class="modal-title fw-bold text-danger">🏢 修改客戶資料</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" id="editClientOldName"><div class="mb-3"><label class="fw-bold text-muted small">客戶名稱 <span class="text-danger">*</span></label><input type="text" class="form-control fw-bold" id="editClientName"></div><div class="mb-3"><label class="fw-bold text-muted small">統一編號</label><input type="text" class="form-control fw-bold" id="editClientTaxId" inputmode="numeric"></div><div class="mb-3"><label class="fw-bold text-muted small">送貨地址</label><input type="text" class="form-control" id="editClientAddress"></div><div class="mb-4"><label class="fw-bold text-muted small">收貨單位 <span class="fw-normal">(多個請用「逗號」或「換行」隔開)</span></label><textarea class="form-control" id="editClientReceiveDept" rows="3"></textarea></div><button class="btn btn-danger w-100 fw-bold py-3 fs-5 shadow-sm" onclick="submitEditClientOptimistic()">💾 確認並套用</button></div></div></div></div>
   
-  <div class="modal fade" id="editInvLogModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header bg-secondary text-white"><h5 class="modal-title fw-bold">✏️ 編輯異動紀錄</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" id="e_logRowIdx"><input type="hidden" id="e_logSnapshot"><div class="mb-3"><label class="small fw-bold text-muted">發票號碼</label><input type="text" class="form-control" id="e_logInvoiceNo" placeholder="廠商出貨發票"></div><div class="mb-3"><label class="small fw-bold text-muted">進貨/訂貨日期</label><input type="date" class="form-control" id="e_logArrivalDate"></div><div class="mb-3"><label class="small fw-bold text-muted">訂單號碼</label><input type="text" class="form-control" id="e_logOrderNo"></div><div class="mb-4"><label class="small fw-bold text-muted">備註</label><input type="text" class="form-control" id="e_logMemo"></div><div class="d-flex gap-2"><button class="btn btn-secondary w-100 fw-bold py-2 shadow-sm" onclick="saveEditInvLog()">💾 儲存修改</button></div></div></div></div></div>
+  <div class="modal fade" id="editInvLogModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header bg-secondary text-white"><h5 class="modal-title fw-bold">✏️ 編輯異動紀錄備註</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" id="e_logRowIdx"><input type="hidden" id="e_logSnapshot"><div class="mb-3"><label class="small fw-bold text-muted">發票號碼</label><input type="text" class="form-control" id="e_logInvoiceNo" placeholder="廠商出貨發票"></div><div class="mb-3"><label class="small fw-bold text-muted">進貨/訂貨日期</label><input type="date" class="form-control" id="e_logArrivalDate"></div><div class="mb-3"><label class="small fw-bold text-muted">訂單號碼</label><input type="text" class="form-control" id="e_logOrderNo"></div><div class="mb-4"><label class="small fw-bold text-muted">備註</label><input type="text" class="form-control" id="e_logMemo"></div><div class="d-flex gap-2"><button class="btn btn-secondary w-100 fw-bold py-2 shadow-sm" onclick="saveEditInvLog()">💾 儲存修改</button></div></div></div></div></div>
   
-  <div class="modal fade" id="purchaseOrderModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered modal-lg"><div class="modal-content"><div class="modal-header" style="background-color: #fd7e14; color: white;"><h5 class="modal-title fw-bold">🛒 向廠商訂貨 (產生訂購單)</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div><div class="modal-body bg-light"><div class="p-3 mb-3 bg-white border rounded shadow-sm"><h6 class="fw-bold border-bottom pb-2 text-primary">長固實業有限公司</h6><div class="row small text-muted"><div class="col-12 col-md-6 mb-1">統一編號：86477073</div><div class="col-12 col-md-6 mb-1">電話：(04)23269591 / FAX：(04)23268576</div><div class="col-12 mb-1">地址：台中市西區中美街639號</div><div class="col-12">發票地址：新北市三重區重新路5段609巷6號4樓</div></div></div><div class="row g-2 mb-2"><div class="col-6"><label class="small fw-bold text-muted">訂購日期</label><input type="date" class="form-control fw-bold" id="poDate"></div><div class="col-6"><label class="small fw-bold text-muted">訂單號碼 (您向廠商叫貨的單號)</label><input type="text" class="form-control" id="poOrderNo"></div></div><div class="row g-2 mb-2"><div class="col-12"><label class="small fw-bold text-muted">供應商名稱</label><input type="text" class="form-control fw-bold text-dark" id="poSupplier"></div></div><div class="row g-2 mb-2"><div class="col-6"><label class="small fw-bold text-muted">供應商電話</label><input type="text" class="form-control text-secondary" id="poSupPhone"></div><div class="col-6"><label class="small fw-bold text-muted">供應商傳真</label><input type="text" class="form-control text-secondary" id="poSupFax"></div></div><div class="row g-2 mb-2 mt-3 pt-3 border-top"><div class="col-6"><label class="small fw-bold text-muted">品名</label><input type="text" class="form-control bg-light text-dark fw-bold" id="poItemName" readonly></div><div class="col-3"><label class="small fw-bold text-muted">長固代號</label><input type="text" class="form-control bg-light text-primary fw-bold" id="poInternalCode" readonly></div><div class="col-3"><label class="small fw-bold text-muted">商品單價</label><input type="number" class="form-control text-dark" id="poUnitPrice"></div></div><div class="row g-2 mb-2 mt-3 pt-3 border-top"><div class="col-6"><label class="small fw-bold text-muted">客戶名稱 (送貨對象)</label><input type="text" class="form-control text-dark fw-bold" id="poClientName"></div><div class="col-6"><label class="small fw-bold text-muted">收貨單位 (下拉選單)</label><select class="form-select" id="poReceiveDept"></select></div></div><div class="mb-3"><label class="small fw-bold text-muted">送貨地點</label><input type="text" class="form-control text-secondary" id="poAddress"></div><div class="row g-2 mb-3 mt-3 pt-3 border-top"><div class="col-4"><label class="small fw-bold text-danger">訂貨數量 <span class="text-dark">*</span></label><input type="number" class="form-control fw-bold fs-5 text-danger border-danger" id="poQty" min="0" step="any" inputmode="numeric"></div><div class="col-8"><label class="small fw-bold text-muted">備註</label><input type="text" class="form-control" id="poMemo"></div></div><button class="btn text-white w-100 fw-bold py-3 shadow-sm fs-5 mt-2" style="background-color: #fd7e14;" onclick="confirmPurchaseOrder()">確認訂貨並列印單據</button></div></div></div></div>
+  <div class="modal fade" id="purchaseOrderModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered modal-lg"><div class="modal-content"><div class="modal-header" style="background-color: #fd7e14; color: white;"><h5 class="modal-title fw-bold">🛒 向廠商訂貨 (產生訂購單)</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div><div class="modal-body bg-light"><div class="p-3 mb-3 bg-white border rounded shadow-sm"><h6 class="fw-bold border-bottom pb-2 text-primary">長固實業有限公司</h6><div class="row small text-muted"><div class="col-12 col-md-6 mb-1">統一編號：86477073</div><div class="col-12 col-md-6 mb-1">電話：(04)23269591 / FAX：(04)23268576</div><div class="col-12 mb-1">地址：台中市西區中美街639號</div><div class="col-12">發票地址：新北市三重區重新路5段609巷6號4樓</div></div></div><div class="row g-2 mb-2"><div class="col-6"><label class="small fw-bold text-muted">訂購日期</label><input type="date" class="form-control fw-bold" id="poDate"></div><div class="col-6"><label class="small fw-bold text-muted">訂單號碼 (您向廠商叫貨的單號)</label><input type="text" class="form-control" id="poOrderNo"></div></div><div class="row g-2 mb-2"><div class="col-12"><label class="small fw-bold text-muted">供應商名稱</label><input type="text" class="form-control fw-bold text-dark" id="poSupplier"></div></div><div class="row g-2 mb-2"><div class="col-6"><label class="small fw-bold text-muted">供應商電話</label><input type="text" class="form-control text-secondary" id="poSupPhone"></div><div class="col-6"><label class="small fw-bold text-muted">供應商傳真</label><input type="text" class="form-control text-secondary" id="poSupFax"></div></div><div class="row g-2 mb-2 mt-3 pt-3 border-top"><div class="col-6"><label class="small fw-bold text-muted">品名</label><input type="text" class="form-control bg-light text-dark fw-bold" id="poItemName" readonly></div><div class="col-3"><label class="small fw-bold text-muted">長固代號</label><input type="text" class="form-control bg-light text-primary fw-bold" id="poInternalCode" readonly></div><div class="col-3"><label class="small fw-bold text-muted">商品單價</label><input type="number" class="form-control text-dark" id="poUnitPrice"></div></div><div class="row g-2 mb-2 mt-3 pt-3 border-top"><div class="col-6"><label class="small fw-bold text-muted">客戶名稱 (送貨對象)</label><select class="form-select text-dark fw-bold" id="poClientName" onchange="triggerPoClientChange(this.value)"></select></div><div class="col-6"><label class="small fw-bold text-muted">收貨單位 (下拉選單)</label><select class="form-select" id="poReceiveDept"></select></div></div><div class="mb-3"><label class="small fw-bold text-muted">送貨地點</label><input type="text" class="form-control text-secondary" id="poAddress"></div><div class="row g-2 mb-3 mt-3 pt-3 border-top"><div class="col-4"><label class="small fw-bold text-danger">訂貨數量 <span class="text-dark">*</span></label><input type="number" class="form-control fw-bold fs-5 text-danger border-danger" id="poQty" min="0" step="any" inputmode="numeric"></div><div class="col-8"><label class="small fw-bold text-muted">備註</label><input type="text" class="form-control" id="poMemo"></div></div><button class="btn text-white w-100 fw-bold py-3 shadow-sm fs-5 mt-2" style="background-color: #fd7e14;" onclick="confirmPurchaseOrder()">確認訂貨並列印單據</button></div></div></div></div>
   <div class="modal fade" id="suppInvModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header bg-danger text-white"><h5 class="modal-title fw-bold">📝 補登發票號碼</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="hidden" id="supp_invRowIdx"><div class="mb-3"><label class="small text-muted fw-bold">原借用單號 (系統虛擬單號)</label><input type="text" class="form-control bg-light text-secondary fw-bold" id="supp_oldPaperNo" readonly></div><div class="mb-4"><label class="small text-danger fw-bold">正確發票號碼 <span class="text-dark">*</span></label><input type="text" class="form-control form-control-lg fw-bold" id="supp_newPaperNo" placeholder="例如：AB-12345678" style="text-transform: uppercase;"></div><button class="btn btn-danger w-100 fw-bold py-3 shadow-sm fs-5" onclick="confirmSupplementInvoice()">確認補登並自動連動</button></div></div></div></div>
   <div class="modal fade" id="syncErrorModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered modal-lg"><div class="modal-content"><div class="modal-header bg-danger text-white"><h5 class="modal-title fw-bold">🔴 報錯與未同步資料處理中心</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div><div class="modal-body bg-light"><div class="alert alert-warning small mb-3 fw-bold">💡 以下是因網路延遲或中斷，尚未成功寫入後台的資料。您可以檢視內容後選擇「重新傳送」或「清除捨棄」。</div><div id="syncErrorList"></div></div></div></div></div>
   
-  <!-- 📑 【全新】估價單專屬視窗 -->
   <div class="modal fade" id="editQuoModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered modal-xl">
       <div class="modal-content">
@@ -353,24 +408,99 @@
     </div>
   </div>
 
-  <!-- 【修正 Bug】將 searchModal 移至所有視窗最底部，並加上 z-index: 1080 強制置頂 -->
+  <!-- 【全新】送貨追蹤表單設定視窗 -->
+  <div class="modal fade" id="deliveryActionModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header bg-primary text-white">
+          <h5 class="modal-title fw-bold">🚚 執行送貨排程</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="da_rowIndices">
+          <div class="mb-3">
+            <label class="small fw-bold text-muted">送貨日期 <span class="text-danger">*</span></label>
+            <input type="date" class="form-control form-control-lg fw-bold text-primary" id="da_date">
+          </div>
+          <div class="mb-3">
+            <label class="small fw-bold text-muted">送貨方式 <span class="text-danger">*</span></label>
+            <select class="form-select form-select-lg fw-bold" id="da_method">
+              <option value="">請選擇送貨方式...</option>
+              <option value="新竹貨運">新竹貨運</option>
+              <option value="郵局寄送">郵局寄送</option>
+              <option value="便利袋">便利袋</option>
+              <option value="業務送貨">業務送貨</option>
+              <option value="台中公司送貨">台中公司送貨</option>
+              <option value="台北公司送貨">台北公司送貨</option>
+            </select>
+          </div>
+          <div class="mb-4">
+            <label class="small fw-bold text-muted">備註 (選填)</label>
+            <textarea class="form-control" id="da_memo" rows="2" placeholder="可輸入追蹤碼或其他註記..."></textarea>
+          </div>
+          <button class="btn btn-primary w-100 fw-bold py-3 fs-5 shadow-sm" onclick="confirmDeliveryAction()">💾 確認送貨</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 【全新】電子簽收與預覽視窗 -->
+  <div class="modal fade fullscreen-modal" id="deliverySignModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header bg-success text-white">
+          <h5 class="modal-title fw-bold">✍️ 確認送貨單與電子簽收</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body bg-light" style="padding: 0;">
+          <input type="hidden" id="ds_rowIdx">
+          
+          <!-- 上半部：A5 送貨單預覽區 -->
+          <div id="ds_previewContainer" style="background: #fff; padding: 15px; border-bottom: 3px dashed #ccc; box-shadow: 0 4px 6px rgba(0,0,0,0.05); overflow-x: auto;">
+             <!-- 將由 JS 動態生成迷你預覽畫面 -->
+          </div>
+          
+          <!-- 下半部：Canvas 手寫板 -->
+          <div class="p-3 d-flex flex-column align-items-center" style="background: #f8f9fa;">
+            <div class="w-100 d-flex justify-content-between align-items-center mb-2">
+               <h6 class="fw-bold text-dark m-0">🖊️ 請在此方框內簽名：</h6>
+               <button class="btn btn-sm btn-outline-danger fw-bold" onclick="clearSignature()">🗑️ 清除重簽</button>
+            </div>
+            
+            <div class="w-100 bg-white rounded" style="border: 2px dashed #0d6efd; box-shadow: inset 0 2px 5px rgba(0,0,0,0.05);">
+               <canvas id="signaturePad" width="600" height="250" style="width: 100%; height: 250px; touch-action: none; cursor: crosshair;"></canvas>
+            </div>
+            <div class="small text-muted mt-2 text-center w-100">支援滑鼠拖曳或手指/觸控筆滑動簽名</div>
+          </div>
+        </div>
+        <div class="modal-footer border-0 p-3 bg-white d-flex gap-2">
+           <button type="button" class="btn btn-secondary fw-bold w-25 py-3" data-bs-dismiss="modal">取消</button>
+           <button type="button" class="btn btn-success fw-bold flex-grow-1 py-3 fs-5 shadow-sm" onclick="confirmSignature()">✅ 完成簽收並結案</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="modal fullscreen-modal fade" id="searchModal" tabindex="-1" style="z-index: 1080;"><div class="modal-dialog"><div class="modal-content"><div class="modal-header bg-light"><h5 class="modal-title fw-bold text-dark" id="searchModalTitle">選擇</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="search" class="form-control form-control-lg mb-3 shadow-sm sticky-top" id="searchModalInput" placeholder="輸入關鍵字搜尋..." oninput="filterSearchModal()"><div id="searchModalList"></div></div></div></div></div>
 
   <!-- ========================================================================= -->
-  <!-- 🖨️ 列印專用區塊 (包含出貨單、訂貨單、估價單) -->
+  <!-- 🖨️ 列印專用區塊 (包含出貨單、訂貨單、估價單、送貨單) -->
   <!-- ========================================================================= -->
   <div id="printArea" style="display:none;"></div>
   <div id="printPoArea" style="display:none;"></div>
   <div id="printQuoteArea" style="display:none;"></div>
+  <!-- 【全新】送貨單列印區塊 -->
+  <div id="printDeliveryArea" style="display:none;"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
   
-  <!-- 【終極拆分】匯入所有模組 -->
   <script src="api_core.js"></script>
   <script src="module_order.js"></script>
   <script src="module_invoice_history.js"></script>
   <script src="module_inventory_admin.js"></script>
   <script src="module_quotation.js"></script>
+  <!-- 【全新】匯入送貨追蹤與電子簽收模組 -->
+  <script src="module_delivery.js"></script>
 
 </body>
 </html>
