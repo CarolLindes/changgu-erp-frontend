@@ -1,5 +1,5 @@
 /* ==========================================================================
-   長固 ERP 系統 - 核心樣式表 (終極修復版：支援估價單與動態列印)
+   長固 ERP 系統 - 核心樣式表 (終極修復版：支援估價單與動態分頁列印)
    ========================================================================== */
 html::-webkit-scrollbar, body::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -87,9 +87,9 @@ html, body {
 }
 
 /* ==========================================================================
-   列印專屬樣式 (@media print)
+   🖨️ 列印專屬樣式 (@media print) - 加入防破圖分頁支援
    ========================================================================== */
-#printArea, #printPoArea, #printQuoteArea { display: none; }
+#printArea, #printPoArea, #printQuoteArea, #printDeliveryArea { display: none; }
 
 @media print {
     body { background: #fff !important; margin: 0; padding: 0; }
@@ -99,19 +99,24 @@ html, body {
         display: none !important;
     }
     
-    /* 強制將頁面本身的 margin 設為 0，這能關閉瀏覽器預設的網址、日期等浮水印 */
+    /* 強制將頁面本身的 margin 設為 0，關閉瀏覽器預設的網址、日期等浮水印 */
     @page {
         margin: 0;
     }
     
     /* 控制預設的版面顯示 */
-    #printArea, #printPoArea, #printQuoteArea {
+    #printArea, #printPoArea, #printQuoteArea, #printDeliveryArea {
         width: 100%;
         color: #000;
         font-family: "MingLiU", "微軟正黑體", sans-serif;
-        page-break-after: avoid;
     }
+
+    /* 【核心優化】防止表格與跨頁內容被切斷破圖 */
+    table { page-break-inside: auto; }
+    tr    { page-break-inside: avoid; page-break-after: auto; }
+    thead { display: table-header-group; }
+    tfoot { display: table-footer-group; }
     
-    /* 確保只有觸發列印的那一個區塊會顯示 (透過 JS 控制) */
+    /* 確保只有觸發列印的那一個區塊會顯示 (透過 JS 動態掛載 class) */
     .print-active { display: block !important; }
 }
