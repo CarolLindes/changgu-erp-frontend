@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * 模組 3：開立發票、歷史紀錄與報表 (module_invoice_history.js)
+ * 模組 3：開立發票、歷史紀錄與報表 (module_invoice_history.js) - 【雙向作廢連動版】
  * ============================================================================
  */
 
@@ -348,10 +348,8 @@ window.printDeliveryNote = function(idx) {
     let tbodyHtml = '';
     if (items.length > 0) {
         items.forEach(item => {
-            // 【完美升級】直接使用明細裡綁定的批號與效期 (經過 Code.gs 自動升級與回填)
             let expClean = '';
             if (item.expiry) {
-                // 如果是格式化日期就淨化它，如果不是就保留原樣
                 expClean = (typeof cleanDateStr === 'function') ? cleanDateStr(item.expiry).replace(/-/g, '/') : item.expiry;
             }
             const lotExp = `${item.lot || ''} ${expClean}`.trim();
@@ -431,8 +429,11 @@ window.printDeliveryNote = function(idx) {
     }
 };
 
+// ============================================================================
+// 【全新升級】發票雙向作廢 (連動註銷明細、返還庫存、作廢送貨單)
+// ============================================================================
 window.voidInv = function(idx, pNo) { 
-    if(confirm("確定作廢？系統將自動：\n1. 註銷此發票帳款\n2. 註銷銷售明細\n3. 【自動返還已出貨之庫存數量】")) { 
+    if(confirm("確定作廢？系統將自動：\n1. 註銷此發票帳款\n2. 註銷銷售明細\n3. 註銷對應的送貨單\n4. 【自動返還已出貨之庫存數量】")) { 
         const h = globalHistory.find(x=>x.rowIdx === idx); 
         if(h) h.status = '作廢'; 
         
@@ -446,16 +447,24 @@ window.voidInv = function(idx, pNo) {
                 }
             } 
         });
+
+        // 【優化】連動註銷送貨單
+        globalDeliveries.forEach(d => {
+            if (d.paperNo && d.paperNo.includes(pNo) && d.status !== '已作廢') {
+                d.status = '已作廢';
+            }
+        });
         
         if(typeof window.populateLogDropdowns === 'function') window.populateLogDropdowns(); 
         window.renderHistory(); 
         if(typeof window.renderInventory === 'function') window.renderInventory(); 
         if(typeof window.renderInvLogs === 'function') window.renderInvLogs(); 
         if(typeof window.renderShipments === 'function') window.renderShipments(); 
+        if(typeof window.renderDeliveryList === 'function') window.renderDeliveryList();
         window.generateReport(); 
         
         pushToSyncQueue('updateInvoiceRecord', {action:'void', rowIdx: idx, staff: myName, paperNo: pNo}, null); 
-        showToast("🗑️ 已作廢並返還庫存");
+        showToast("🗑️ 已作廢並返還庫存，相關送貨單已同步註銷");
     } 
 };
 
