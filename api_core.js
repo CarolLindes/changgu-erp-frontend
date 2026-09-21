@@ -1,7 +1,7 @@
 /**
  * ============================================================================
  * 模組 1：API 核心、全域狀態與雙軌並行架構 (api_core.js) 
- * 【終極 SPA 版】完全解耦 GAS，極速直連 Supabase，拔除背景佇列
+ * 【完美版】修復手機 PDF 版型溢出與跨域印章支援
  * ============================================================================
  */
 
@@ -541,7 +541,7 @@ window.showPrintPreview = function(areaId) {
     `;
     controlBar.style.display = 'flex';
     
-    // 【極重要修復】解除手機版 100vh 高度鎖定，讓手機系統能正確計算出所有頁數
+    // 解除手機版 100vh 高度鎖定，讓手機系統能正確計算出所有頁數
     document.documentElement.style.height = 'auto';
     document.documentElement.style.overflow = 'visible';
     document.body.style.height = 'auto';
@@ -578,7 +578,7 @@ window.closePrintPreview = function() {
     document.getElementById('mainApp').style.display = 'block';
 };
 
-// 【全新修復版】分享 PDF 高畫質引擎 (支援去背印章無損輸出)
+// 【全新修復版】分享 PDF 高畫質引擎 (強制版型鎖定與跨域去背相容)
 window.sharePdf = async function(areaId) {
     if (typeof html2pdf === 'undefined') {
         alert("PDF 模組載入中，請稍等一秒後再試！");
@@ -587,7 +587,16 @@ window.sharePdf = async function(areaId) {
     showLoading("📄 正在產生高畫質 PDF，請稍候...");
     const element = document.getElementById(areaId);
     
-    // 【關鍵修復】: html2canvas 遇到 mix-blend-mode 會導致圖片破圖甚至變黑
+    // 【修復 1】：強制鎖定為標準紙張寬度，避免手機窄螢幕擠壓破圖
+    const origWidth = element.style.width;
+    const origMaxWidth = element.style.maxWidth;
+    const origPosition = element.style.position;
+    
+    element.style.width = '800px';
+    element.style.maxWidth = '800px';
+    element.style.position = 'relative';
+
+    // 【修復 2】：html2canvas 遇到 mix-blend-mode 會導致圖片破圖甚至變黑
     // 在產出 PDF 之前，我們瞬間把印章的 mix-blend-mode 移除，並確保允許跨域
     const imgs = element.querySelectorAll('img');
     const origStyles = [];
@@ -601,20 +610,32 @@ window.sharePdf = async function(areaId) {
         margin:       0,
         filename:     `長固ERP_單據_${Date.now()}.pdf`,
         image:        { type: 'jpeg', quality: 0.98 },
-        html2canvas:  { scale: 2, useCORS: true, allowTaint: false, letterRendering: true },
+        html2canvas:  { 
+            scale: 2, 
+            useCORS: true, 
+            allowTaint: false, 
+            letterRendering: true,
+            windowWidth: 800 // 強制 html2canvas 採用 800px 寬度截圖
+        },
         jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
     };
     
-    // 若為送貨單或訂貨單，動態切換為 A5 橫向
+    // 若為送貨單或訂貨單，動態切換為 A5 橫向與 1000px 寬度
     if(areaId === 'printDeliveryArea' || areaId === 'printPoArea') {
         opt.jsPDF.format = 'a5';
         opt.jsPDF.orientation = 'landscape';
+        element.style.width = '1000px';
+        element.style.maxWidth = '1000px';
+        opt.html2canvas.windowWidth = 1000;
     }
 
     try {
         const pdfBlob = await html2pdf().set(opt).from(element).output('blob');
         
-        // 瞬間把印章的去背效果還原回去，讓網頁看起來不變
+        // 瞬間還原樣式與圖片去背，讓網頁看起來不變
+        element.style.width = origWidth;
+        element.style.maxWidth = origMaxWidth;
+        element.style.position = origPosition;
         imgs.forEach((img, i) => img.style.mixBlendMode = origStyles[i]);
         hideLoading();
         
@@ -636,7 +657,10 @@ window.sharePdf = async function(areaId) {
             showToast("⬇️ 裝置不支援直接分享，已自動為您下載 PDF。");
         }
     } catch (err) {
-        // 確保發生錯誤時也能還原圖片外觀
+        // 確保發生錯誤時也能還原圖片與排版
+        element.style.width = origWidth;
+        element.style.maxWidth = origMaxWidth;
+        element.style.position = origPosition;
         imgs.forEach((img, i) => img.style.mixBlendMode = origStyles[i]);
         hideLoading();
         alert("產生或分享 PDF 時發生錯誤：" + err.message);
@@ -799,4 +823,3 @@ window.enterSystem = function(modId) {
 };
 
 window.backToHome = function() { document.getElementById('mainApp').style.display = 'none'; document.getElementById('homeMenu').style.display = 'block'; };
-
