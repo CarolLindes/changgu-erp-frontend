@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * 模組 4：庫存、訂貨與管理員後台 (module_inventory_admin.js)
+ * 模組 4：庫存、訂貨與管理員後台 (module_inventory_admin.js) - 【即時出貨轉送貨版】
  * ============================================================================
  */
 
@@ -415,7 +415,6 @@ window.renderShipments = debounce(function() {
     const c = document.getElementById('stkShipContainer'); 
     const pendingAll = globalSalesDetails.filter(s => s.shipStatus !== '已結案' && s.shipStatus !== '作廢');
     
-    // 【雙層篩選器動態載入】只要未結案項目總數有變動，就重新整理一次下拉選單
     if (pendingAll.length !== lastPendingShipmentCount) {
         window.updateShipmentDropdowns(pendingAll);
         lastPendingShipmentCount = pendingAll.length;
@@ -512,6 +511,8 @@ window.confirmShipment = function() {
     if(s.shippedQty >= s.qty) s.shipStatus = '已結案'; else s.shipStatus = '部分出貨';
     
     let inv = globalInventory.find(x => x.name === s.name); 
+    let currentExp = '';
+    
     if (inv) {
         inv.qty -= qty;
         if (batchTarget) {
@@ -519,6 +520,7 @@ window.confirmShipment = function() {
             let bIdx = batches.findIndex(b => b.lot === batchTarget);
             if (bIdx >= 0) {
                 batches[bIdx].qty -= qty;
+                currentExp = batches[bIdx].exp;
             }
             inv.batchesStr = JSON.stringify(batches.filter(b => b.qty > 0));
         }
@@ -532,17 +534,62 @@ window.confirmShipment = function() {
         qtyChange: -qty, newQty: currentInvQty, lot: batchTarget, 
         orderNo: s.paperNo, memo: `單號: ${s.paperNo} ${batchTarget ? '(指定出貨批號:'+batchTarget+')' : ''}` 
     });
-    
+
+    // =========================================================================
+    // 【全新升級】即時連動產生/更新「待送貨」單據
+    // =========================================================================
+    let existingDelivery = globalDeliveries.find(d => d.paperNo === s.paperNo && d.status === '待送貨');
+    let newItemForDelivery = { 
+        name: s.name, qty: qty, batchTarget: batchTarget || '', 
+        internalCode: inv ? inv.internalCode : '', orderNo: s.orderNo || '', exp: currentExp 
+    };
+
+    let payloadUpdateDeliveries = [];
+    let payloadNewDeliveries = [];
+
+    if (existingDelivery) {
+        let dItems = [];
+        try { dItems = JSON.parse(existingDelivery.itemsStr); } catch(e){}
+        dItems.push(newItemForDelivery);
+        existingDelivery.itemsStr = JSON.stringify(dItems);
+        
+        let dOrderNos = existingDelivery.orderNo ? existingDelivery.orderNo.split(',').map(x=>x.trim()) : [];
+        if (s.orderNo && !dOrderNos.includes(s.orderNo)) dOrderNos.push(s.orderNo);
+        existingDelivery.orderNo = dOrderNos.join(', ');
+
+        let dLots = existingDelivery.lot ? existingDelivery.lot.split(',').map(x=>x.trim()) : [];
+        if (batchTarget && !dLots.includes(batchTarget)) dLots.push(batchTarget);
+        existingDelivery.lot = dLots.join(', ');
+
+        let dExps = existingDelivery.expiry ? existingDelivery.expiry.split(',').map(x=>x.trim()) : [];
+        if (currentExp && !dExps.includes(currentExp)) dExps.push(currentExp);
+        existingDelivery.expiry = dExps.join(', ');
+
+        payloadUpdateDeliveries.push(existingDelivery);
+    } else {
+        let newD = {
+            rowIdx: Date.now() + Math.floor(Math.random() * 1000),
+            time: Date.now(), paperNo: s.paperNo, client: s.client,
+            itemsStr: JSON.stringify([newItemForDelivery]), status: '待送貨',
+            deliveryDate: '', deliveryMethod: '', memo: '', signature: '', staff: myName,
+            orderNo: s.orderNo || '', lot: batchTarget || '', expiry: currentExp || ''
+        };
+        globalDeliveries.unshift(newD);
+        payloadNewDeliveries.push(newD);
+    }
+
     if(typeof window.populateLogDropdowns === 'function') window.populateLogDropdowns(); 
     window.renderInvLogs(); window.renderInventory(); window.renderShipments(); 
     bootstrap.Modal.getOrCreateInstance(document.getElementById('shipModal')).hide(); 
     
     pushToSyncQueue('updateShipment', {
         updates: [{rowIdx: rowIdx, paperNo: s.paperNo, client: s.client, name: s.name, shipQty: qty, totalQty: s.qty, batchTarget: batchTarget}], 
+        newDeliveries: payloadNewDeliveries,
+        updateDeliveries: payloadUpdateDeliveries,
         staff: myName
     }, null); 
     
-    showToast("🚚 出貨與庫存扣抵完成，已自動排程至送貨追蹤表單");
+    showToast("🚚 出貨與扣庫完成！已同步生成「待送貨」單據。");
 };
 
 // ============================================================================
