@@ -1,7 +1,6 @@
 /**
  * ============================================================================
- * 模組 6：送貨追蹤與電子簽收模組 (module_delivery.js)
- * 全新獨立模組：負責物流狀態追蹤、A5 送貨單列印與 Canvas 電子簽收
+ * 模組 6：送貨追蹤與電子簽收模組 (module_delivery.js) - 【最終物理合併、拆分與完美按鈕版】
  * ============================================================================
  */
 
@@ -17,7 +16,6 @@ window.renderDeliveryList = debounce(function() {
 
     let arr = globalDeliveries || [];
 
-    // 關鍵字篩選
     if (term) {
         arr = arr.filter(d => 
             (d.client || '').toLowerCase().includes(term) ||
@@ -28,9 +26,7 @@ window.renderDeliveryList = debounce(function() {
         );
     }
 
-    // 送貨方式篩選
     if (filterMethod) arr = arr.filter(d => d.deliveryMethod === filterMethod);
-    // 狀態篩選
     if (filterStatus) arr = arr.filter(d => d.status === filterStatus);
 
     let pending = arr.filter(d => d.status === '待送貨');
@@ -62,7 +58,13 @@ function buildDeliveryHtml(dataArr, isPending) {
 
         if (isPending) {
             checkboxHtml = `<input class="form-check-input me-3 cb-del" type="checkbox" value="${d.rowIdx}" style="transform: scale(1.3); flex-shrink: 0;">`;
-            actionBtns = `<button class="btn btn-sm btn-primary fw-bold" onclick="openDeliveryActionModal([${d.rowIdx}])">執行送貨</button>`;
+            
+            // 【優化】按鈕排列順序嚴格遵循：[還原拆分] -> [作廢] -> [執行送貨]
+            if (String(d.paperNo).includes(',')) {
+                actionBtns += `<button class="btn btn-sm btn-outline-secondary fw-bold me-2" onclick="unmergeDelivery(${d.rowIdx})">✂️ 還原拆分</button>`;
+            }
+            actionBtns += `<button class="btn btn-sm btn-outline-danger fw-bold me-2" onclick="voidDeliveryAndInvoice(${d.rowIdx})">作廢</button>`;
+            actionBtns += `<button class="btn btn-sm btn-primary fw-bold" onclick="openDeliveryActionModal([${d.rowIdx}])">執行送貨</button>`;
         } else {
             if (d.status === '已送貨') {
                 actionBtns += `<button class="btn btn-sm btn-outline-danger fw-bold me-1" onclick="returnDelivery(${d.rowIdx})">退回</button>`;
@@ -99,7 +101,49 @@ function buildDeliveryHtml(dataArr, isPending) {
 }
 
 // ============================================================================
-// 2. 執行送貨與編輯資訊 (Delivery Action)
+// 作廢送貨單，並雙向連動作廢發票與庫存返還
+// ============================================================================
+window.voidDeliveryAndInvoice = function(idx) {
+    const d = globalDeliveries.find(x => x.rowIdx === idx);
+    if (!d) return;
+    if (!confirm(`確定要作廢此筆送貨作業嗎？\n⚠️ 系統將自動連動：\n1. 作廢關聯的發票 (${d.paperNo})\n2. 註銷銷售明細\n3. 完整返還出貨庫存`)) return;
+
+    d.status = '已作廢';
+
+    let paperNos = d.paperNo.split(',').map(s=>s.trim()).filter(x=>x);
+    paperNos.forEach(pNo => {
+        const h = globalHistory.find(x => x.paperNo === pNo);
+        if (h) h.status = '作廢';
+
+        globalSalesDetails.forEach(sd => {
+            if (sd.paperNo === pNo && sd.shipStatus !== '作廢') {
+                sd.shipStatus = '作廢';
+                if (sd.shippedQty > 0) {
+                    let inv = globalInventory.find(x=>x.name === sd.name);
+                    if (inv) inv.qty += sd.shippedQty;
+                    globalInvLogs.unshift({ time: Date.now(), staff: myName, name: sd.name, type: '作廢返還', qtyChange: sd.shippedQty, newQty: inv ? inv.qty : sd.shippedQty, memo: `作廢單號: ${pNo}` });
+                }
+            }
+        });
+
+        if (h) {
+            pushToSyncQueue('updateInvoiceRecord', {action:'void', rowIdx: h.rowIdx, staff: myName, paperNo: pNo}, null);
+        }
+    });
+
+    if(typeof window.populateLogDropdowns === 'function') window.populateLogDropdowns();
+    if(typeof window.renderHistory === 'function') window.renderHistory();
+    if(typeof window.renderInventory === 'function') window.renderInventory();
+    if(typeof window.renderInvLogs === 'function') window.renderInvLogs();
+    if(typeof window.renderShipments === 'function') window.renderShipments();
+    if(typeof window.generateReport === 'function') window.generateReport();
+    window.renderDeliveryList();
+    
+    showToast("🗑️ 已作廢送貨單，並成功連動註銷發票與返還庫存");
+};
+
+// ============================================================================
+// 2. 批次執行與自動物理合併機制 (支援再合併)
 // ============================================================================
 window.groupExecuteDelivery = function() {
     const cbs = document.querySelectorAll('.cb-del:checked');
@@ -112,7 +156,6 @@ window.openDeliveryActionModal = function(rowIndices) {
     document.getElementById('da_rowIndices').value = JSON.stringify(rowIndices);
     document.getElementById('da_date').value = getTodayStr();
     
-    // 動態新增兩個送貨方式選項（若尚未存在）
     const methodSelect = document.getElementById('da_method');
     if (!methodSelect.querySelector('option[value="工廠直送"]')) {
         methodSelect.insertAdjacentHTML('beforeend', '<option value="工廠直送">工廠直送</option><option value="親自取貨">親自取貨</option>');
@@ -121,7 +164,6 @@ window.openDeliveryActionModal = function(rowIndices) {
     document.getElementById('da_method').value = '';
     document.getElementById('da_memo').value = '';
 
-    // 若為單筆編輯，載入既有資料
     if (rowIndices.length === 1) {
         const d = globalDeliveries.find(x => x.rowIdx === rowIndices[0]);
         if (d) {
@@ -142,7 +184,6 @@ window.confirmDeliveryAction = function() {
 
     if (!date || !method) return alert("送貨日期與送貨方式為必填！");
 
-    // 【智慧合併邏輯】：前端先行合併預覽，後端同步處理
     let clientGroups = {};
     ids.forEach(idx => {
         let d = globalDeliveries.find(x => x.rowIdx === idx);
@@ -152,32 +193,45 @@ window.confirmDeliveryAction = function() {
         }
     });
 
+    let mergedUpdates = [];
+    let rowsToDelete = [];
+
     for (let client in clientGroups) {
         let group = clientGroups[client];
         if (group.length === 1) {
             let d = group[0];
             d.status = '已送貨'; d.deliveryDate = date; d.deliveryMethod = method; d.memo = memo;
+            mergedUpdates.push(d);
         } else {
-            // 合併多筆品項為一張單據
             let mainD = group[0];
             let mergedItems = [];
-            let pNos = new Set(mainD.paperNo.split(',').map(s=>s.trim()).filter(x=>x));
-            let oNos = new Set((mainD.orderNo||'').split(',').map(s=>s.trim()).filter(x=>x));
-            let lots = new Set((mainD.lot||'').split(',').map(s=>s.trim()).filter(x=>x));
-            let exps = new Set((mainD.expiry||'').split(',').map(s=>s.trim()).filter(x=>x));
+            let pNos = new Set(); let oNos = new Set();
+            let lots = new Set(); let exps = new Set();
 
             group.forEach((d, index) => {
                 let items = []; try { items = JSON.parse(d.itemsStr); } catch(e){}
+                
+                // 【關鍵】在合併時，將來源發票與單號紀錄在品項內部，為未來的「還原拆分」做準備
+                // 即使是已經被退回的合併單再次合併，也能完美保留最原始的單據來源
+                items.forEach(i => {
+                    if(!i._sourcePaperNo) i._sourcePaperNo = d.paperNo;
+                    if(!i._sourceOrderNo) i._sourceOrderNo = d.orderNo;
+                    if(!i._sourceLot) i._sourceLot = d.lot;
+                    if(!i._sourceExp) i._sourceExp = d.expiry;
+                });
+                
+                d.paperNo.split(',').map(s=>s.trim()).filter(x=>x).forEach(x=>pNos.add(x));
+                (d.orderNo||'').split(',').map(s=>s.trim()).filter(x=>x).forEach(x=>oNos.add(x));
+                (d.lot||'').split(',').map(s=>s.trim()).filter(x=>x).forEach(x=>lots.add(x));
+                (d.expiry||'').split(',').map(s=>s.trim()).filter(x=>x).forEach(x=>exps.add(x));
+                
                 if(index > 0) {
-                    d.paperNo.split(',').map(s=>s.trim()).filter(x=>x).forEach(x=>pNos.add(x));
-                    (d.orderNo||'').split(',').map(s=>s.trim()).filter(x=>x).forEach(x=>oNos.add(x));
-                    (d.lot||'').split(',').map(s=>s.trim()).filter(x=>x).forEach(x=>lots.add(x));
-                    (d.expiry||'').split(',').map(s=>s.trim()).filter(x=>x).forEach(x=>exps.add(x));
-                    // 移除被合併的子項目
+                    rowsToDelete.push(d.rowIdx);
                     globalDeliveries = globalDeliveries.filter(x => x.rowIdx !== d.rowIdx); 
                 }
                 mergedItems.push(...items);
             });
+            
             mainD.paperNo = Array.from(pNos).join(', ');
             mainD.orderNo = Array.from(oNos).join(', ');
             mainD.lot = Array.from(lots).join(', ');
@@ -187,16 +241,78 @@ window.confirmDeliveryAction = function() {
             mainD.deliveryDate = date;
             mainD.deliveryMethod = method;
             mainD.memo = memo;
+            
+            mergedUpdates.push(mainD);
         }
     }
 
-    pushToSyncQueue('batchExecuteDeliveries', {
-        rowIndices: ids, deliveryDate: date, deliveryMethod: method, memo: memo
+    pushToSyncQueue('mergeAndExecuteDeliveries', {
+        mergedUpdates: mergedUpdates, 
+        rowsToDelete: rowsToDelete
     }, null);
 
     window.renderDeliveryList();
     bootstrap.Modal.getInstance(document.getElementById('deliveryActionModal')).hide();
     showToast("🚚 批次送貨處理完成！(同客戶之單據已自動智慧合併)");
+};
+
+// ============================================================================
+// 還原拆分合併的送貨單
+// ============================================================================
+window.unmergeDelivery = function(idx) {
+    if(!confirm("確定要將此合併送貨單還原拆分為多筆原始單據嗎？")) return;
+    
+    const d = globalDeliveries.find(x => x.rowIdx === idx);
+    if(!d) return;
+
+    let items = []; try { items = JSON.parse(d.itemsStr); } catch(e){}
+    
+    let groups = {};
+    items.forEach(i => {
+        let pNo = i._sourcePaperNo || d.paperNo;
+        if(!groups[pNo]) groups[pNo] = { items: [], orderNo: i._sourceOrderNo||'', lot: i._sourceLot||'', exp: i._sourceExp||'' };
+        
+        // 抹除追蹤屬性，還原為乾淨的項目
+        let cleanItem = { ...i };
+        delete cleanItem._sourcePaperNo;
+        delete cleanItem._sourceOrderNo;
+        delete cleanItem._sourceLot;
+        delete cleanItem._sourceExp;
+        
+        groups[pNo].items.push(cleanItem);
+    });
+
+    let newDeliveries = [];
+    for (let pNo in groups) {
+        let g = groups[pNo];
+        newDeliveries.push({
+            rowIdx: Date.now() + Math.floor(Math.random() * 10000),
+            time: Date.now(),
+            paperNo: pNo,
+            client: d.client,
+            itemsStr: JSON.stringify(g.items),
+            status: '待送貨', // 拆分後必定是待送貨狀態
+            deliveryDate: '',
+            deliveryMethod: '',
+            memo: '',
+            signature: '',
+            staff: myName,
+            orderNo: g.orderNo,
+            lot: g.lot,
+            expiry: g.exp
+        });
+    }
+
+    globalDeliveries = globalDeliveries.filter(x => x.rowIdx !== idx);
+    globalDeliveries.unshift(...newDeliveries);
+
+    pushToSyncQueue('unmergeDeliveries', {
+        rowToUnmerge: idx,
+        newRows: newDeliveries
+    }, null);
+
+    window.renderDeliveryList();
+    showToast("✂️ 已成功還原拆分為多筆原始待送貨單！");
 };
 
 // ============================================================================
@@ -217,13 +333,11 @@ let isDrawing = false;
 window.openSignModal = function(idx) {
     currentDeliverySignRowIdx = idx;
     
-    // 生成上方迷你 A5 預覽圖
     const previewContainer = document.getElementById('ds_previewContainer');
-    previewContainer.innerHTML = buildDeliveryPrintHtml(idx, true); // true 代表產生迷你預覽版
+    previewContainer.innerHTML = buildDeliveryPrintHtml(idx, true);
 
     bootstrap.Modal.getOrCreateInstance(document.getElementById('deliverySignModal')).show();
     
-    // 延遲初始化 Canvas，確保 Modal 展開後能抓到正確寬高
     setTimeout(() => {
         initSignaturePad();
     }, 300);
@@ -233,7 +347,6 @@ function initSignaturePad() {
     signatureCanvas = document.getElementById('signaturePad');
     signatureCtx = signatureCanvas.getContext('2d');
     
-    // 解決高解析度模糊問題
     const rect = signatureCanvas.parentElement.getBoundingClientRect();
     signatureCanvas.width = rect.width;
     signatureCanvas.height = 250;
@@ -249,7 +362,6 @@ function initSignaturePad() {
     signatureCanvas.onmouseup = stopDrawing;
     signatureCanvas.onmouseout = stopDrawing;
 
-    // 支援手機觸控
     signatureCanvas.ontouchstart = (e) => { e.preventDefault(); startDrawing(e.touches[0]); };
     signatureCanvas.ontouchmove = (e) => { e.preventDefault(); draw(e.touches[0]); };
     signatureCanvas.ontouchend = (e) => { e.preventDefault(); stopDrawing(); };
@@ -284,7 +396,6 @@ window.clearSignature = function() {
 window.confirmSignature = function() {
     if (!currentDeliverySignRowIdx) return;
     
-    // 檢查是否有簽名 (簡單透過像素比對，全白代表沒簽)
     const blank = document.createElement('canvas');
     blank.width = signatureCanvas.width;
     blank.height = signatureCanvas.height;
@@ -312,7 +423,7 @@ window.confirmSignature = function() {
 };
 
 // ============================================================================
-// 4. 完美還原 A5 實體送貨單 (列印與預覽引擎)
+// 4. 完美還原 A5 實體送貨單 (含分頁列印防破圖引擎)
 // ============================================================================
 window.printDeliverySlip = function(idx) {
     const html = buildDeliveryPrintHtml(idx, false);
@@ -330,110 +441,119 @@ function buildDeliveryPrintHtml(idx, isPreviewMode) {
 
     let items = []; try { items = JSON.parse(d.itemsStr); } catch(e){}
     
-    // 計算單號與排版空間
     const dateStr = d.deliveryDate ? d.deliveryDate.replace(/-/g, '/') : getTodayStr().replace(/-/g, '/');
-    let totalAmount = 0;
-    const totalRows = Math.max(items.length, 5); // 至少保留 5 行的空間讓版面好看
+    
+    const ROWS_PER_PAGE = 5;
+    const totalPages = Math.max(1, Math.ceil(items.length / ROWS_PER_PAGE));
+    
+    let htmlOutput = '';
+    let globalItemIndex = 0;
+    let cumulativeTotal = 0;
 
-    // 取得商品單價以計算金額
-    let tbodyHtml = '';
-    for (let i = 0; i < totalRows; i++) {
-        if (i < items.length) {
-            const item = items[i];
-            const p = globalCatalog.find(x => x.productName === item.name && x.clientName === d.client);
-            const price = p ? Number(p.price) : 0;
-            const subtotal = price * Number(item.qty);
-            totalAmount += subtotal;
+    for (let page = 1; page <= totalPages; page++) {
+        let tbodyHtml = '';
+        let pageTotal = 0;
 
-            let specDesc = item.name;
-            if (item.batchTarget) specDesc += ` <span style="font-size: 0.85em; color: #555;">(批號: ${item.batchTarget})</span>`;
-            if (item.exp) specDesc += ` <span style="font-size: 0.85em; color: #555;">(效期: ${item.exp})</span>`;
+        for (let i = 0; i < ROWS_PER_PAGE; i++) {
+            if (globalItemIndex < items.length) {
+                const item = items[globalItemIndex];
+                const p = globalCatalog.find(x => x.productName === item.name && x.clientName === d.client);
+                const price = p ? Number(p.price) : 0;
+                const subtotal = price * Number(item.qty);
+                pageTotal += subtotal;
+                cumulativeTotal += subtotal;
 
-            tbodyHtml += `
-                <tr>
-                    <td style="border: 1px solid #000; padding: 5px; text-align: center;">${item.orderNo || ''}</td>
-                    <td style="border: 1px solid #000; padding: 5px; text-align: left;">${specDesc}</td>
-                    <td style="border: 1px solid #000; padding: 5px; text-align: center;">${item.qty}</td>
-                    <td style="border: 1px solid #000; padding: 5px; text-align: right;">${price.toLocaleString()}</td>
-                    <td style="border: 1px solid #000; padding: 5px; text-align: right;">${subtotal.toLocaleString()}</td>
-                    ${i === 0 ? `<td rowspan="${totalRows}" style="width: 25%; border: 1px solid #000; padding: 5px; vertical-align: top; text-align: center; position: relative;">${getSignatureImgHtml(d)}</td>` : ''}
-                </tr>
-            `;
-        } else {
-            // 補齊空列
-            tbodyHtml += `
-                <tr>
-                    <td style="border: 1px solid #000; padding: 5px;">&nbsp;</td>
-                    <td style="border: 1px solid #000; padding: 5px;"></td>
-                    <td style="border: 1px solid #000; padding: 5px;"></td>
-                    <td style="border: 1px solid #000; padding: 5px;"></td>
-                    <td style="border: 1px solid #000; padding: 5px;"></td>
-                    ${i === 0 ? `<td rowspan="${totalRows}" style="width: 25%; border: 1px solid #000; padding: 5px; vertical-align: top; text-align: center; position: relative;">${getSignatureImgHtml(d)}</td>` : ''}
-                </tr>
-            `;
+                let specDesc = item.name;
+                if (item.batchTarget) specDesc += ` <span style="font-size: 0.85em; color: #555;">(批號: ${item.batchTarget})</span>`;
+                if (item.exp) specDesc += ` <span style="font-size: 0.85em; color: #555;">(效期: ${item.exp})</span>`;
+
+                tbodyHtml += `
+                    <tr>
+                        <td style="border: 1px solid #000; padding: 5px; text-align: center; height: 35px;">${item.orderNo || item._sourceOrderNo || ''}</td>
+                        <td style="border: 1px solid #000; padding: 5px; text-align: left;">${specDesc}</td>
+                        <td style="border: 1px solid #000; padding: 5px; text-align: center;">${item.qty}</td>
+                        <td style="border: 1px solid #000; padding: 5px; text-align: right;">${price.toLocaleString()}</td>
+                        <td style="border: 1px solid #000; padding: 5px; text-align: right;">${subtotal.toLocaleString()}</td>
+                        ${i === 0 ? `<td rowspan="${ROWS_PER_PAGE}" style="width: 25%; border: 1px solid #000; padding: 5px; vertical-align: top; text-align: center; position: relative;">${getSignatureImgHtml(d)}</td>` : ''}
+                    </tr>
+                `;
+                globalItemIndex++;
+            } else {
+                tbodyHtml += `
+                    <tr>
+                        <td style="border: 1px solid #000; padding: 5px; height: 35px;">&nbsp;</td>
+                        <td style="border: 1px solid #000; padding: 5px;"></td>
+                        <td style="border: 1px solid #000; padding: 5px;"></td>
+                        <td style="border: 1px solid #000; padding: 5px;"></td>
+                        <td style="border: 1px solid #000; padding: 5px;"></td>
+                        ${i === 0 ? `<td rowspan="${ROWS_PER_PAGE}" style="width: 25%; border: 1px solid #000; padding: 5px; vertical-align: top; text-align: center; position: relative;">${getSignatureImgHtml(d)}</td>` : ''}
+                    </tr>
+                `;
+            }
         }
-    }
 
-    // A5 橫向排版
-    const containerStyle = isPreviewMode 
-        ? `width: 100%; min-width: 600px; transform: scale(0.9); transform-origin: top left; font-family: 'MingLiU', '微軟正黑體', sans-serif; color: #000;` 
-        : `width: 100%; max-width: 1000px; margin: 0 auto; background: #fff; padding: 10mm 15mm; box-sizing: border-box; font-family: 'MingLiU', '微軟正黑體', sans-serif; color: #000; min-height: 130mm; display: flex; flex-direction: column;`;
+        const containerStyle = isPreviewMode 
+            ? `width: 100%; min-width: 600px; transform: scale(0.9); transform-origin: top left; font-family: 'MingLiU', '微軟正黑體', sans-serif; color: #000; margin-bottom: 20px; background: #fff; padding: 15px; border: 1px solid #ccc;` 
+            : `width: 100%; max-width: 1000px; margin: 0 auto; background: #fff; padding: 10mm 15mm; box-sizing: border-box; font-family: 'MingLiU', '微軟正黑體', sans-serif; color: #000; min-height: 130mm; display: flex; flex-direction: column; page-break-after: ${page < totalPages ? 'always' : 'auto'};`;
 
-    return `
-        <div style="${containerStyle}">
-            <!-- 表頭區塊 -->
-            <div style="position: relative; text-align: center; margin-bottom: 20px;">
-                <div style="font-size: 26px; font-weight: 900; letter-spacing: 5px;">長固實業有限公司</div>
-                <div style="display: inline-block; font-size: 32px; font-weight: bold; letter-spacing: 15px; margin-top: 5px; border-bottom: 2px double #000; padding-bottom: 5px;">送貨單</div>
-                <div style="position: absolute; right: 0; bottom: 0; font-size: 20px; font-weight: bold;">No. <span style="color: #d32f2f;">${d.rowIdx.toString().padStart(5, '0')}</span></div>
-            </div>
+        const totalDisplay = (page === totalPages) ? cumulativeTotal.toLocaleString() : `(接下頁) 小計: ${pageTotal.toLocaleString()}`;
+        const totalLabel = (page === totalPages) ? '總 計 新 台 幣' : '本 頁 小 計';
 
-            <!-- 客戶與日期 -->
-            <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 5px; font-size: 16px; font-weight: bold;">
-                <div style="width: 60%;">客 戶 名 稱：<span style="border-bottom: 1px solid #000; display: inline-block; width: 70%; padding-bottom: 2px;">${escapeQuotes(d.client)}</span></div>
-                <div style="width: 30%; text-align: right;">${dateStr.split('/')[0]} 年 ${dateStr.split('/')[1]} 月 ${dateStr.split('/')[2]} 日</div>
-            </div>
+        htmlOutput += `
+            <div style="${containerStyle}">
+                <div style="position: relative; text-align: center; margin-bottom: 20px;">
+                    <div style="font-size: 26px; font-weight: 900; letter-spacing: 5px;">長固實業有限公司</div>
+                    <div style="display: inline-block; font-size: 32px; font-weight: bold; letter-spacing: 15px; margin-top: 5px; border-bottom: 2px double #000; padding-bottom: 5px;">送貨單</div>
+                    <div style="position: absolute; right: 0; bottom: 0; font-size: 20px; font-weight: bold;">
+                        No. <span style="color: #d32f2f;">${d.rowIdx.toString().padStart(5, '0')}</span>
+                        <div style="font-size: 12px; color: #666; margin-top: 5px; letter-spacing: 1px; font-weight: normal;">頁次: ${page} / ${totalPages}</div>
+                    </div>
+                </div>
 
-            <!-- 核心明細表格 -->
-            <table style="width: 100%; border-collapse: collapse; font-size: 15px; border: 2px solid #000; flex-grow: 1;">
-                <thead>
-                    <tr>
-                        <!-- 【變更】項次改為訂單號碼 -->
-                        <th style="border: 1px solid #000; padding: 8px; width: 15%; text-align: center;">訂單號碼</th>
-                        <th style="border: 1px solid #000; padding: 8px; width: 35%; text-align: center;">品  名  規  格</th>
-                        <th style="border: 1px solid #000; padding: 8px; width: 8%; text-align: center;">數 量</th>
-                        <th style="border: 1px solid #000; padding: 8px; width: 12%; text-align: center;">單 價</th>
-                        <th style="border: 1px solid #000; padding: 8px; width: 12%; text-align: center;">金  額</th>
-                        <th style="border: 1px solid #000; padding: 8px; width: 18%; text-align: center;">客 戶 簽 收</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${tbodyHtml}
-                </tbody>
-                <tfoot>
-                    <tr>
-                        <!-- 【去敏】徹底移除原本的發票編號欄位顯示，改留白維持排版 -->
-                        <td colspan="4" style="border: 1px solid #000; padding: 8px; font-weight: bold; text-align: right;"></td>
-                        <td style="border: 1px solid #000; padding: 8px; font-weight: bold; text-align: right; background-color: #f9f9f9;">${totalAmount.toLocaleString()}</td>
-                        <td style="border: 1px solid #000; padding: 8px; text-align: center; font-weight: bold;">總 計 新 台 幣</td>
-                    </tr>
-                </tfoot>
-            </table>
-            
-            <div style="margin-top: 15px; font-size: 14px; line-height: 1.6;">
-                <p style="margin-bottom: 15px;">以上貨品數量及單價請查核.</p>
-                <div style="margin-top: 30px;">
-                    <div style="width: 45%;">簽收: <span style="border-bottom: 1px solid #000; display: inline-block; width: 75%;">&nbsp;</span></div>
+                <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 5px; font-size: 16px; font-weight: bold;">
+                    <div style="width: 60%;">客 戶 名 稱：<span style="border-bottom: 1px solid #000; display: inline-block; width: 70%; padding-bottom: 2px;">${escapeQuotes(d.client)}</span></div>
+                    <div style="width: 30%; text-align: right;">${dateStr.split('/')[0]} 年 ${dateStr.split('/')[1]} 月 ${dateStr.split('/')[2]} 日</div>
+                </div>
+
+                <table style="width: 100%; border-collapse: collapse; font-size: 15px; border: 2px solid #000; flex-grow: 1;">
+                    <thead>
+                        <tr>
+                            <th style="border: 1px solid #000; padding: 8px; width: 15%; text-align: center;">訂單號碼</th>
+                            <th style="border: 1px solid #000; padding: 8px; width: 35%; text-align: center;">品  名  規  格</th>
+                            <th style="border: 1px solid #000; padding: 8px; width: 8%; text-align: center;">數 量</th>
+                            <th style="border: 1px solid #000; padding: 8px; width: 12%; text-align: center;">單 價</th>
+                            <th style="border: 1px solid #000; padding: 8px; width: 12%; text-align: center;">金  額</th>
+                            <th style="border: 1px solid #000; padding: 8px; width: 18%; text-align: center;">客 戶 簽 收</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${tbodyHtml}
+                    </tbody>
+                    <tfoot>
+                        <tr>
+                            <td colspan="4" style="border: 1px solid #000; padding: 8px; font-weight: bold; text-align: right;"></td>
+                            <td style="border: 1px solid #000; padding: 8px; font-weight: bold; text-align: right; background-color: #f9f9f9;">${totalDisplay}</td>
+                            <td style="border: 1px solid #000; padding: 8px; text-align: center; font-weight: bold;">${totalLabel}</td>
+                        </tr>
+                    </tfoot>
+                </table>
+                
+                <div style="margin-top: 15px; font-size: 14px; line-height: 1.6;">
+                    <p style="margin-bottom: 15px;">以上貨品數量及單價請查核.</p>
+                    <div style="margin-top: 30px;">
+                        <div style="width: 45%;">簽收: <span style="border-bottom: 1px solid #000; display: inline-block; width: 75%;">&nbsp;</span></div>
+                    </div>
                 </div>
             </div>
-        </div>
-    `;
+        `;
+    }
+
+    return htmlOutput;
 }
 
-// 產生合成簽名的圖片標籤
 function getSignatureImgHtml(deliveryObj) {
     if (deliveryObj.signature && deliveryObj.signature.length > 50) {
-        return `<img src="${deliveryObj.signature}" style="max-width: 95%; max-height: 120px; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); mix-blend-mode: multiply;">`;
+        return `<img src="${deliveryObj.signature}" crossorigin="anonymous" style="max-width: 95%; max-height: 120px; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); mix-blend-mode: multiply;">`;
     }
     return '';
 }
