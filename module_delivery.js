@@ -557,3 +557,4 @@ function getSignatureImgHtml(deliveryObj) {
     }
     return '';
 }
+
