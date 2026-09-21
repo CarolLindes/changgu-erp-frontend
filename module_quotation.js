@@ -1,8 +1,11 @@
 /**
  * ============================================================================
- * 模組 5：開立估價單與動態列印 (module_quotation.js) - 【本機印章完美渲染版】
+ * 模組 5：開立估價單與動態列印 (module_quotation.js) - 【Base64印章完美版】
  * ============================================================================
  */
+
+// 👇 【請注意】請將您的印章轉換為 Base64 後的完整字串貼在下方雙引號內
+const COMPANY_STAMP_BASE64 = "data:image/jpeg;base64,請將轉換後的一大串文字貼在這裡取代這段中文";
 
 // 強大的日期淨化器：專門處理後台傳來的複雜台北標準時間，確保輸出純淨的 YYYY-MM-DD
 window.cleanDateStr = function(rawDate) {
@@ -229,6 +232,16 @@ window.saveEditQuotation = function() {
         globalQuotes.unshift({ rowIdx: targetRowIdx, time: Date.now(), quoteNo: no, quoteDate: date, client: client, status: '待確認', jsonStr: JSON.stringify(items), useSeal: useSeal, mergeId: '', staff: myName, memo: memo });
     }
 
+    try {
+        if (typeof supabaseClient !== 'undefined') {
+            supabaseClient.from('quotations').upsert({
+                row_idx: targetRowIdx, time: Date.now(), quote_no: no, quote_date: date, 
+                client: client, status: currentStatus, json_str: JSON.stringify(items), 
+                use_seal: useSeal, merge_id: currentMergeId, staff: myName, memo: memo
+            }).then();
+        }
+    } catch(e) { console.error("Supabase 寫入失敗", e); }
+
     const payload = { rowIdx: idx ? parseInt(idx) : null, quoteDate: date, quoteNo: no, clientName: client, useSeal: useSeal, items: items, status: currentStatus, staff: myName, memo: memo };
     pushToSyncQueue('saveQuotation', payload, null);
     
@@ -258,6 +271,8 @@ window.groupMergeQuotations = function() {
     
     globalQuotes.forEach(q => { if(idsToMerge.includes(q.rowIdx)) q.mergeId = newMergeId; });
     
+    try { if (typeof supabaseClient !== 'undefined') supabaseClient.from('quotations').update({ merge_id: newMergeId }).in('row_idx', idsToMerge).then(); } catch(e){}
+
     pushToSyncQueue('mergeQuotations', { rowIndices: idsToMerge, mergeId: newMergeId }, null);
     window.renderQuotationList();
     showToast("🔗 估價單已成功合併！");
@@ -279,6 +294,8 @@ window.groupUnmergeQuotations = function() {
     if(idsToUnmerge.length === 0) return showToast("勾選的皆為單筆估價單，不需解除合併。");
     globalQuotes.forEach(q => { if(idsToUnmerge.includes(q.rowIdx)) q.mergeId = ''; });
     
+    try { if (typeof supabaseClient !== 'undefined') supabaseClient.from('quotations').update({ merge_id: '' }).in('row_idx', idsToUnmerge).then(); } catch(e){}
+
     pushToSyncQueue('unmergeQuotations', { rowIndices: idsToUnmerge }, null);
     window.renderQuotationList();
     showToast("✂️ 已解除合併拆分為單筆！");
@@ -301,6 +318,8 @@ window.voidQuotation = function(gid) {
             const ids = quotesInGroup.map(q => q.rowIdx);
             quotesInGroup.forEach(q => q.status = '已作廢');
             
+            try { if (typeof supabaseClient !== 'undefined') supabaseClient.from('quotations').update({ status: '已作廢' }).in('row_idx', ids).then(); } catch(e){}
+
             pushToSyncQueue('updateQuotationStatus', { rowIndices: ids, status: '已作廢' }, null);
             window.renderQuotationList();
         }
@@ -328,6 +347,8 @@ window.confirmVoidQuotationItems = function() {
         const ids = tempVoidGroupData.map(q => q.rowIdx);
         tempVoidGroupData.forEach(q => q.status = '已作廢');
         
+        try { if (typeof supabaseClient !== 'undefined') supabaseClient.from('quotations').update({ status: '已作廢' }).in('row_idx', ids).then(); } catch(e){}
+
         pushToSyncQueue('updateQuotationStatus', { rowIndices: ids, status: '已作廢' }, null);
         window.renderQuotationList();
         bootstrap.Modal.getInstance(document.getElementById('voidQuoItemsModal')).hide();
@@ -352,6 +373,18 @@ window.confirmVoidQuotationItems = function() {
             let newRowIdx = Date.now() + Math.floor(Math.random() * 1000);
             q.jsonStr = JSON.stringify(keepItems);
             globalQuotes.unshift({ rowIdx: newRowIdx, time: Date.now(), quoteNo: q.quoteNo+"-作廢", quoteDate: q.quoteDate, client: q.client, status: '已作廢', jsonStr: JSON.stringify(voidItems), useSeal: q.useSeal, mergeId: '', staff: myName, memo: q.memo });
+            
+            try {
+                if (typeof supabaseClient !== 'undefined') {
+                    supabaseClient.from('quotations').update({ json_str: JSON.stringify(keepItems) }).eq('row_idx', q.rowIdx).then();
+                    supabaseClient.from('quotations').insert({
+                        row_idx: newRowIdx, time: Date.now(), quote_no: q.quoteNo+"-作廢", 
+                        quote_date: q.quoteDate, client: q.client, status: '已作廢', 
+                        json_str: JSON.stringify(voidItems), use_seal: q.useSeal, 
+                        merge_id: '', staff: myName, memo: q.memo
+                    }).then();
+                }
+            } catch(e) { console.error("Supabase 拆分寫入失敗", e); }
             
             pushToSyncQueue('splitAndVoidQuotationItems', {
                 rowIdx: q.rowIdx, quoteNo: q.quoteNo, quoteDate: q.quoteDate, clientName: q.client, useSeal: q.useSeal, staff: myName, keepItems: keepItems, voidItems: voidItems
@@ -403,6 +436,8 @@ window.verifyQuotationToInvoice = function(gid) {
     const ids = quotesInGroup.map(q => q.rowIdx);
     quotesInGroup.forEach(q => q.status = '已核銷');
     
+    try { if (typeof supabaseClient !== 'undefined') supabaseClient.from('quotations').update({ status: '已核銷' }).in('row_idx', ids).then(); } catch(e){}
+
     pushToSyncQueue('updateQuotationStatus', { rowIndices: ids, status: '已核銷' }, null);
 
     if (typeof window.reRenderInvoiceItems === "function") window.reRenderInvoiceItems();
@@ -411,7 +446,7 @@ window.verifyQuotationToInvoice = function(gid) {
 };
 
 // ============================================================================
-// 列印估價單 (支援 A4 舒展排版、過濾日期、本機印章完美渲染)
+// 列印估價單 (支援 A4 舒展排版、過濾日期、真實公司大印章 PDF 無損輸出)
 // ============================================================================
 window.printQuotation = function(gid) {
     const quotesInGroup = globalQuotes.filter(q => q.mergeId === gid || `Single_${q.rowIdx}` === gid);
@@ -461,10 +496,10 @@ window.printQuotation = function(gid) {
         `;
     }).join('');
 
-    // 【極度關鍵修復】: 改為使用本機相對路徑 ./stamp.jpg，徹底避開 PDF 匯出的跨網域阻擋
+    // 【極度關鍵修復】: 將 COMPANY_STAMP_BASE64 直接帶入，無損輸出 PDF 絕不破圖
     const sealHtml = useSeal ? `
         <div style="position: absolute; right: 50px; bottom: 10px; display: flex; align-items: flex-end; pointer-events: none; z-index: 10; opacity: 0.95;">
-            <img src="./stamp.jpg" alt="大章" style="width: 150px; height: auto; mix-blend-mode: multiply;">
+            <img src="${COMPANY_STAMP_BASE64}" alt="大章" style="width: 150px; height: auto; mix-blend-mode: multiply;">
         </div>
     ` : '';
 
@@ -533,3 +568,4 @@ window.printQuotation = function(gid) {
         alert('系統錯誤：找不到估價單列印區塊');
     }
 };
+
