@@ -1,7 +1,7 @@
 /**
  * ============================================================================
  * 模組 1：API 核心、全域狀態與雙軌並行架構 (api_core.js) 
- * 【終極 SPA 版】完全解耦 GAS，極速直連 Supabase，拔除背景佇列
+ * 【極致優化版】突破千筆限制、精準局部刷新、徹底修復雙引號破圖 Bug
  * ============================================================================
  */
 
@@ -47,6 +47,7 @@ let selectedOrderCache = [];
 let currentInvoiceData = { clientName:'', taxId:'', items:[] }; 
 let currentSearchSource = []; 
 let currentSearchCallback = null;
+let myLastSyncTime = Date.now();
 
 // ============================================================================
 // API 通訊模組 (攔截前端邏輯 或 發送至機器人)
@@ -346,12 +347,11 @@ async function executeSupabaseAction(action, payload) {
     console.log(`[Supabase 寫入] 成功！`);
 }
 
-// 橋接器：取代原本的佇列，改為直接 Await Supabase 寫入，速度極快！
 async function pushToSyncQueue(action, payload, callback) {
     try {
         await executeSupabaseAction(action, payload);
         if (callback) callback({ success: true });
-        // 不再需要手動刷新，Realtime 機制會自動偵測變更並重繪 UI
+        // Realtime 機制會自動偵測變更並重繪 UI
     } catch (e) {
         console.error("資料庫操作異常:", e);
         alert("資料庫寫入失敗：" + e.message);
@@ -359,25 +359,45 @@ async function pushToSyncQueue(action, payload, callback) {
 }
 
 // ============================================================================
-// 【核心】從 Supabase 極速載入全系統資料 (0.1秒載入)
+// 【全新優化】突破千筆限制的分頁抓取引擎
+// ============================================================================
+async function fetchAllSupabaseTable(table, orderByCol = null, ascending = false) {
+    let allData = [];
+    let rangeStart = 0;
+    const limit = 1000;
+    while(true) {
+        let query = supabaseClient.from(table).select('*');
+        if (orderByCol) query = query.order(orderByCol, {ascending: ascending});
+        const { data, error } = await query.range(rangeStart, rangeStart + limit - 1);
+        if (error) throw error;
+        if (!data || data.length === 0) break;
+        allData = allData.concat(data);
+        if (data.length < limit) break;
+        rangeStart += limit;
+    }
+    return { data: allData };
+}
+
+// ============================================================================
+// 【極速載入】從 Supabase 載入全系統資料
 // ============================================================================
 async function loadDataFromSupabase() {
-    console.log("⚡ 從 Supabase 極速載入資料...");
+    console.log("⚡ 從 Supabase 極速載入全系統資料 (已啟用自動分頁與突破限制)...");
     const [
         {data: c}, {data: s}, {data: cat}, {data: inv}, {data: ord},
         {data: invc}, {data: sd}, {data: log}, {data: del}, {data: quo}, {data: em}
     ] = await Promise.all([
-        supabaseClient.from('clients').select('*'),
-        supabaseClient.from('suppliers').select('*'),
-        supabaseClient.from('catalog').select('*'),
-        supabaseClient.from('inventory').select('*'),
-        supabaseClient.from('orders').select('*').order('row_idx', {ascending: false}),
-        supabaseClient.from('invoices').select('*').order('row_idx', {ascending: false}),
-        supabaseClient.from('sales_details').select('*').order('row_idx', {ascending: false}),
-        supabaseClient.from('inventory_logs').select('*').order('row_idx', {ascending: false}),
-        supabaseClient.from('deliveries').select('*').order('row_idx', {ascending: false}),
-        supabaseClient.from('quotations').select('*').order('row_idx', {ascending: false}),
-        supabaseClient.from('email_settings').select('*')
+        fetchAllSupabaseTable('clients'),
+        fetchAllSupabaseTable('suppliers'),
+        fetchAllSupabaseTable('catalog'),
+        fetchAllSupabaseTable('inventory'),
+        fetchAllSupabaseTable('orders', 'row_idx', false),
+        fetchAllSupabaseTable('invoices', 'row_idx', false),
+        fetchAllSupabaseTable('sales_details', 'row_idx', false),
+        fetchAllSupabaseTable('inventory_logs', 'row_idx', false),
+        fetchAllSupabaseTable('deliveries', 'row_idx', false),
+        fetchAllSupabaseTable('quotations', 'row_idx', false),
+        fetchAllSupabaseTable('email_settings')
     ]);
 
     globalClients = (c || []).map(x => ({name: x.name, taxId: x.tax_id, address: x.address, receiveDept: x.receive_dept}));
@@ -395,6 +415,55 @@ async function loadDataFromSupabase() {
     emailSettingsData.selected = emailSettingsData.selected || [];
     
     myLastSyncTime = Date.now();
+}
+
+// ============================================================================
+// 【全新優化】局部表格更新中樞 (效能提升核心)
+// ============================================================================
+async function silentRefreshTable(table) {
+    try {
+        console.log(`🔄 針對變更資料表 [${table}] 進行局部更新...`);
+        let orderByCol = null;
+        let ascending = false;
+        if (['orders', 'invoices', 'sales_details', 'inventory_logs', 'deliveries', 'quotations'].includes(table)) {
+            orderByCol = 'row_idx';
+        }
+        
+        const { data: allData } = await fetchAllSupabaseTable(table, orderByCol, ascending);
+
+        if (table === 'clients') globalClients = allData.map(x => ({name: x.name, taxId: x.tax_id, address: x.address, receiveDept: x.receive_dept}));
+        else if (table === 'suppliers') globalSuppliers = allData.map(x => ({name: x.name, code: x.code, phone: x.phone, fax: x.fax}));
+        else if (table === 'catalog') globalCatalog = allData.map(x => ({rowIndex: x.row_index, assetCode: x.asset_code, internalCode: x.internal_code, clientName: x.client_name, productName: x.product_name, unit: x.unit, price: Number(x.price)}));
+        else if (table === 'inventory') globalInventory = allData.map(x => ({rowIdx: 0, name: x.name, qty: Number(x.qty), alertQty: Number(x.alert_qty), cost: Number(x.cost), supplier: x.supplier, internalCode: x.internal_code, assetCodeCombined: x.asset_code_combined, batchesStr: x.batches_str}));
+        else if (table === 'orders') globalOrders = allData.map(x => ({rowIdx: x.row_idx, time: Number(x.time), client: x.client, orderNo: x.order_no, dept: x.dept, status: x.status, jsonStr: x.json_str, deadline: x.deadline, source: x.source, mailUrl: x.mail_url}));
+        else if (table === 'invoices') globalHistory = allData.map(x => ({rowIdx: x.row_idx, time: Number(x.time), staff: x.staff, client: x.client, taxId: x.tax_id, net: Number(x.net), tax: Number(x.tax), total: Number(x.total), details: x.details, paperNo: x.paper_no, orderNo: x.order_no, status: x.status, historyLog: x.history_log}));
+        else if (table === 'sales_details') globalSalesDetails = allData.map(x => ({rowIdx: x.row_idx, time: Number(x.time), paperNo: x.paper_no, client: x.client, orderNo: x.order_no, name: x.name, qty: Number(x.qty), unit: x.unit, price: Number(x.price), subtotal: Number(x.subtotal), shipStatus: x.ship_status, shippedQty: Number(x.shipped_qty), lot: x.lot, expiry: x.expiry}));
+        else if (table === 'inventory_logs') globalInvLogs = allData.map(x => ({rowIdx: x.row_idx, time: Number(x.time), staff: x.staff, name: x.name, type: x.type, qtyChange: Number(x.qty_change), newQty: Number(x.new_qty), lot: x.lot, expiry: x.expiry, invoiceNo: x.invoice_no, orderNo: x.order_no, memo: x.memo, arrivalDate: x.arrival_date, snapshot: x.snapshot, internalCode: x.internal_code}));
+        else if (table === 'deliveries') globalDeliveries = allData.map(x => ({rowIdx: x.row_idx, time: Number(x.time), paperNo: x.paper_no, client: x.client, itemsStr: x.items_str, status: x.status, deliveryDate: x.delivery_date, deliveryMethod: x.delivery_method, memo: x.memo, signature: x.signature, staff: x.staff, orderNo: x.order_no, lot: x.lot, expiry: x.expiry}));
+        else if (table === 'quotations') globalQuotes = allData.map(x => ({rowIdx: x.row_idx, time: Number(x.time), quoteNo: x.quote_no, quoteDate: x.quote_date, client: x.client, status: x.status, jsonStr: x.json_str, useSeal: x.use_seal, mergeId: x.merge_id, staff: x.staff, memo: x.memo}));
+        else if (table === 'email_settings') emailSettingsData.list = allData.map(x => ({email: x.email, memo: x.memo}));
+
+        refreshAllUI();
+    } catch (e) {
+        console.error(`局部更新 ${table} 失敗:`, e);
+    }
+}
+
+let realtimeDebounceTimer = null;
+function setupSupabaseRealtime() {
+    supabaseClient.channel('custom-all-channel')
+        .on('postgres_changes', { event: '*', schema: 'public' }, payload => {
+            const changedTable = payload.table;
+            clearTimeout(realtimeDebounceTimer);
+            realtimeDebounceTimer = setTimeout(() => {
+                silentRefreshTable(changedTable); 
+            }, 800); // 防抖 0.8 秒，優化效能
+        })
+        .subscribe((status) => {
+            if (status === 'SUBSCRIBED') {
+                console.log('✅ Supabase Realtime 即時監聽已啟動 (局部刷新機制)');
+            }
+        });
 }
 
 // ============================================================================
@@ -434,24 +503,7 @@ function refreshAllUI() {
 function silentRefreshData() {
     loadDataFromSupabase().then(() => {
         refreshAllUI();
-    }).catch(err => console.log('背景靜默同步 Supabase 失敗:', err));
-}
-
-let realtimeDebounceTimer = null;
-function setupSupabaseRealtime() {
-    supabaseClient.channel('custom-all-channel')
-        .on('postgres_changes', { event: '*', schema: 'public' }, payload => {
-            console.log('🔄 Supabase 偵測到資料庫變更:', payload);
-            clearTimeout(realtimeDebounceTimer);
-            realtimeDebounceTimer = setTimeout(() => {
-                silentRefreshData(); 
-            }, 1000); // 防抖 1 秒
-        })
-        .subscribe((status) => {
-            if (status === 'SUBSCRIBED') {
-                console.log('✅ Supabase Realtime 即時監聽已啟動');
-            }
-        });
+    }).catch(err => console.log('背景靜默同步全系統失敗:', err));
 }
 
 // ============================================================================
@@ -474,6 +526,17 @@ function debounce(func, delay = 300) {
         timer = setTimeout(() => func.apply(this, args), delay);
     };
 }
+
+// 【新增】全域按鈕防連點鎖定工具
+window.lockButton = function(btn) {
+    if(!btn) return false;
+    if(btn.disabled) return true; // 已鎖定，阻擋執行
+    btn.disabled = true;
+    const originalText = btn.innerHTML;
+    btn.innerHTML = `<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> 處理中...`;
+    setTimeout(() => { btn.disabled = false; btn.innerHTML = originalText; }, 3000);
+    return false; // 允許通行
+};
 
 // ============================================================================
 // 【強大升級】動態切換紙張版型、解除手機列印限制、PDF 高畫質分享引擎
@@ -529,7 +592,6 @@ window.showPrintPreview = function(areaId) {
     if (!controlBar) {
         controlBar = document.createElement('div');
         controlBar.id = 'printControlBar';
-        // 加入 PDF 分享按鈕與 Flex 排版
         controlBar.className = 'd-flex justify-content-center flex-wrap gap-2 p-3 position-fixed w-100 top-0 d-print-none';
         controlBar.style.cssText = 'z-index: 10500; left: 0; background-color: #343a40; box-shadow: 0 4px 6px rgba(0,0,0,0.3);';
         document.body.appendChild(controlBar);
@@ -541,7 +603,6 @@ window.showPrintPreview = function(areaId) {
     `;
     controlBar.style.display = 'flex';
     
-    // 【極重要修復】解除手機版 100vh 高度鎖定，讓手機系統能正確計算出所有頁數
     document.documentElement.style.height = 'auto';
     document.documentElement.style.overflow = 'visible';
     document.body.style.height = 'auto';
@@ -555,7 +616,6 @@ window.closePrintPreview = function() {
     let controlBar = document.getElementById('printControlBar');
     if(controlBar) controlBar.remove(); 
     
-    // 還原手機版高度限制
     document.documentElement.style.height = '';
     document.documentElement.style.overflow = '';
     document.body.style.height = '';
@@ -578,7 +638,6 @@ window.closePrintPreview = function() {
     document.getElementById('mainApp').style.display = 'block';
 };
 
-// 【全新修復版】分享 PDF 高畫質引擎 (支援去背印章無損輸出)
 window.sharePdf = async function(areaId) {
     if (typeof html2pdf === 'undefined') {
         alert("PDF 模組載入中，請稍等一秒後再試！");
@@ -587,8 +646,6 @@ window.sharePdf = async function(areaId) {
     showLoading("📄 正在產生高畫質 PDF，請稍候...");
     const element = document.getElementById(areaId);
     
-    // 【關鍵修復】: html2canvas 遇到 mix-blend-mode 會導致圖片破圖甚至變黑
-    // 在產出 PDF 之前，我們瞬間把印章的 mix-blend-mode 移除，並確保允許跨域
     const imgs = element.querySelectorAll('img');
     const origStyles = [];
     imgs.forEach(img => {
@@ -605,7 +662,6 @@ window.sharePdf = async function(areaId) {
         jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
     };
     
-    // 若為送貨單或訂貨單，動態切換為 A5 橫向
     if(areaId === 'printDeliveryArea' || areaId === 'printPoArea') {
         opt.jsPDF.format = 'a5';
         opt.jsPDF.orientation = 'landscape';
@@ -613,14 +669,10 @@ window.sharePdf = async function(areaId) {
 
     try {
         const pdfBlob = await html2pdf().set(opt).from(element).output('blob');
-        
-        // 瞬間把印章的去背效果還原回去，讓網頁看起來不變
         imgs.forEach((img, i) => img.style.mixBlendMode = origStyles[i]);
         hideLoading();
         
         const file = new File([pdfBlob], opt.filename, { type: 'application/pdf' });
-        
-        // 喚醒手機原生分享機制 (Line, Gmail 等)
         if (navigator.canShare && navigator.canShare({ files: [file] })) {
             await navigator.share({
                 title: '長固ERP 單據',
@@ -628,7 +680,6 @@ window.sharePdf = async function(areaId) {
                 files: [file]
             });
         } else {
-            // 電腦版或不支援 Web Share API 的瀏覽器，自動轉為下載檔案
             const link = document.createElement('a');
             link.href = URL.createObjectURL(pdfBlob);
             link.download = opt.filename;
@@ -636,7 +687,6 @@ window.sharePdf = async function(areaId) {
             showToast("⬇️ 裝置不支援直接分享，已自動為您下載 PDF。");
         }
     } catch (err) {
-        // 確保發生錯誤時也能還原圖片外觀
         imgs.forEach((img, i) => img.style.mixBlendMode = origStyles[i]);
         hideLoading();
         alert("產生或分享 PDF 時發生錯誤：" + err.message);
@@ -680,11 +730,74 @@ document.addEventListener('dragend', function(e) {
 });
 
 // ============================================================================
+// 【全新修復】Search Modal 傳遞完整物件，防禦特殊符號破圖 Bug
+// ============================================================================
+window.openSearchModal = function(type, callback) {
+    currentSearchCallback = callback; 
+    document.getElementById('searchModalList').innerHTML = ''; 
+    document.getElementById('searchModalInput').value = '';
+    
+    if(type === 'client' || type === 'admin_client' || type === 'client_ord' || type === 'client_quo') { 
+        document.getElementById('searchModalTitle').innerText = '選擇客戶'; 
+        currentSearchSource = globalClients.map(c => ({ text: c.name, sub: `統編: ${c.taxId||'無'}`, val: c.name, ref: c })); 
+    }
+    else if(type === 'item_adj') { 
+        document.getElementById('searchModalTitle').innerText = '選擇盤點品項'; 
+        const uniqueProds = [...new Map(globalCatalog.map(item => [item.productName, item])).values()]; 
+        currentSearchSource = uniqueProds.map(p => ({ text: p.productName, sub: `長固代號: ${p.internalCode||p.assetCode||'無'}`, val: p.productName, ref: p })); 
+    }
+    else if(type.startsWith('item_')) { 
+        document.getElementById('searchModalTitle').innerText = '選擇品項'; 
+        let clientName = ''; 
+        if(type.startsWith('item_ord_')) clientName = document.getElementById('e_ordClient').value; 
+        else if(type.startsWith('item_quo_')) clientName = document.getElementById('e_quoClient').value; 
+        else clientName = document.getElementById('invClientInput').value; 
+        
+        if(!clientName) { alert('請先選擇客戶！'); return; } 
+        // 搜尋列擴充顯示：帶入資材碼以供人員核對
+        currentSearchSource = globalCatalog.filter(p => p.clientName === clientName).map(p => {
+            let detailStr = `單價: $${p.price} / ${p.unit}`;
+            if(p.assetCode) detailStr += ` | 資材碼: ${p.assetCode}`;
+            return { text: p.productName, sub: detailStr, val: p.productName, ref: p };
+        }); 
+    }
+    
+    window.renderSearchList(currentSearchSource); 
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('searchModal')).show(); 
+    setTimeout(()=> document.getElementById('searchModalInput').focus(), 500);
+};
+
+window.filterSearchModal = debounce(function() { 
+    const term = (document.getElementById('searchModalInput').value || '').toLowerCase(); 
+    window.renderSearchList(currentSearchSource.filter(s => (s.text||'').toLowerCase().includes(term) || ((s.sub||'').toLowerCase().includes(term)))); 
+}, 300);
+
+// 改為使用 DOM Element 動態綁定 onclick，避免字串引號衝突 HTML 屬性
+window.renderSearchList = function(arr) { 
+    const listEl = document.getElementById('searchModalList');
+    listEl.innerHTML = '';
+    
+    arr.forEach(item => {
+        const btn = document.createElement('button');
+        btn.className = 'search-btn-item';
+        // 綁定匿名函式，直接傳送該物件參考，徹底阻絕引號溢出 Bug
+        btn.onclick = () => window.onSearchSelect(item);
+        btn.innerHTML = `<div class="d-flex justify-content-between align-items-center"><span>${escapeQuotes(item.text)}</span><span class="badge bg-secondary">${escapeQuotes(item.sub)}</span></div>`;
+        listEl.appendChild(btn);
+    });
+};
+
+window.onSearchSelect = function(itemObj) { 
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('searchModal')).hide(); 
+    // 回傳原始字串或物件參考給需要的模組
+    if(currentSearchCallback) currentSearchCallback(itemObj.val); 
+};
+
+// ============================================================================
 // 系統初始化與授權
 // ============================================================================
 window.onload = function() {
     lockScreen();
-    // 移除舊的未同步檢查機制 UI
     const errBtn = document.getElementById('btnRetrySync');
     if (errBtn) errBtn.style.display = 'none';
 
@@ -699,10 +812,9 @@ window.onload = function() {
         document.getElementById('authScreen').style.display = 'flex'; 
     }
     
-    // 心跳系統 (改為前端模擬，降低主機負載)
     setInterval(() => { 
         if(document.getElementById('mainApp') && document.getElementById('mainApp').style.display === 'block') { 
-            let count = Math.floor(Math.random() * 3) + 1; // 隨機產生 1~3 人的在線錯覺
+            let count = Math.floor(Math.random() * 3) + 1;
             if(document.getElementById('mqOnline')) document.getElementById('mqOnline').innerText = `👥 ${count} 人`; 
             if(document.getElementById('navOnlineCount')) document.getElementById('navOnlineCount').innerText = `👥 ${count}`; 
         } 
@@ -799,4 +911,3 @@ window.enterSystem = function(modId) {
 };
 
 window.backToHome = function() { document.getElementById('mainApp').style.display = 'none'; document.getElementById('homeMenu').style.display = 'block'; };
-
