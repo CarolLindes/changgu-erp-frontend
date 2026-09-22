@@ -1,6 +1,7 @@
 /**
  * ============================================================================
- * 模組 5：開立估價單與動態列印 (module_quotation.js) - 【Base64印章完美版】
+ * 模組 5：開立估價單與動態列印 (module_quotation.js) 
+ * 【防連點與強健比對版】Base64印章完美保留，徹底阻絕重複估價與重複核銷
  * ============================================================================
  */
 
@@ -180,7 +181,8 @@ window.selectClientForQuotation = function(val) {
 
 window.selectProductForQuo = function(rowId, prodName) {
     const client = document.getElementById('e_quoClient').value;
-    const p = globalCatalog.find(x => x.clientName === client && x.productName === prodName);
+    // 支援強健比對引擎
+    const p = window.findProductRobust ? window.findProductRobust(client, null, prodName) : globalCatalog.find(x => x.clientName === client && x.productName === prodName);
     if(p) {
         const item = currentQuoItems.find(x => x.id === rowId);
         if(item) {
@@ -201,6 +203,9 @@ window.toggleQuoBrand = function(id, isChecked) { const item = currentQuoItems.f
 window.removeQuotationItem = function(id) { currentQuoItems = currentQuoItems.filter(x=>x.id!==id); reRenderQuotationItems(); };
 
 window.saveEditQuotation = function() {
+    const btn = event ? event.currentTarget : null;
+    if(window.lockButton(btn)) return; // 防連點保護
+
     const idx = document.getElementById('e_quoRow').value;
     const date = document.getElementById('e_quoDate').value;
     const no = document.getElementById('e_quoNo').value.trim();
@@ -251,6 +256,9 @@ window.saveEditQuotation = function() {
 };
 
 window.groupMergeQuotations = function() {
+    const btn = event ? event.currentTarget : null;
+    if(window.lockButton(btn)) return; // 防連點保護
+
     const cbs = document.querySelectorAll('.cb-quo:checked');
     if(cbs.length < 2) return alert('請至少勾選 2 筆估價單進行合併！');
     
@@ -279,6 +287,9 @@ window.groupMergeQuotations = function() {
 };
 
 window.groupUnmergeQuotations = function() {
+    const btn = event ? event.currentTarget : null;
+    if(window.lockButton(btn)) return; // 防連點保護
+
     const cbs = document.querySelectorAll('.cb-quo:checked');
     if(cbs.length === 0) return alert('請先勾選已合併的估價單群組！');
     
@@ -334,6 +345,9 @@ window.voidQuotation = function(gid) {
 };
 
 window.confirmVoidQuotationItems = function() {
+    const btn = event ? event.currentTarget : null;
+    if(window.lockButton(btn)) return; // 防連點保護
+
     const cbs = document.querySelectorAll('.cb-void-item:checked');
     if(cbs.length === 0) return alert('請至少勾選一項要作廢的品項！');
 
@@ -398,6 +412,9 @@ window.confirmVoidQuotationItems = function() {
 };
 
 window.verifyQuotationToInvoice = function(gid) {
+    const btn = event ? event.currentTarget : null;
+    if(window.lockButton(btn)) return; // 防連點保護
+
     const quotesInGroup = globalQuotes.filter(q => q.mergeId === gid || `Single_${q.rowIdx}` === gid);
     if(quotesInGroup.length === 0) return;
 
@@ -568,4 +585,3 @@ window.printQuotation = function(gid) {
         alert('系統錯誤：找不到估價單列印區塊');
     }
 };
-
