@@ -1,6 +1,7 @@
 /**
  * ============================================================================
- * 模組 3：開立發票、歷史紀錄與報表 (module_invoice_history.js) - 【雙向作廢連動版】
+ * 模組 3：開立發票、歷史紀錄與報表 (module_invoice_history.js)
+ * 【防連點與強健比對版】全面導入按鈕鎖定機制，並支援防破圖品項選擇
  * ============================================================================
  */
 
@@ -47,10 +48,10 @@ window.renderSingleInvoiceItem = function(item) {
         <div class="ps-4">
             <label class="form-label text-primary fw-bold small">${isMatch ? '✅ 已對應價表' : '⚠️ 價格或品項待確'}</label>
             <input type="text" class="form-control fake-input-btn mb-2" id="prodInput_${item.id}" value="${escapeQuotes(name)}" readonly placeholder="點此選擇品項..." onclick="openSearchModal('item_${item.id}', (val)=>selectProductForInv('${item.id}', val))">
-            <div id="prodInfo_${item.id}" class="small text-muted mb-2 px-1">${isMatch ? `單價: $${price} | 單位: ${unit}` : ''}</div>
+            <div id="prodInfo_${item.id}" class="small text-muted mb-2 px-1">${isMatch ? `單價: $${price} \vert{} 單位: ${unit}` : ''}</div>
             <div class="row g-2">
                 <div class="col-6"><label class="form-label fw-bold small">本次開立數量 (可修改)</label><input type="number" class="form-control" id="qty_${item.id}" value="${item.qty}" min="0" step="any" oninput="updateInvQty('${item.id}', this.value)"></div>
-                <div class="col-6"><label class="form-label fw-bold small">歸屬訂單 / 單位</label><input type="text" class="form-control bg-light text-secondary" value="${escapeQuotes(`${item.orderRef || ''} ${item.deptRef || ''}`.trim())}" readonly></div>
+                <div class="col-6"><label class="form-label fw-bold small">歸屬訂單 / 單位</label><input type="text" class="form-control bg-light text-secondary" value="${escapeQuotes(`${item.orderRef \vert{}\vert{} ''}${item.deptRef || ''}`.trim())}" readonly></div>
             </div>
         </div>
     </div>`;
@@ -69,7 +70,8 @@ window.addInvoiceItemRow = function() {
 };
 
 window.selectProductForInv = function(rowId, prodName) { 
-    const p = globalCatalog.find(x => x.clientName === currentInvoiceData.clientName && x.productName === prodName); 
+    // 【升級】引入強健比對引擎，避免符號或空白造成找不到品項
+    const p = window.findProductRobust(currentInvoiceData.clientName, null, prodName); 
     if(!p) return; 
     const item = currentInvoiceData.items.find(x => x.id === rowId); 
     if(item) item.product = p; 
@@ -162,6 +164,9 @@ window.generatePreview = function() {
 };
 
 window.submitInvoiceOptimistic = function() {
+    const btn = event ? event.currentTarget : null;
+    if(window.lockButton(btn)) return; // 防連點保護
+
     const orderNo = document.getElementById('invOrderNo').value; 
     const paperNo = document.getElementById('invPaperNo').value.toUpperCase(); 
     const invDateVal = document.getElementById('invDate').value; 
@@ -319,6 +324,9 @@ window.openSuppInvModal = function(idx, oldPaperNo) {
 };
 
 window.confirmSupplementInvoice = function() {
+    const btn = event ? event.currentTarget : null;
+    if(window.lockButton(btn)) return; // 防連點保護
+
     const idx = parseInt(document.getElementById('supp_invRowIdx').value);
     const oldPaperNo = document.getElementById('supp_oldPaperNo').value;
     const newPaperNo = document.getElementById('supp_newPaperNo').value.trim().toUpperCase();
@@ -430,9 +438,12 @@ window.printDeliveryNote = function(idx) {
 };
 
 // ============================================================================
-// 【全新升級】發票雙向作廢 (連動註銷明細、返還庫存、作廢送貨單)
+// 【發票雙向作廢】連動註銷明細、返還庫存、作廢送貨單
 // ============================================================================
 window.voidInv = function(idx, pNo) { 
+    const btn = event ? event.currentTarget : null;
+    if(window.lockButton(btn)) return; // 防連點保護
+
     if(confirm("確定作廢？系統將自動：\n1. 註銷此發票帳款\n2. 註銷銷售明細\n3. 註銷對應的送貨單\n4. 【自動返還已出貨之庫存數量】")) { 
         const h = globalHistory.find(x=>x.rowIdx === idx); 
         if(h) h.status = '作廢'; 
@@ -448,7 +459,7 @@ window.voidInv = function(idx, pNo) {
             } 
         });
 
-        // 【優化】連動註銷送貨單
+        // 連動註銷送貨單
         globalDeliveries.forEach(d => {
             if (d.paperNo && d.paperNo.includes(pNo) && d.status !== '已作廢') {
                 d.status = '已作廢';
@@ -481,6 +492,9 @@ window.openEditInv = function(idx) {
 };
 
 window.saveEditInvoice = function() { 
+    const btn = event ? event.currentTarget : null;
+    if(window.lockButton(btn)) return; // 防連點保護
+
     const idx = parseInt(document.getElementById('e_invRow').value); 
     const h = globalHistory.find(x=>x.rowIdx === idx); 
     const data = { 
@@ -582,6 +596,9 @@ window.exportReportToEmail = function() {
 };
 
 window.confirmExportReport = function() {
+    const btn = event ? event.currentTarget : null;
+    if(window.lockButton(btn)) return; // 防連點保護
+
     const cbs = document.querySelectorAll('.dyn-email-cb:checked');
     const emails = Array.from(cbs).map(cb => cb.value);
     if(emails.length === 0) return alert("請至少勾選一個收件信箱！");
