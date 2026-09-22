@@ -1,6 +1,7 @@
 /**
  * ============================================================================
- * 模組 6：送貨追蹤與電子簽收模組 (module_delivery.js) - 【最終物理合併、拆分與完美按鈕版】
+ * 模組 6：送貨追蹤與電子簽收模組 (module_delivery.js) 
+ * 【防連點與穩定簽收版】確保業務外勤簽收時不會因網路延遲產生重複資料
  * ============================================================================
  */
 
@@ -59,7 +60,6 @@ function buildDeliveryHtml(dataArr, isPending) {
         if (isPending) {
             checkboxHtml = `<input class="form-check-input me-3 cb-del" type="checkbox" value="${d.rowIdx}" style="transform: scale(1.3); flex-shrink: 0;">`;
             
-            // 【優化】按鈕排列順序嚴格遵循：[還原拆分] -> [作廢] -> [執行送貨]
             if (String(d.paperNo).includes(',')) {
                 actionBtns += `<button class="btn btn-sm btn-outline-secondary fw-bold me-2" onclick="unmergeDelivery(${d.rowIdx})">✂️ 還原拆分</button>`;
             }
@@ -104,6 +104,9 @@ function buildDeliveryHtml(dataArr, isPending) {
 // 作廢送貨單，並雙向連動作廢發票與庫存返還
 // ============================================================================
 window.voidDeliveryAndInvoice = function(idx) {
+    const btn = event ? event.currentTarget : null;
+    if(window.lockButton(btn)) return; // 防連點保護
+
     const d = globalDeliveries.find(x => x.rowIdx === idx);
     if (!d) return;
     if (!confirm(`確定要作廢此筆送貨作業嗎？\n⚠️ 系統將自動連動：\n1. 作廢關聯的發票 (${d.paperNo})\n2. 註銷銷售明細\n3. 完整返還出貨庫存`)) return;
@@ -177,6 +180,9 @@ window.openDeliveryActionModal = function(rowIndices) {
 };
 
 window.confirmDeliveryAction = function() {
+    const btn = event ? event.currentTarget : null;
+    if(window.lockButton(btn)) return; // 防連點保護
+
     const ids = JSON.parse(document.getElementById('da_rowIndices').value);
     const date = document.getElementById('da_date').value;
     const method = document.getElementById('da_method').value;
@@ -212,7 +218,6 @@ window.confirmDeliveryAction = function() {
                 let items = []; try { items = JSON.parse(d.itemsStr); } catch(e){}
                 
                 // 【關鍵】在合併時，將來源發票與單號紀錄在品項內部，為未來的「還原拆分」做準備
-                // 即使是已經被退回的合併單再次合併，也能完美保留最原始的單據來源
                 items.forEach(i => {
                     if(!i._sourcePaperNo) i._sourcePaperNo = d.paperNo;
                     if(!i._sourceOrderNo) i._sourceOrderNo = d.orderNo;
@@ -260,6 +265,9 @@ window.confirmDeliveryAction = function() {
 // 還原拆分合併的送貨單
 // ============================================================================
 window.unmergeDelivery = function(idx) {
+    const btn = event ? event.currentTarget : null;
+    if(window.lockButton(btn)) return; // 防連點保護
+
     if(!confirm("確定要將此合併送貨單還原拆分為多筆原始單據嗎？")) return;
     
     const d = globalDeliveries.find(x => x.rowIdx === idx);
@@ -319,6 +327,9 @@ window.unmergeDelivery = function(idx) {
 // 3. 狀態退回與電子簽收 (Signature Pad)
 // ============================================================================
 window.returnDelivery = function(idx) {
+    const btn = event ? event.currentTarget : null;
+    if(window.lockButton(btn)) return; // 防連點保護
+
     if(!confirm("確定要將此筆資料退回「待送貨」狀態嗎？")) return;
     const d = globalDeliveries.find(x => x.rowIdx === idx);
     if(d) d.status = '待送貨';
@@ -394,6 +405,9 @@ window.clearSignature = function() {
 };
 
 window.confirmSignature = function() {
+    const btn = event ? event.currentTarget : null;
+    if(window.lockButton(btn)) return; // 防連點保護
+
     if (!currentDeliverySignRowIdx) return;
     
     const blank = document.createElement('canvas');
@@ -557,4 +571,3 @@ function getSignatureImgHtml(deliveryObj) {
     }
     return '';
 }
-
