@@ -1,7 +1,7 @@
 /**
  * ============================================================================
  * 模組 3：開立發票、歷史紀錄與報表 (module_invoice_history.js)
- * 【防連點與強健比對版】全面導入按鈕鎖定機制，並支援防破圖品項選擇
+ * 【防連點與強健比對版】修正 SyntaxError 巢狀樣板字串 Bug，確保流程順暢
  * ============================================================================
  */
 
@@ -42,6 +42,12 @@ window.renderSingleInvoiceItem = function(item) {
     let price = item.product ? item.product.price : 0;
     let unit = item.product ? item.product.unit : '式';
     let name = item.product ? item.product.productName : '';
+    
+    // 【修復】抽離組合邏輯，避免巢狀樣板字面值導致瀏覽器解析 SyntaxError
+    let orderRefStr = item.orderRef || '';
+    let deptRefStr = item.deptRef || '';
+    let combinedRef = (orderRefStr + ' ' + deptRefStr).trim();
+
     return `<div class="item-row border-primary draggable-row" id="${item.id}" draggable="true" ondragstart="handleDragStart(event, '${item.id}', 'invoice')" ondragover="handleDragOver(event)" ondrop="handleDrop(event, '${item.id}', 'invoice')" ondragenter="handleDragEnter(event)" ondragleave="handleDragLeave(event)">
         <div class="drag-handle position-absolute" style="top:10px; left:10px; cursor:grab; font-size: 1.2rem; color: #adb5bd;" title="按住拖曳排序">☰</div>
         <button class="btn btn-sm btn-outline-danger position-absolute" style="top:10px; right:10px;" onclick="removeInvItem('${item.id}')">✕</button>
@@ -51,7 +57,7 @@ window.renderSingleInvoiceItem = function(item) {
             <div id="prodInfo_${item.id}" class="small text-muted mb-2 px-1">${isMatch ? `單價: $${price} \vert{} 單位: ${unit}` : ''}</div>
             <div class="row g-2">
                 <div class="col-6"><label class="form-label fw-bold small">本次開立數量 (可修改)</label><input type="number" class="form-control" id="qty_${item.id}" value="${item.qty}" min="0" step="any" oninput="updateInvQty('${item.id}', this.value)"></div>
-                <div class="col-6"><label class="form-label fw-bold small">歸屬訂單 / 單位</label><input type="text" class="form-control bg-light text-secondary" value="${escapeQuotes(`${item.orderRef \vert{}\vert{} ''}${item.deptRef || ''}`.trim())}" readonly></div>
+                <div class="col-6"><label class="form-label fw-bold small">歸屬訂單 / 單位</label><input type="text" class="form-control bg-light text-secondary" value="${escapeQuotes(combinedRef)}" readonly></div>
             </div>
         </div>
     </div>`;
@@ -71,7 +77,7 @@ window.addInvoiceItemRow = function() {
 
 window.selectProductForInv = function(rowId, prodName) { 
     // 【升級】引入強健比對引擎，避免符號或空白造成找不到品項
-    const p = window.findProductRobust(currentInvoiceData.clientName, null, prodName); 
+    const p = window.findProductRobust ? window.findProductRobust(currentInvoiceData.clientName, null, prodName) : globalCatalog.find(x => x.clientName === currentInvoiceData.clientName && x.productName === prodName); 
     if(!p) return; 
     const item = currentInvoiceData.items.find(x => x.id === rowId); 
     if(item) item.product = p; 
@@ -292,7 +298,12 @@ window.renderHistory = debounce(function() {
         }
 
         const isBorrowed = String(h.paperNo).startsWith('[借用中]');
-        let paperNoHtml = h.paperNo ? (isBorrowed ? `<span class="text-danger">⚠️ ${h.paperNo}</span>` : `發票: ${h.paperNo}`) : '';
+        
+        // 【修復】移除巢狀樣板字面值，改用字串相加確保安全解析
+        let paperNoHtml = '';
+        if (h.paperNo) {
+            paperNoHtml = isBorrowed ? '<span class="text-danger">⚠️ ' + h.paperNo + '</span>' : '發票: ' + h.paperNo;
+        }
 
         let actionBtns = '';
         if (!isVoid) {
@@ -582,14 +593,16 @@ window.exportReportToEmail = function() {
     if (!emailSettingsData || !emailSettingsData.list || emailSettingsData.list.length === 0) {
         container.innerHTML = '<div class="text-danger fw-bold py-3 text-center">找不到信箱清單，請確認後台「收件信箱管理」是否有資料！</div>';
     } else {
-        container.innerHTML = emailSettingsData.list.map((item, idx) =>
-            `<div class="form-check p-3 border rounded bg-white shadow-sm d-flex align-items-center mb-2">
+        // 【修復】移除巢狀樣板字面值
+        container.innerHTML = emailSettingsData.list.map((item, idx) => {
+            let memoHtml = item.memo ? '<span class="badge bg-secondary ms-2">' + item.memo + '</span>' : '';
+            return `<div class="form-check p-3 border rounded bg-white shadow-sm d-flex align-items-center mb-2">
                 <input class="form-check-input dyn-email-cb m-0 me-3" type="checkbox" value="${item.email}" id="dyn_em_${idx}" style="transform: scale(1.3); cursor: pointer;">
                 <label class="form-check-label fw-bold text-dark w-100" for="dyn_em_${idx}" style="cursor: pointer;">
-                    ${item.email} ${item.memo ? `<span class="badge bg-secondary ms-2">${item.memo}</span>` : ''}
+                    ${item.email} ${memoHtml}
                 </label>
-             </div>`
-        ).join('');
+             </div>`;
+        }).join('');
     }
     
     bootstrap.Modal.getOrCreateInstance(document.getElementById('dynamicEmailModal')).show();
