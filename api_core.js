@@ -1,11 +1,11 @@
 /**
  * ============================================================================
  * 模組 1：API 核心、全域狀態與雙軌並行架構 (api_core.js) 
- * 【極致優化版】突破千筆限制、精準局部刷新、徹底修復雙引號破圖 Bug
+ * 【極速登入版】完全解耦 GAS 登入，直連 Supabase 實現 0.1 秒瞬間登入
  * ============================================================================
  */
 
-// 🔴 請填入 changgu.erp@gmail.com 機器人部署後的最新 Webhook 網址 (僅用於觸發AI與登入驗證)
+// 🔴 請填入 changgu.erp@gmail.com 機器人部署後的最新 Webhook 網址 (僅用於觸發AI)
 const API_URL = "https://script.google.com/macros/s/AKfycbwKARCqQYJJFYgpUL9qjUTXI5PeEcWz1c1Wdk9mFCNI46WNe0tJgSCniA25IcKS81NF/exec";
 
 // 🟢 新版系統 API 端點 (Supabase)
@@ -53,7 +53,6 @@ let myLastSyncTime = Date.now();
 // API 通訊模組 (攔截前端邏輯 或 發送至機器人)
 // ============================================================================
 async function callApi(action, payload = {}) {
-    // 1. 攔截純前端可處理的舊 GAS API
     if (action === 'heartbeat') return { count: Math.floor(Math.random() * 3) + 1 };
     if (action === 'saveReportEmails') {
         localStorage.setItem('reportSelectedEmails', JSON.stringify(payload.selectedEmails));
@@ -81,7 +80,7 @@ async function callApi(action, payload = {}) {
         return { success: true, count: count };
     }
     
-    // 2. 映射路由給新的 AI 機器人
+    // 映射路由給新的 AI 機器人
     if (action === 'scanEmailOrders') action = 'triggerScan'; 
 
     if (API_URL.includes("請填入你的")) throw new Error("⚠️ 尚未設定 API_URL，請更新 api_core.js 中 changgu.erp 的網址！");
@@ -351,7 +350,6 @@ async function pushToSyncQueue(action, payload, callback) {
     try {
         await executeSupabaseAction(action, payload);
         if (callback) callback({ success: true });
-        // Realtime 機制會自動偵測變更並重繪 UI
     } catch (e) {
         console.error("資料庫操作異常:", e);
         alert("資料庫寫入失敗：" + e.message);
@@ -382,7 +380,7 @@ async function fetchAllSupabaseTable(table, orderByCol = null, ascending = false
 // 【極速載入】從 Supabase 載入全系統資料
 // ============================================================================
 async function loadDataFromSupabase() {
-    console.log("⚡ 從 Supabase 極速載入全系統資料 (已啟用自動分頁與突破限制)...");
+    console.log("⚡ 從 Supabase 極速載入全系統資料...");
     const [
         {data: c}, {data: s}, {data: cat}, {data: inv}, {data: ord},
         {data: invc}, {data: sd}, {data: log}, {data: del}, {data: quo}, {data: em}
@@ -418,7 +416,7 @@ async function loadDataFromSupabase() {
 }
 
 // ============================================================================
-// 【全新優化】局部表格更新中樞 (效能提升核心)
+// 【局部表格更新中樞】
 // ============================================================================
 async function silentRefreshTable(table) {
     try {
@@ -457,7 +455,7 @@ function setupSupabaseRealtime() {
             clearTimeout(realtimeDebounceTimer);
             realtimeDebounceTimer = setTimeout(() => {
                 silentRefreshTable(changedTable); 
-            }, 800); // 防抖 0.8 秒，優化效能
+            }, 800);
         })
         .subscribe((status) => {
             if (status === 'SUBSCRIBED') {
@@ -527,7 +525,7 @@ function debounce(func, delay = 300) {
     };
 }
 
-// 【新增】全域按鈕防連點鎖定工具
+// 全域按鈕防連點鎖定工具
 window.lockButton = function(btn) {
     if(!btn) return false;
     if(btn.disabled) return true; // 已鎖定，阻擋執行
@@ -754,7 +752,6 @@ window.openSearchModal = function(type, callback) {
         else clientName = document.getElementById('invClientInput').value; 
         
         if(!clientName) { alert('請先選擇客戶！'); return; } 
-        // 搜尋列擴充顯示：帶入資材碼以供人員核對
         currentSearchSource = globalCatalog.filter(p => p.clientName === clientName).map(p => {
             let detailStr = `單價: $${p.price} / ${p.unit}`;
             if(p.assetCode) detailStr += ` | 資材碼: ${p.assetCode}`;
@@ -772,7 +769,6 @@ window.filterSearchModal = debounce(function() {
     window.renderSearchList(currentSearchSource.filter(s => (s.text||'').toLowerCase().includes(term) || ((s.sub||'').toLowerCase().includes(term)))); 
 }, 300);
 
-// 改為使用 DOM Element 動態綁定 onclick，避免字串引號衝突 HTML 屬性
 window.renderSearchList = function(arr) { 
     const listEl = document.getElementById('searchModalList');
     listEl.innerHTML = '';
@@ -780,7 +776,6 @@ window.renderSearchList = function(arr) {
     arr.forEach(item => {
         const btn = document.createElement('button');
         btn.className = 'search-btn-item';
-        // 綁定匿名函式，直接傳送該物件參考，徹底阻絕引號溢出 Bug
         btn.onclick = () => window.onSearchSelect(item);
         btn.innerHTML = `<div class="d-flex justify-content-between align-items-center"><span>${escapeQuotes(item.text)}</span><span class="badge bg-secondary">${escapeQuotes(item.sub)}</span></div>`;
         listEl.appendChild(btn);
@@ -789,9 +784,50 @@ window.renderSearchList = function(arr) {
 
 window.onSearchSelect = function(itemObj) { 
     bootstrap.Modal.getOrCreateInstance(document.getElementById('searchModal')).hide(); 
-    // 回傳原始字串或物件參考給需要的模組
     if(currentSearchCallback) currentSearchCallback(itemObj.val); 
 };
+
+// ============================================================================
+// 【全新】極速登入系統 (直接向 Supabase 驗證，不經 GAS，0.1 秒登入)
+// ============================================================================
+window.loginSystem = async function() {
+    const pwd = document.getElementById('frontDoorPwd').value; 
+    if(!pwd) return alert("請輸入密碼");
+    
+    const btn = document.querySelector('#authScreen button'); 
+    if(window.lockButton(btn)) return; // 鎖定 3 秒防連點
+    
+    try {
+        // 直接從 Supabase 的 employees 資料表驗證密碼
+        const { data, error } = await supabaseClient
+            .from('employees')
+            .select('name')
+            .eq('pwd', pwd)
+            .single();
+            
+        if (error || !data) {
+            throw new Error("密碼錯誤，請重新輸入！");
+        }
+        
+        // 登入成功
+        myName = data.name; 
+        localStorage.setItem('invStaffName', myName); 
+        localStorage.setItem('invTokenExp', Date.now() + 7 * 24 * 60 * 60 * 1000); 
+        
+        document.getElementById('authScreen').style.opacity = '0'; 
+        setTimeout(() => { 
+            document.getElementById('authScreen').style.display = 'none'; 
+            initSystemData(); 
+        }, 500); 
+        
+    } catch (err) {
+        alert(err.message);
+        btn.disabled = false;
+        btn.innerHTML = "進入系統";
+    }
+};
+
+window.logout = function() { if(confirm("確定登出？")) { localStorage.removeItem('invStaffName'); localStorage.removeItem('invTokenExp'); location.reload(); } };
 
 // ============================================================================
 // 系統初始化與授權
@@ -820,24 +856,6 @@ window.onload = function() {
         } 
     }, 15000); 
 };
-
-window.loginSystem = function() {
-    const pwd = document.getElementById('frontDoorPwd').value; 
-    if(!pwd) return alert("請輸入密碼");
-    const btn = document.querySelector('#authScreen button'); 
-    btn.innerText = "驗證中..."; btn.disabled = true;
-    callApi('verifyManager', { pwd: pwd }).then(res => { 
-        myName = res.managerName; 
-        localStorage.setItem('invStaffName', myName); 
-        localStorage.setItem('invTokenExp', Date.now() + 7 * 24 * 60 * 60 * 1000); 
-        document.getElementById('authScreen').style.opacity = '0'; 
-        setTimeout(() => { document.getElementById('authScreen').style.display = 'none'; initSystemData(); }, 500); 
-    }).catch(err => { 
-        btn.innerText = "進入系統"; btn.disabled = false; alert(err.message); 
-    });
-};
-
-window.logout = function() { if(confirm("確定登出？")) { localStorage.removeItem('invStaffName'); localStorage.removeItem('invTokenExp'); location.reload(); } };
 
 window.initSystemData = function() {
     document.getElementById('splashScreen').style.display = 'flex'; let fakeProgress = 10; setProgress(fakeProgress, '🚀 從 Supabase 極速載入中...');
