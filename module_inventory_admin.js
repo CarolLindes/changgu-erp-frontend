@@ -1,6 +1,7 @@
 /**
  * ============================================================================
- * 模組 4：庫存、訂貨與管理員後台 (module_inventory_admin.js) - 【即時出貨轉送貨版】
+ * 模組 4：庫存、訂貨與管理員後台 (module_inventory_admin.js) 
+ * 【防連點保護與新版搜尋綁定】確保雙引號品名不破圖，並阻絕重複扣庫
  * ============================================================================
  */
 
@@ -37,6 +38,9 @@ window.populateLogDropdowns = function() {
 };
 
 window.triggerSyncAssetCodes = function() { 
+    const btn = event ? event.currentTarget : null;
+    if(window.lockButton(btn)) return; // 防連點保護
+
     showLoading("同步長固代號 / 資材碼中..."); 
     callApi('syncAssetCodesToInventory', {}).then(res => { 
         hideLoading(); 
@@ -190,6 +194,9 @@ window.openEditInvLogModal = function(idx) {
 };
 
 window.saveEditInvLog = function() {
+    const btn = event ? event.currentTarget : null;
+    if(window.lockButton(btn)) return; // 防連點保護
+
     const idx = parseInt(document.getElementById('e_logRowIdx').value);
     const invoiceNo = document.getElementById('e_logInvoiceNo').value.trim();
     const arrivalDate = document.getElementById('e_logArrivalDate').value;
@@ -235,6 +242,9 @@ window.openEditBatchModal = function(idx) {
 };
 
 window.confirmEditBatch = function() {
+    const btn = event ? event.currentTarget : null;
+    if(window.lockButton(btn)) return; // 防連點保護
+
     const idx = parseInt(document.getElementById('eb_logRowIdx').value);
     const itemName = document.getElementById('eb_itemName').value;
     const changeQty = parseFloat(document.getElementById('eb_changeQty').value);
@@ -298,6 +308,7 @@ window.openAdjustModal = function(nameStr) {
 };
 
 window.selectProductForAdj = function(val) { 
+    // val 現在可以直接從記憶體中安全取得，不被雙引號破壞
     document.getElementById('adjName').value = val; 
     const p = globalCatalog.find(x => x.productName === val); 
     if(p) {
@@ -325,6 +336,9 @@ window.selectProductForAdj = function(val) {
 };
 
 window.saveInventoryAdjust = function() {
+    const btn = event ? event.currentTarget : null;
+    if(window.lockButton(btn)) return; // 防連點保護
+
     const idx = document.getElementById('adjRowIdx').value; 
     const name = document.getElementById('adjName').value.trim(); 
     const internalCode = document.getElementById('adjInternalCode').value.trim(); 
@@ -499,6 +513,9 @@ window.updateShipBatchInfo = function() {
 };
 
 window.confirmShipment = function() {
+    const btn = event ? event.currentTarget : null;
+    if(window.lockButton(btn)) return; // 防連點保護
+
     const rowIdx = parseInt(document.getElementById('shipRowIdx').value); 
     const qty = parseFloat(document.getElementById('shipNowQty').value);
     const batchTarget = document.getElementById('shipBatchSelect').value;
@@ -535,9 +552,6 @@ window.confirmShipment = function() {
         orderNo: s.paperNo, memo: `單號: ${s.paperNo} ${batchTarget ? '(指定出貨批號:'+batchTarget+')' : ''}` 
     });
 
-    // =========================================================================
-    // 【全新升級】即時連動產生/更新「待送貨」單據
-    // =========================================================================
     let existingDelivery = globalDeliveries.find(d => d.paperNo === s.paperNo && d.status === '待送貨');
     let newItemForDelivery = { 
         name: s.name, qty: qty, batchTarget: batchTarget || '', 
@@ -669,6 +683,9 @@ window.openPurchaseOrderModal = function(salesRowIdx) {
 };
 
 window.confirmPurchaseOrder = function() {
+    const btn = event ? event.currentTarget : null;
+    if(window.lockButton(btn)) return; // 防連點保護
+
     const qty = parseFloat(document.getElementById('poQty').value);
     if (isNaN(qty) || qty <= 0) return alert("請輸入正確的訂貨數量！");
     
@@ -715,6 +732,7 @@ window.confirmPurchaseOrder = function() {
 
     pushToSyncQueue('submitPurchaseOrder', payload, null);
     window.renderInvLogs();
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('purchaseOrderModal')).show(); // 修改：保持或關閉視窗，原版隱藏
     bootstrap.Modal.getOrCreateInstance(document.getElementById('purchaseOrderModal')).hide();
     
     showToast("🛒 訂貨單已記錄！即將列印...");
@@ -800,50 +818,6 @@ window.printPurchaseOrder = function(data) {
 // ============================================================================
 // 管理員後台 (Admin) 模組
 // ============================================================================
-window.openSearchModal = function(type, callback) {
-    currentSearchCallback = callback; 
-    document.getElementById('searchModalList').innerHTML = ''; 
-    document.getElementById('searchModalInput').value = '';
-    
-    if(type === 'client' || type === 'admin_client' || type === 'client_ord' || type === 'client_quo') { 
-        document.getElementById('searchModalTitle').innerText = '選擇客戶'; 
-        currentSearchSource = globalClients.map(c => ({ text: c.name, sub: `統編: ${c.taxId||'無'}`, val: c.name })); 
-    }
-    else if(type === 'item_adj') { 
-        document.getElementById('searchModalTitle').innerText = '選擇盤點品項'; 
-        const uniqueProds = [...new Map(globalCatalog.map(item => [item.productName, item])).values()]; 
-        currentSearchSource = uniqueProds.map((p, idx) => ({ text: p.productName, sub: `長固代號: ${p.internalCode||p.assetCode||'無'}`, val: p.productName, idx: idx, ref: p })); 
-    }
-    else if(type.startsWith('item_')) { 
-        document.getElementById('searchModalTitle').innerText = '選擇品項'; 
-        let clientName = ''; 
-        if(type.startsWith('item_ord_')) clientName = document.getElementById('e_ordClient').value; 
-        else if(type.startsWith('item_quo_')) clientName = document.getElementById('e_quoClient').value; 
-        else clientName = document.getElementById('invClientInput').value; 
-        
-        if(!clientName) { alert('請先選擇客戶！'); return; } 
-        currentSearchSource = globalCatalog.filter(p => p.clientName === clientName).map((p, idx) => ({ text: p.productName, sub: `單價: $${p.price} / ${p.unit}`, val: p.productName, idx: idx, ref: p })); 
-    }
-    
-    window.renderSearchList(currentSearchSource); 
-    bootstrap.Modal.getOrCreateInstance(document.getElementById('searchModal')).show(); 
-    setTimeout(()=> document.getElementById('searchModalInput').focus(), 500);
-};
-
-window.filterSearchModal = debounce(function() { 
-    const term = (document.getElementById('searchModalInput').value || '').toLowerCase(); 
-    window.renderSearchList(currentSearchSource.filter(s => (s.text||'').toLowerCase().includes(term) || ((s.sub||'').toLowerCase().includes(term)))); 
-}, 300);
-
-window.renderSearchList = function(arr) { 
-    document.getElementById('searchModalList').innerHTML = arr.map(item => `<button class="search-btn-item" onclick="onSearchSelect('${escapeQuotes(item.val)}')"><div class="d-flex justify-content-between align-items-center"><span>${item.text}</span><span class="badge bg-secondary">${item.sub}</span></div></button>`).join(''); 
-};
-
-window.onSearchSelect = function(val) { 
-    bootstrap.Modal.getOrCreateInstance(document.getElementById('searchModal')).hide(); 
-    if(currentSearchCallback) currentSearchCallback(val); 
-};
-
 window.populateAdminClientFilter = function() { 
     if(document.getElementById('admItemFilterSelect')) {
         document.getElementById('admItemFilterSelect').innerHTML = '<option value="">📂 所有客戶 (顯示全部)</option>' + globalClients.map(c => `<option value="${escapeQuotes(c.name||'')}">${c.name||''}</option>`).join(''); 
@@ -869,6 +843,9 @@ window.openNewClientModal = function() {
 };
 
 window.submitNewClientOptimistic = function() { 
+    const btn = event ? event.currentTarget : null;
+    if(window.lockButton(btn)) return; // 防連點保護
+
     const name = document.getElementById('addClientName').value.trim(); 
     const taxId = document.getElementById('addClientTaxId').value.trim(); 
     const address = document.getElementById('addClientAddress').value.trim(); 
@@ -893,6 +870,9 @@ window.openEditClientModal = function(name, taxId) {
 };
 
 window.submitEditClientOptimistic = function() { 
+    const btn = event ? event.currentTarget : null;
+    if(window.lockButton(btn)) return; // 防連點保護
+
     const old = document.getElementById('editClientOldName').value; 
     const name = document.getElementById('editClientName').value.trim(); 
     const tax = document.getElementById('editClientTaxId').value.trim(); 
@@ -955,6 +935,9 @@ window.triggerItemClientSelect = function() {
 };
 
 window.submitEditItemOptimistic = function() { 
+    const btn = event ? event.currentTarget : null;
+    if(window.lockButton(btn)) return; // 防連點保護
+
     const idx = document.getElementById('editItemRowIndex').value; 
     const client = document.getElementById('editItemClientVal').value; 
     const name = document.getElementById('editItemName').value.trim(); 
