@@ -1,11 +1,13 @@
 /**
  * ============================================================================
  * 模組 1：API 核心、全域狀態與雙軌並行架構 (api_core.js) 
- * 【極速登入版】完全解耦 GAS 登入，直連 Supabase 實現 0.1 秒瞬間登入
+ * 【極速登入 ＆ 報表直出版】
+ * 1. 直連 Supabase 實現 0.1 秒極速登入
+ * 2. 整合 SheetJS 於前端瞬間生成 Excel 報表，交由 GAS 遙控器寄信
  * ============================================================================
  */
 
-// 🔴 請填入 changgu.erp@gmail.com 機器人部署後的最新 Webhook 網址 (僅用於觸發AI)
+// 🔴 請填入 changgu.erp@gmail.com 機器人部署後的最新 Webhook 網址
 const API_URL = "https://script.google.com/macros/s/AKfycbwKARCqQYJJFYgpUL9qjUTXI5PeEcWz1c1Wdk9mFCNI46WNe0tJgSCniA25IcKS81NF/exec";
 
 // 🟢 新版系統 API 端點 (Supabase)
@@ -14,11 +16,15 @@ const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// 動態載入 PDF 生成引擎
+// 動態載入 PDF 與 Excel(SheetJS) 生成引擎
 (function() {
-    const script = document.createElement('script');
-    script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js";
-    document.head.appendChild(script);
+    const scriptPdf = document.createElement('script');
+    scriptPdf.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js";
+    document.head.appendChild(scriptPdf);
+
+    const scriptXlsx = document.createElement('script');
+    scriptXlsx.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+    document.head.appendChild(scriptXlsx);
 })();
 
 // ============================================================================
@@ -54,11 +60,74 @@ let myLastSyncTime = Date.now();
 // ============================================================================
 async function callApi(action, payload = {}) {
     if (action === 'heartbeat') return { count: Math.floor(Math.random() * 3) + 1 };
+    
     if (action === 'saveReportEmails') {
         localStorage.setItem('reportSelectedEmails', JSON.stringify(payload.selectedEmails));
         return { success: true };
     }
-    if (action === 'sendPendingOrdersReport') return { success: true, msg: "報表已生成 (前端環境)" };
+    
+    // 【全新機制】攔截報表發送請求，由前端直接生成 Excel 並轉交 GAS 寄信
+    if (action === 'sendPendingOrdersReport') {
+        if (typeof XLSX === 'undefined') throw new Error("Excel 模組仍在載入中，請稍後再試！");
+        
+        let emails = payload.emails || [];
+        if (emails.length === 0) {
+            try { emails = JSON.parse(localStorage.getItem('reportSelectedEmails') || '[]'); } catch(e){}
+        }
+        if (emails.length === 0) throw new Error("尚未設定收件人信箱，請先在介面中勾選收件人！");
+
+        showLoading("📊 正在生成 Excel 報表...");
+        const wb = XLSX.utils.book_new();
+        
+        // 整理：發票紀錄
+        const historyData = globalHistory.map(h => ({
+            '開立日期': new Date(h.time).toLocaleDateString(),
+            '客戶名稱': h.client,
+            '統一編號': h.taxId,
+            '發票號碼': h.paperNo,
+            '訂單單號': h.orderNo || '',
+            '銷售額(未稅)': h.net,
+            '稅額': h.tax,
+            '總計(含稅)': h.total,
+            '狀態': h.status
+        }));
+        const wsHistory = XLSX.utils.json_to_sheet(historyData.length > 0 ? historyData : [{'提示': '無發票資料'}]);
+        XLSX.utils.book_append_sheet(wb, wsHistory, "發票紀錄");
+
+        // 整理：出貨明細
+        const deliveryData = globalSalesDetails.map(d => ({
+            '出貨日期': new Date(d.time).toLocaleDateString(),
+            '發票號碼': d.paperNo,
+            '客戶名稱': d.client,
+            '訂單單號': d.orderNo || '',
+            '品名規格': d.name,
+            '出貨數量': d.qty,
+            '單位': d.unit,
+            '單價': d.price,
+            '小計': d.subtotal,
+            '批號': d.lot || '',
+            '效期': d.expiry || '',
+            '出貨狀態': d.shipStatus
+        }));
+        const wsDelivery = XLSX.utils.json_to_sheet(deliveryData.length > 0 ? deliveryData : [{'提示': '無出貨明細'}]);
+        XLSX.utils.book_append_sheet(wb, wsDelivery, "出貨明細");
+
+        // 匯出為 Base64 (不直接下載，而是轉換格式準備寄信)
+        const base64Data = XLSX.write(wb, { bookType: 'xlsx', type: 'base64' });
+        const monthStr = new Date().getMonth() + 1;
+        
+        // 將指令轉換為呼叫 GAS 遙控器的寄信通道
+        action = 'sendExcelEmail';
+        payload = {
+            toEmails: emails,
+            subject: `長固 ERP 系統 - ${monthStr}月份統計報表`,
+            bodyText: `您好，\n\n附上由長固 ERP 系統自動產生的「發票與出貨統計報表」，請查收附件。\n\n(此為系統自動發送，請勿直接回覆)\n系統產生時間：${new Date().toLocaleString()}`,
+            base64Data: base64Data,
+            fileName: `長固ERP_統計報表_${new Date().getFullYear()}${String(monthStr).padStart(2,'0')}.xlsx`
+        };
+        hideLoading();
+    }
+    
     if (action === 'syncAssetCodesToInventory') {
         let assetMap = {};
         globalCatalog.forEach(c => {
@@ -80,7 +149,7 @@ async function callApi(action, payload = {}) {
         return { success: true, count: count };
     }
     
-    // 映射路由給新的 AI 機器人
+    // 映射路由給 GitHub AI 機器人遠端遙控 (保留原本觸發按鈕的相容性)
     if (action === 'scanEmailOrders') action = 'triggerScan'; 
 
     if (API_URL.includes("請填入你的")) throw new Error("⚠️ 尚未設定 API_URL，請更新 api_core.js 中 changgu.erp 的網址！");
@@ -101,7 +170,7 @@ async function callApi(action, payload = {}) {
 }
 
 // ============================================================================
-// 【極速直連】Supabase 執行中樞 (取代原本的雙軌與背景佇列)
+// 【極速直連】Supabase 執行中樞 
 // ============================================================================
 async function executeSupabaseAction(action, payload) {
     console.log(`[Supabase 寫入] 執行 ${action}...`);
@@ -357,7 +426,7 @@ async function pushToSyncQueue(action, payload, callback) {
 }
 
 // ============================================================================
-// 【全新優化】突破千筆限制的分頁抓取引擎
+// 分頁抓取引擎
 // ============================================================================
 async function fetchAllSupabaseTable(table, orderByCol = null, ascending = false) {
     let allData = [];
@@ -377,7 +446,7 @@ async function fetchAllSupabaseTable(table, orderByCol = null, ascending = false
 }
 
 // ============================================================================
-// 【極速載入】從 Supabase 載入全系統資料
+// 從 Supabase 載入全系統資料
 // ============================================================================
 async function loadDataFromSupabase() {
     console.log("⚡ 從 Supabase 極速載入全系統資料...");
@@ -416,7 +485,7 @@ async function loadDataFromSupabase() {
 }
 
 // ============================================================================
-// 【局部表格更新中樞】
+// 局部表格更新中樞
 // ============================================================================
 async function silentRefreshTable(table) {
     try {
@@ -459,7 +528,7 @@ function setupSupabaseRealtime() {
         })
         .subscribe((status) => {
             if (status === 'SUBSCRIBED') {
-                console.log('✅ Supabase Realtime 即時監聽已啟動 (局部刷新機制)');
+                console.log('✅ Supabase Realtime 即時監聽已啟動');
             }
         });
 }
@@ -528,16 +597,16 @@ function debounce(func, delay = 300) {
 // 全域按鈕防連點鎖定工具
 window.lockButton = function(btn) {
     if(!btn) return false;
-    if(btn.disabled) return true; // 已鎖定，阻擋執行
+    if(btn.disabled) return true; 
     btn.disabled = true;
     const originalText = btn.innerHTML;
     btn.innerHTML = `<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> 處理中...`;
     setTimeout(() => { btn.disabled = false; btn.innerHTML = originalText; }, 3000);
-    return false; // 允許通行
+    return false;
 };
 
 // ============================================================================
-// 【強大升級】動態切換紙張版型、解除手機列印限制、PDF 高畫質分享引擎
+// 列印與 PDF 分享引擎
 // ============================================================================
 window.applyPrintStyle = function(size, layout) {
     let styleNode = document.getElementById('dynamicPrintStyle');
@@ -728,7 +797,7 @@ document.addEventListener('dragend', function(e) {
 });
 
 // ============================================================================
-// 【全新修復】Search Modal 傳遞完整物件，防禦特殊符號破圖 Bug
+// 搜尋防禦模組 Search Modal 
 // ============================================================================
 window.openSearchModal = function(type, callback) {
     currentSearchCallback = callback; 
@@ -788,17 +857,16 @@ window.onSearchSelect = function(itemObj) {
 };
 
 // ============================================================================
-// 【全新】極速登入系統 (直接向 Supabase 驗證，不經 GAS，0.1 秒登入)
+// 極速登入系統 (直接驗證 Supabase)
 // ============================================================================
 window.loginSystem = async function() {
     const pwd = document.getElementById('frontDoorPwd').value; 
     if(!pwd) return alert("請輸入密碼");
     
     const btn = document.querySelector('#authScreen button'); 
-    if(window.lockButton(btn)) return; // 鎖定 3 秒防連點
+    if(window.lockButton(btn)) return;
     
     try {
-        // 直接從 Supabase 的 employees 資料表驗證密碼
         const { data, error } = await supabaseClient
             .from('employees')
             .select('name')
@@ -809,7 +877,6 @@ window.loginSystem = async function() {
             throw new Error("密碼錯誤，請重新輸入！");
         }
         
-        // 登入成功
         myName = data.name; 
         localStorage.setItem('invStaffName', myName); 
         localStorage.setItem('invTokenExp', Date.now() + 7 * 24 * 60 * 60 * 1000); 
@@ -830,7 +897,7 @@ window.loginSystem = async function() {
 window.logout = function() { if(confirm("確定登出？")) { localStorage.removeItem('invStaffName'); localStorage.removeItem('invTokenExp'); location.reload(); } };
 
 // ============================================================================
-// 系統初始化與授權
+// 系統初始化與畫面控制
 // ============================================================================
 window.onload = function() {
     lockScreen();
