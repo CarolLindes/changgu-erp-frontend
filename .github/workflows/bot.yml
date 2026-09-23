@@ -1,0 +1,37 @@
+name: 長固 ERP AI 接單機器人
+
+on:
+  schedule:
+    # 這是 UTC 時間，0-10 對應台灣時間的 08:00 - 18:00。週一到週五，每 30 分鐘執行一次
+    - cron: '*/30 0-10 * * 1-5'
+  workflow_dispatch: # 允許在 GitHub 網頁上手動點擊觸發
+
+jobs:
+  run-ai-bot:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./ai-bot
+    steps:
+      - name: 📥 取得程式碼
+        uses: actions/checkout@v4
+
+      - name: ⚙️ 設定 Node.js 環境
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 📦 安裝套件
+        run: npm install
+
+      - name: 🚀 啟動 AI 機器人
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+        run: npm start
