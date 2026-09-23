@@ -1,0 +1,15 @@
+{
+  "name": "changgu-erp-bot",
+  "version": "1.0.0",
+  "description": "長固 ERP - GitHub Actions AI 接單機器人",
+  "main": "bot.js",
+  "type": "module",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "@supabase/supabase-js": "^2.45.0",
+    "googleapis": "^144.0.0"
+  }
+}
