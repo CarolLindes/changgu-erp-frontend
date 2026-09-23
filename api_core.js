@@ -4,6 +4,7 @@
  * 【極速登入 ＆ 報表直出版】
  * 1. 直連 Supabase 實現 0.1 秒極速登入
  * 2. 整合 SheetJS 於前端瞬間生成 Excel 報表，交由 GAS 遙控器寄信
+ * 3. 修正報表匯出指令攔截 (exportExcelReport)
  * ============================================================================
  */
 
@@ -67,7 +68,7 @@ async function callApi(action, payload = {}) {
     }
     
     // 【全新機制】攔截報表發送請求，由前端直接生成 Excel 並轉交 GAS 寄信
-    if (action === 'sendPendingOrdersReport') {
+    if (action === 'exportExcelReport' || action === 'sendPendingOrdersReport') {
         if (typeof XLSX === 'undefined') throw new Error("Excel 模組仍在載入中，請稍後再試！");
         
         let emails = payload.emails || [];
