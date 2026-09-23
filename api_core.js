@@ -5,6 +5,7 @@
  * 1. 直連 Supabase 實現 0.1 秒極速登入
  * 2. 整合 SheetJS 於前端瞬間生成 Excel 報表，交由 GAS 遙控器寄信
  * 3. 修正報表匯出指令攔截，加入雙重變數解析與 UI 強制掃描防呆
+ * 4. 完美復刻舊版 Python Excel 報表結構 (4大工作表、統計表頭與檔名)
  * ============================================================================
  */
 
@@ -67,7 +68,7 @@ async function callApi(action, payload = {}) {
         return { success: true };
     }
     
-    // 【全新機制】攔截報表發送請求，由前端直接生成 Excel 並轉交 GAS 寄信
+    // 【全新機制】攔截報表發送請求，完美生成 4 個工作表
     if (action === 'exportExcelReport' || action === 'sendPendingOrdersReport') {
         if (typeof XLSX === 'undefined') throw new Error("Excel 模組仍在載入中，請稍後再試！");
         
@@ -90,61 +91,102 @@ async function callApi(action, payload = {}) {
             }
         }
 
-        // 4. 舊版備用記憶
         if (emails.length === 0) {
             try { emails = JSON.parse(localStorage.getItem('reportSelectedEmails') || '[]'); } catch(e){}
         }
 
         if (emails.length === 0) throw new Error("尚未設定收件人信箱，請先在介面中勾選收件人！");
 
-        showLoading("📊 正在生成 Excel 報表...");
+        showLoading("📊 正在套用客製化格式生成報表...");
+        
+        // ============================================
+        // 工作表 1: 發票總表 (完美還原舊版排版)
+        // ============================================
+        const summaryRows = [
+            ["報表期間", payload.dateRange || '未提供', "", "", "", "", "", "", "", "", ""],
+            ["總開立張數", payload.summary ? payload.summary.count : 0, "", "", "", "", "", "", "", "", ""],
+            ["總銷售額(未稅)", payload.summary ? payload.summary.net : 0, "", "", "", "", "", "", "", "", ""],
+            ["總營業稅", payload.summary ? payload.summary.tax : 0, "", "", "", "", "", "", "", "", ""],
+            ["總計(含稅)", payload.summary ? payload.summary.total : 0, "", "", "", "", "", "", "", "", ""],
+            ["開立日期", "發票號碼", "客戶名稱", "統一編號", "訂單編號", "狀態", "開立人員", "銷售額", "稅額", "總計", "明細內容"]
+        ];
+        (payload.details || []).forEach(d => {
+            summaryRows.push([
+                d.date, d.paperNo, d.client, d.taxId, d.orderNo, d.status, d.staff, d.net, d.tax, d.total, d.desc
+            ]);
+        });
+        const wsHistory = XLSX.utils.aoa_to_sheet(summaryRows);
+
+        // ============================================
+        // 工作表 2: 出貨明細
+        // ============================================
+        const lineItemRows = [
+            ["開立日期", "發票號碼", "客戶名稱", "訂單編號", "長固代號", "品名", "開立數量", "單價(含稅)", "總價(含稅)", "出貨狀態", "已出貨數量"]
+        ];
+        (payload.lineItems || []).forEach(l => {
+            // 修正前端單價異常，向後台抓取真實價格與代號
+            const sd = globalSalesDetails.find(s => s.paperNo === l.paperNo && s.name === l.name);
+            const price = sd ? sd.price : 0;
+            const subtotal = sd ? sd.subtotal : 0;
+            const cat = globalCatalog.find(c => c.productName === l.name && c.clientName === l.client);
+            const internalCode = cat ? (cat.internalCode || cat.assetCode || '') : '';
+            
+            lineItemRows.push([
+                l.time, l.paperNo, l.client, l.orderNo, internalCode, l.name, l.qty, price, subtotal, l.shipStatus, l.shippedQty
+            ]);
+        });
+        const wsDelivery = XLSX.utils.aoa_to_sheet(lineItemRows);
+
+        // ============================================
+        // 工作表 3: 目前庫存表
+        // ============================================
+        const invRows = [
+            ["品名", "長固代號", "目前庫存數量"]
+        ];
+        globalInventory.forEach(inv => {
+            invRows.push([
+                inv.name, inv.internalCode || inv.assetCodeCombined || '', inv.qty
+            ]);
+        });
+        const wsInventory = XLSX.utils.aoa_to_sheet(invRows);
+
+        // ============================================
+        // 工作表 4: 客戶營收分析表
+        // ============================================
+        const clientRows = [
+            ["客戶/醫院名稱", "總銷售額(含稅)"]
+        ];
+        (payload.clientStats || []).forEach(c => {
+            clientRows.push([
+                c.name, c.total
+            ]);
+        });
+        const wsClient = XLSX.utils.aoa_to_sheet(clientRows);
+
+        // 組合 Excel
         const wb = XLSX.utils.book_new();
-        
-        // 整理：發票紀錄
-        const historyData = globalHistory.map(h => ({
-            '開立日期': new Date(h.time).toLocaleDateString(),
-            '客戶名稱': h.client,
-            '統一編號': h.taxId,
-            '發票號碼': h.paperNo,
-            '訂單單號': h.orderNo || '',
-            '銷售額(未稅)': h.net,
-            '稅額': h.tax,
-            '總計(含稅)': h.total,
-            '狀態': h.status
-        }));
-        const wsHistory = XLSX.utils.json_to_sheet(historyData.length > 0 ? historyData : [{'提示': '無發票資料'}]);
-        XLSX.utils.book_append_sheet(wb, wsHistory, "發票紀錄");
-
-        // 整理：出貨明細
-        const deliveryData = globalSalesDetails.map(d => ({
-            '出貨日期': new Date(d.time).toLocaleDateString(),
-            '發票號碼': d.paperNo,
-            '客戶名稱': d.client,
-            '訂單單號': d.orderNo || '',
-            '品名規格': d.name,
-            '出貨數量': d.qty,
-            '單位': d.unit,
-            '單價': d.price,
-            '小計': d.subtotal,
-            '批號': d.lot || '',
-            '效期': d.expiry || '',
-            '出貨狀態': d.shipStatus
-        }));
-        const wsDelivery = XLSX.utils.json_to_sheet(deliveryData.length > 0 ? deliveryData : [{'提示': '無出貨明細'}]);
+        XLSX.utils.book_append_sheet(wb, wsHistory, "發票總表");
         XLSX.utils.book_append_sheet(wb, wsDelivery, "出貨明細");
+        XLSX.utils.book_append_sheet(wb, wsInventory, "目前庫存表");
+        XLSX.utils.book_append_sheet(wb, wsClient, "客戶營收分析表");
 
-        // 匯出為 Base64 (不直接下載，而是轉換格式準備寄信)
         const base64Data = XLSX.write(wb, { bookType: 'xlsx', type: 'base64' });
-        const monthStr = new Date().getMonth() + 1;
         
+        // 檔名格式處理
+        let cleanDateRange = "未定期間";
+        if (payload.dateRange) {
+            cleanDateRange = payload.dateRange.replace(/\//g, '-').trim();
+        }
+        const fileName = `長固ERP_發票報表_${cleanDateRange}.xlsx`;
+
         // 將指令轉換為呼叫 GAS 遙控器的寄信通道
         action = 'sendExcelEmail';
         payload = {
             toEmails: emails,
-            subject: `長固 ERP 系統 - ${monthStr}月份統計報表`,
-            bodyText: `您好，\n\n附上由長固 ERP 系統自動產生的「發票與出貨統計報表」，請查收附件。\n\n(此為系統自動發送，請勿直接回覆)\n系統產生時間：${new Date().toLocaleString()}`,
+            subject: `長固 ERP 系統 - 銷售發票與出貨統計報表 (${cleanDateRange})`,
+            bodyText: `您好，\n\n附上由長固 ERP 系統自動產生的統計報表，請查收附件。\n\n報表包含：\n1. 發票總表\n2. 出貨明細\n3. 目前庫存表\n4. 客戶營收分析表\n\n(此為系統自動發送，請勿直接回覆)\n系統產生時間：${new Date().toLocaleString()}`,
             base64Data: base64Data,
-            fileName: `長固ERP_統計報表_${new Date().getFullYear()}${String(monthStr).padStart(2,'0')}.xlsx`
+            fileName: fileName
         };
         hideLoading();
     }
