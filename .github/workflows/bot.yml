@@ -5,6 +5,8 @@ on:
     # 這是 UTC 時間，0-10 對應台灣時間的 08:00 - 18:00。週一到週五，每 30 分鐘執行一次
     - cron: '*/30 0-10 * * 1-5'
   workflow_dispatch: # 允許在 GitHub 網頁上手動點擊觸發
+  repository_dispatch: # 允許透過 API 遠端發送訊號來喚醒 (接收來自 GAS 的指令)
+    types: [trigger-bot]
 
 jobs:
   run-ai-bot:
@@ -19,7 +21,7 @@ jobs:
       - name: ⚙️ 設定 Node.js 環境
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '22' # 支援 Supabase Realtime WebSocket
 
       - name: 📦 安裝套件
         run: npm install
