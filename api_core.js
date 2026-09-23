@@ -4,7 +4,7 @@
  * 【極速登入 ＆ 報表直出版】
  * 1. 直連 Supabase 實現 0.1 秒極速登入
  * 2. 整合 SheetJS 於前端瞬間生成 Excel 報表，交由 GAS 遙控器寄信
- * 3. 修正報表匯出指令攔截 (exportExcelReport)
+ * 3. 修正報表匯出指令攔截，加入雙重變數解析與 UI 強制掃描防呆
  * ============================================================================
  */
 
@@ -71,10 +71,30 @@ async function callApi(action, payload = {}) {
     if (action === 'exportExcelReport' || action === 'sendPendingOrdersReport') {
         if (typeof XLSX === 'undefined') throw new Error("Excel 模組仍在載入中，請稍後再試！");
         
-        let emails = payload.emails || [];
+        let emails = [];
+        
+        // 1. 智慧變數解析：嘗試讀取陣列格式
+        if (payload.emails && Array.isArray(payload.emails)) {
+            emails = payload.emails;
+        } 
+        // 2. 智慧變數解析：嘗試讀取字串格式 (對應 module_invoice_history.js)
+        else if (payload.email && typeof payload.email === 'string') {
+            emails = payload.email.split(',').map(e => e.trim()).filter(e => e !== '');
+        }
+
+        // 3. 終極防呆機制：如果上面都沒抓到，強制掃描畫面上有被打勾的信箱
+        if (emails.length === 0) {
+            const checkedBoxes = document.querySelectorAll('.dyn-email-cb:checked');
+            if (checkedBoxes && checkedBoxes.length > 0) {
+                emails = Array.from(checkedBoxes).map(cb => cb.value);
+            }
+        }
+
+        // 4. 舊版備用記憶
         if (emails.length === 0) {
             try { emails = JSON.parse(localStorage.getItem('reportSelectedEmails') || '[]'); } catch(e){}
         }
+
         if (emails.length === 0) throw new Error("尚未設定收件人信箱，請先在介面中勾選收件人！");
 
         showLoading("📊 正在生成 Excel 報表...");
