@@ -25,6 +25,123 @@ window.findProductRobust = function(clientName, itemCode, itemName) {
     });
 };
 
+// 強健品項名稱核對工具（解決訂單原始品名與轉發票後建檔品名的空白或字元微差）
+window.isSameOrderItem = function(clientName, orderItem, targetName) {
+    if (!orderItem || !targetName) return false;
+    const normTarget = String(targetName || '').replace(/\s+/g, '').toLowerCase();
+    const normItem = String(orderItem.name || '').replace(/\s+/g, '').toLowerCase();
+    if (normItem === normTarget) return true;
+
+    if (clientName && typeof window.findProductRobust === 'function') {
+        const p = window.findProductRobust(clientName, orderItem.code || orderItem.internalCode, orderItem.name);
+        if (p && p.productName) {
+            const normCatalog = String(p.productName).replace(/\s+/g, '').toLowerCase();
+            if (normCatalog === normTarget) return true;
+        }
+    }
+    return false;
+};
+
+// 【核心修復】智慧計算單筆訂單品項的「已開立數量」（支援同單號、不同申請單位精準拆分核銷）
+window.getOrderInvoicedQty = function(order, item) {
+    if (!order || !order.orderNo || !item) return 0;
+    const targetOrderNo = String(order.orderNo).trim();
+    const targetDept = String(order.dept || '').trim();
+    const expectedTag = targetDept ? `${targetOrderNo} ${targetDept}` : targetOrderNo;
+
+    // 找出所有包含此單號且未作廢的銷售明細
+    const matchingSales = (globalSalesDetails || []).filter(d => {
+        if (d.shipStatus === '作廢') return false;
+        const dOrderNos = String(d.orderNo || '').split(',').map(s => s.trim());
+        return dOrderNos.includes(targetOrderNo) && window.isSameOrderItem(order.client, item, d.name);
+    });
+
+    if (matchingSales.length === 0) return 0;
+
+    // 依發票號碼分組解析，優先從發票明細的 [單號 申請單位] 標籤精準核對
+    const paperNos = [...new Set(matchingSales.map(d => d.paperNo).filter(Boolean))];
+    let totalInvoiced = 0;
+    let hasUntaggedQty = 0;
+
+    paperNos.forEach(pNo => {
+        const inv = (globalHistory || []).find(h => h.paperNo === pNo && h.status !== '作廢');
+        let matchedByTagInThisInvoice = false;
+
+        if (inv && inv.details && inv.details.includes('[')) {
+            const lines = String(inv.details).split('\n');
+            // 檢查此張發票是否有針對該單號標註申請單位標籤
+            const hasOrderTag = lines.some(line => {
+                const m = line.match(/\[([^\]]+)\]\s*$/);
+                if (!m) return false;
+                const tag = m[1].trim();
+                return tag === targetOrderNo || tag.startsWith(targetOrderNo + ' ');
+            });
+
+            if (hasOrderTag) {
+                matchedByTagInThisInvoice = true;
+                lines.forEach(line => {
+                    const m = line.match(/^(.*)\s+x([0-9.]+)\s*(?:\(單價:[^)]*\))?\s*\[([^\]]+)\]\s*$/);
+                    if (m) {
+                        const lineName = m[1].trim();
+                        const lineQty = parseFloat(m[2]) || 0;
+                        const lineTag = m[3].trim();
+
+                        if (window.isSameOrderItem(order.client, item, lineName)) {
+                            if (targetDept) {
+                                // 若訂單有申請單位，必須與標籤完全吻合，或標籤僅有單號(無單位)
+                                if (lineTag === expectedTag || lineTag === targetOrderNo) {
+                                    totalInvoiced += lineQty;
+                                }
+                            } else {
+                                // 若訂單本身無申請單位，則匹配純單號標籤
+                                if (lineTag === targetOrderNo) {
+                                    totalInvoiced += lineQty;
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+        }
+
+        if (!matchedByTagInThisInvoice) {
+            const salesInPaper = matchingSales.filter(d => d.paperNo === pNo);
+            hasUntaggedQty += salesInPaper.reduce((sum, d) => sum + (Number(d.qty) || 0), 0);
+        }
+    });
+
+    // 若有無標籤的歷史明細，且系統內有多筆同單號同單位的訂單，依建檔順序進行安全分配避免負數
+    if (hasUntaggedQty > 0) {
+        const sameGroupOrders = (globalOrders || []).filter(o =>
+            o.status !== '已作廢' && o.status !== '作廢' &&
+            String(o.orderNo || '').trim() === targetOrderNo &&
+            String(o.dept || '').trim() === targetDept
+        ).sort((a, b) => (a.rowIdx || 0) - (b.rowIdx || 0));
+
+        if (sameGroupOrders.length > 1) {
+            let pool = hasUntaggedQty;
+            for (const o of sameGroupOrders) {
+                let oItems = [];
+                try { oItems = JSON.parse(o.jsonStr || '[]'); } catch (e) { oItems = []; }
+                const matchItem = oItems.find(oi => window.isSameOrderItem(o.client, oi, item.name));
+                if (matchItem) {
+                    const need = Math.max(0, (Number(matchItem.qty) || 0) - totalInvoiced);
+                    const allocated = Math.min(pool, need);
+                    if (o.rowIdx === order.rowIdx) {
+                        totalInvoiced += allocated;
+                        break;
+                    }
+                    pool = Math.max(0, pool - allocated);
+                }
+            }
+        } else {
+            totalInvoiced += hasUntaggedQty;
+        }
+    }
+
+    return totalInvoiced;
+};
+
 // ============================================================================
 // AI 與信箱自動辨識系統
 // ============================================================================
@@ -111,16 +228,32 @@ window.cancelOrderAI = function() {
 window.saveOrderAI = function() {
     if(!aiTempData) return;
     const btn = event ? event.currentTarget : null;
-    if(window.lockButton(btn)) return; // 防連點保護
 
-    aiTempData.clientName = document.getElementById('aiClient').value; 
-    aiTempData.orderNo = document.getElementById('aiOrderNo').value; 
-    aiTempData.department = document.getElementById('aiDept').value; 
+    aiTempData.clientName = document.getElementById('aiClient').value.trim(); 
+    aiTempData.orderNo = document.getElementById('aiOrderNo').value.trim(); 
+    aiTempData.department = document.getElementById('aiDept').value.trim(); 
     aiTempData.deadline = document.getElementById('aiDeadline').value;
     aiTempData.source = '📷 圖片辨識';
     aiTempData.mailUrl = '';
     
     if(!aiTempData.clientName) return alert("客戶名稱必填");
+
+    // 【問題 6 修復】建立重複單號時跳出警告視窗
+    if (aiTempData.orderNo) {
+        const dupOrders = globalOrders.filter(x => 
+            x.status !== '已作廢' && x.status !== '作廢' && 
+            String(x.orderNo || '').trim() === aiTempData.orderNo
+        );
+        if (dupOrders.length > 0) {
+            const dupInfo = dupOrders.map(d => `${d.client}${d.dept ? ' (' + d.dept + ')' : ''}`).join('、');
+            if (!confirm(`⚠️ 重複單號警告：\n系統中已存在相同的訂單號碼【${aiTempData.orderNo}】\n既有紀錄：${dupInfo}\n\n確定仍要建立這筆訂單嗎？`)) {
+                return;
+            }
+        }
+    }
+
+    if(window.lockButton(btn)) return; // 防連點保護
+
     aiTempData.items.forEach(i => { 
         // 替換為強健比對引擎
         const p = window.findProductRobust(aiTempData.clientName, i.code || i.internalCode, i.name);
@@ -131,12 +264,14 @@ window.saveOrderAI = function() {
         } 
     });
     
-    globalOrders.unshift({ rowIdx: 9999, time: Date.now(), client: aiTempData.clientName, orderNo: aiTempData.orderNo, dept: aiTempData.department, status: "待出貨", jsonStr: JSON.stringify(aiTempData.items), deadline: aiTempData.deadline, source: aiTempData.source, mailUrl: aiTempData.mailUrl });
+    const newRowIdx = Date.now() + Math.floor(Math.random() * 1000);
+    aiTempData.rowIdx = newRowIdx;
+    globalOrders.unshift({ rowIdx: newRowIdx, time: Date.now(), client: aiTempData.clientName, orderNo: aiTempData.orderNo, dept: aiTempData.department, status: "待出貨", jsonStr: JSON.stringify(aiTempData.items), deadline: aiTempData.deadline, source: aiTempData.source, mailUrl: aiTempData.mailUrl });
     pushToSyncQueue('saveOrderData', aiTempData, null); 
     cancelOrderAI(); 
     if(typeof window.updateOrderClientDropdown === 'function') window.updateOrderClientDropdown(); 
     window.renderOrderList(); 
-    showToast("✅ 訂單建檔完成 (若有重複將自動排查)");
+    showToast("✅ 訂單建檔完成");
 };
 
 // ============================================================================
@@ -168,6 +303,7 @@ window.renderOrderList = debounce(function() {
     if (searchTerm) pending = pending.filter(o => 
         (o.client && o.client.toLowerCase().includes(searchTerm)) || 
         (o.orderNo && o.orderNo.toLowerCase().includes(searchTerm)) || 
+        (o.dept && o.dept.toLowerCase().includes(searchTerm)) ||
         (o.jsonStr && o.jsonStr.toLowerCase().includes(searchTerm))
     );
     
@@ -179,11 +315,8 @@ window.renderOrderList = debounce(function() {
         let orderFullyShipped = true; let hasPartial = false;
         
         let displayItems = items.map(i => {
-            let invoicedQty = globalSalesDetails.filter(d => { 
-                let dOrderNos = String(d.orderNo).split(',').map(s=>s.trim()); 
-                // 發票紀錄的比對，因為已經轉過發票，通常品名是一致的
-                return dOrderNos.includes(o.orderNo) && d.name === i.name && d.shipStatus !== '作廢'; 
-            }).reduce((sum, d) => sum + d.qty, 0);
+            // 【問題 7 修復】使用支援申請單位標籤與強健品名的核銷計算引擎
+            let invoicedQty = window.getOrderInvoicedQty(o, i);
             
             let remaining = i.qty - invoicedQty; 
             if (remaining > 0) orderFullyShipped = false; 
@@ -194,7 +327,7 @@ window.renderOrderList = debounce(function() {
             const intCodeBadge = (p && p.internalCode) ? `<span class="badge bg-info text-dark ms-1">長固: ${p.internalCode}</span>` : '';
             
             if (invoicedQty === 0) return `<div>${i.name} ${intCodeBadge} <span class="badge bg-secondary">x${i.qty}</span></div>`; 
-            else return `<div>${i.name} ${intCodeBadge} <br><small class="text-primary fw-bold">需求: ${i.qty} | 已開: ${invoicedQty} | 剩餘: <span class="text-danger">${remaining}</span></small></div>`;
+            else return `<div>${i.name} ${intCodeBadge} <br><small class="text-primary fw-bold">需求: ${i.qty} | 已開: ${invoicedQty} | 剩餘: <span class="text-danger">${Math.max(0, remaining)}</span></small></div>`;
         }).join('<hr class="my-2" style="opacity: 0.1;">');
         
         if (orderFullyShipped && items.length > 0) return;
@@ -213,9 +346,22 @@ window.renderOrderList = debounce(function() {
             const diffDays = Math.ceil((deadlineDate - today) / 86400000);
             if (diffDays < 0) deadlineHtml = `<span class="badge bg-danger ms-2">🔴 已逾期 (${o.deadline})</span>`; 
             else if (diffDays === 0) deadlineHtml = `<span class="badge bg-danger ms-2">🔴 今日出貨 (${o.deadline})</span>`; 
-            else if (diffDays <= 3) deadlineHtml = `<span class="badge bg-warning text-dark ms-2">🟡 即觸到期 (${o.deadline})</span>`; 
+            else if (diffDays <= 3) deadlineHtml = `<span class="badge bg-warning text-dark ms-2">🟡 即將到期 (${o.deadline})</span>`; 
             else deadlineHtml = `<span class="badge bg-success ms-2">🟢 期限: ${o.deadline}</span>`;
         }
+
+        // 【問題 1 修復】額外顯示匯入系統日期（僅年/月/日）與申請單位
+        let importDateHtml = '';
+        if (o.time) {
+            const dObj = new Date(Number(o.time));
+            if (!isNaN(dObj.getTime())) {
+                const y = dObj.getFullYear();
+                const m = String(dObj.getMonth() + 1).padStart(2, '0');
+                const d = String(dObj.getDate()).padStart(2, '0');
+                importDateHtml = `<span class="badge bg-light text-secondary border ms-2">📅 匯入日期: ${y}/${m}/${d}</span>`;
+            }
+        }
+        let deptHtml = o.dept ? `<span class="badge bg-light text-dark border ms-2">🏥 ${escapeQuotes(o.dept)}</span>` : '';
 
         const sourceStr = o.source || '⌨️ 手動建檔';
         let sourceBadge = '';
@@ -227,11 +373,11 @@ window.renderOrderList = debounce(function() {
 
         html += `<div class="item-row shadow-sm mb-2 p-3 ${hasPartial ? 'status-partial' : ''}" style="${cardStyle}">
             <div class="d-flex align-items-center justify-content-between mb-2 border-bottom pb-2">
-                <div class="d-flex align-items-center" style="max-width: 65%;">
+                <div class="d-flex align-items-center" style="max-width: 70%;">
                     <input class="form-check-input me-3 cb-order" type="checkbox" value="${o.rowIdx}" data-orderno="${escapeQuotes(o.orderNo)}" data-client="${escapeQuotes(o.client)}" style="transform: scale(1.3); flex-shrink: 0;">
                     <div>
                         <div class="fw-bold text-dark fs-6">${o.client} ${warningLabel} ${sourceBadge}</div>
-                        <div class="small text-muted mt-1">單號: ${o.orderNo||'無'} ${deadlineHtml}</div>
+                        <div class="small text-muted mt-1">單號: ${o.orderNo||'無'} ${deptHtml} ${importDateHtml} ${deadlineHtml}</div>
                     </div>
                 </div>
                 <div>
@@ -339,12 +485,11 @@ window.removeOrderManualItem = function(rowId) {
 
 window.saveEditOrder = function() {
     const btn = document.getElementById('btnSaveOrd');
-    if(window.lockButton(btn)) return; // 防連點保護
 
     const idx = parseInt(document.getElementById('e_ordRow').value); 
-    const c = document.getElementById('e_ordClient').value; 
-    const o = document.getElementById('e_ordNo').value; 
-    const d = document.getElementById('e_ordDept').value; 
+    const c = document.getElementById('e_ordClient').value.trim(); 
+    const o = document.getElementById('e_ordNo').value.trim(); 
+    const d = document.getElementById('e_ordDept').value.trim(); 
     const deadline = document.getElementById('e_ordDeadline').value; 
     
     if(!c) return alert('客戶名稱必填！'); 
@@ -355,6 +500,23 @@ window.saveEditOrder = function() {
         items.push({ code: item.code, internalCode: item.internalCode, name: item.name, qty: item.qty }); 
     }
     if (items.length === 0) return alert('請至少新增一項品項！');
+
+    // 【問題 6 修復】建立或修改訂單時，若單號重複則跳出警告視窗
+    if (o) {
+        const dupOrders = globalOrders.filter(x => 
+            x.rowIdx !== idx && 
+            x.status !== '已作廢' && x.status !== '作廢' && 
+            String(x.orderNo || '').trim() === o
+        );
+        if (dupOrders.length > 0) {
+            const dupInfo = dupOrders.map(dup => `${dup.client}${dup.dept ? ' (' + dup.dept + ')' : ''}`).join('、');
+            if (!confirm(`⚠️ 重複單號警告：\n系統中已存在相同的訂單號碼【${o}】\n既有紀錄：${dupInfo}\n\n確定仍要儲存這筆訂單嗎？`)) {
+                return;
+            }
+        }
+    }
+
+    if(window.lockButton(btn)) return; // 防連點保護
     
     let src = '⌨️ 手動建檔'; let mUrl = ''; let currStatus = '待出貨';
     if(idx) { 
@@ -365,14 +527,15 @@ window.saveEditOrder = function() {
     const j = JSON.stringify(items); 
     if (currStatus.includes('待排查')) currStatus = '待出貨';
     
-    const payload = { rowIdx: idx||null, clientName: c, orderNo: o, department: d, status: currStatus, items: items, deadline: deadline, source: src, mailUrl: mUrl, staff: myName }; 
+    const targetRowIdx = idx || (Date.now() + Math.floor(Math.random() * 1000));
+    const payload = { rowIdx: targetRowIdx, clientName: c, orderNo: o, department: d, status: currStatus, items: items, deadline: deadline, source: src, mailUrl: mUrl, staff: myName }; 
     
     if(idx) { 
         const od = globalOrders.find(x => x.rowIdx === idx); 
         if(od){ od.client = c; od.orderNo = o; od.dept = d; od.jsonStr = j; od.deadline = deadline; od.source = src; od.mailUrl = mUrl; od.status = currStatus; } 
     } 
     else { 
-        globalOrders.unshift({ rowIdx: Date.now(), time: Date.now(), client: c, orderNo: o, dept: d, status: "待出貨", jsonStr: j, deadline: deadline, source: src, mailUrl: mUrl }); 
+        globalOrders.unshift({ rowIdx: targetRowIdx, time: Date.now(), client: c, orderNo: o, dept: d, status: "待出貨", jsonStr: j, deadline: deadline, source: src, mailUrl: mUrl }); 
     }
     
     pushToSyncQueue('saveOrderData', payload, null); 
@@ -384,11 +547,10 @@ window.saveEditOrder = function() {
 
 window.deleteOrder = function() { 
     const btn = document.getElementById('btnDeleteOrd');
-    if(window.lockButton(btn)) return; // 防連點保護
-
     const idx = parseInt(document.getElementById('e_ordRow').value); 
     if(!idx) return; 
     if(confirm('確定要作廢這筆訂單嗎？')) { 
+        if(window.lockButton(btn)) return; // 防連點保護
         const o = globalOrders.find(x=>x.rowIdx===idx); 
         if(o) o.status = '已作廢'; 
         pushToSyncQueue('updateOrderStatus', {rowIndices: [idx], status: '已作廢'}, null); 
@@ -433,10 +595,8 @@ window.groupFulfillOrders = function() {
     selectedOrderCache.forEach(order => {
         let items = []; try { items = JSON.parse(order.jsonStr || '[]'); } catch(e){}
         items.forEach(i => {
-            let invoicedQty = globalSalesDetails.filter(d => { 
-                let dOrderNos = String(d.orderNo).split(',').map(s=>s.trim()); 
-                return dOrderNos.includes(order.orderNo) && d.name === i.name && d.shipStatus !== '作廢'; 
-            }).reduce((sum, d) => sum + d.qty, 0); 
+            // 【問題 7 修復】合併開票載入剩餘數量時，同樣使用支援申請單位標籤的核銷計算引擎
+            let invoicedQty = window.getOrderInvoicedQty(order, i);
             
             let remaining = i.qty - invoicedQty;
             if (remaining > 0) {
@@ -487,10 +647,10 @@ window.saveEmailSettings = function() {
 
 window.triggerManualReport = function() {
     const btn = event ? event.currentTarget : null;
-    if(window.lockButton(btn)) return; // 防連點保護
 
     if (emailSettingsData.selected.length === 0) return alert("請先勾選至少一個收件信箱並儲存設定！"); 
     if (!confirm("確定要現在立即產生並發送「未結案訂單報表」嗎？\n(將發送至勾選的信箱)")) return;
+    if(window.lockButton(btn)) return; // 防連點保護
     showLoading("報表產生並發送中..."); 
     callApi('sendPendingOrdersReport', {}).then(res => { 
         hideLoading(); alert(res.msg); 
