@@ -190,8 +190,9 @@ window.submitInvoiceOptimistic = function() {
         detailsStr: currentInvoiceData.detailsStr, paperNo: paperNo, orderNo: orderNo, items: payloadItems 
     };
     
+    const newInvRowIdx = Date.now();
     globalHistory.unshift({ 
-        rowIdx: 9999, time: invDateTimestamp, staff: myName, client: payload.clientName, 
+        rowIdx: newInvRowIdx, time: invDateTimestamp, staff: myName, client: payload.clientName, 
         taxId: payload.taxId, net: payload.netTotal, tax: payload.tax, total: payload.totalWithTax, 
         details: payload.detailsStr, paperNo: payload.paperNo, orderNo: payload.orderNo, status: "正常", historyLog: "[]" 
     });
@@ -206,6 +207,7 @@ window.submitInvoiceOptimistic = function() {
     });
     
     pushToSyncQueue('submitInvoice', payload, null);
+    if (typeof window.renderOrderList === 'function') window.renderOrderList();
     
     setSafeText('visBuyer', payload.clientName); 
     setSafeText('visTaxId', payload.taxId); 
@@ -219,8 +221,10 @@ window.submitInvoiceOptimistic = function() {
     for(let i=0; i < Math.max(currentInvoiceData.validItems.length, 5); i++) {
         if(i < currentInvoiceData.validItems.length) {
             const item = currentInvoiceData.validItems[i]; 
-            const unTaxedP = (item.product.price / 1.05).toFixed(3); 
-            const unTaxedS = item.adjustedUnTaxedSub;
+            // 【問題 2 核心修復】三聯式統一發票「單價」直接由「未含稅總價 ÷ 數量」計算（如 1010 ÷ 20 = 50.5）
+            const unTaxedS = Number(item.adjustedUnTaxedSub) || 0;
+            const qtyNum = parseFloat(item.qty) || 1;
+            const unTaxedP = Number((unTaxedS / qtyNum).toFixed(3)).toLocaleString('en-US', { maximumFractionDigits: 3 });
             tbody.innerHTML += `<tr><td class="text-start highlight-data">${item.product.productName}</td><td class="highlight-data">${item.qty} ${item.product.unit}</td><td class="text-end highlight-data">${unTaxedP}</td><td class="text-end highlight-data">${unTaxedS.toLocaleString()}</td><td class="highlight-data" style="font-size:0.8rem;">${item.formattedRemark}</td></tr>`;
         } else { tbody.innerHTML += `<tr><td>&nbsp;</td><td></td><td></td><td></td><td></td></tr>`; }
     }
@@ -336,22 +340,20 @@ window.openSuppInvModal = function(idx, oldPaperNo) {
 
 window.confirmSupplementInvoice = function() {
     const btn = event ? event.currentTarget : null;
-    if(window.lockButton(btn)) return; // 防連點保護
 
     const idx = parseInt(document.getElementById('supp_invRowIdx').value);
     const oldPaperNo = document.getElementById('supp_oldPaperNo').value;
     const newPaperNo = document.getElementById('supp_newPaperNo').value.trim().toUpperCase();
     if (!newPaperNo) return alert("請輸入正確的發票號碼！");
+    if(window.lockButton(btn)) return; // 防連點保護
     
     showLoading("連動更新中...");
-    callApi('supplementInvoiceNo', { rowIdx: idx, oldPaperNo: oldPaperNo, newPaperNo: newPaperNo, staff: myName })
-    .then(res => {
+    pushToSyncQueue('supplementInvoiceNo', { rowIdx: idx, oldPaperNo: oldPaperNo, newPaperNo: newPaperNo, staff: myName }, () => {
         hideLoading();
         bootstrap.Modal.getInstance(document.getElementById('suppInvModal')).hide();
         showToast("✅ 發票號碼已成功補登並連動更新");
         refreshData(); 
-    })
-    .catch(err => { hideLoading(); alert("補登失敗：" + err.message); });
+    });
 };
 
 // ============================================================================
@@ -453,9 +455,9 @@ window.printDeliveryNote = function(idx) {
 // ============================================================================
 window.voidInv = function(idx, pNo) { 
     const btn = event ? event.currentTarget : null;
-    if(window.lockButton(btn)) return; // 防連點保護
 
     if(confirm("確定作廢？系統將自動：\n1. 註銷此發票帳款\n2. 註銷銷售明細\n3. 註銷對應的送貨單\n4. 【自動返還已出貨之庫存數量】")) { 
+        if(window.lockButton(btn)) return; // 防連點保護
         const h = globalHistory.find(x=>x.rowIdx === idx); 
         if(h) h.status = '作廢'; 
         
@@ -479,6 +481,7 @@ window.voidInv = function(idx, pNo) {
         
         if(typeof window.populateLogDropdowns === 'function') window.populateLogDropdowns(); 
         window.renderHistory(); 
+        if(typeof window.renderOrderList === 'function') window.renderOrderList();
         if(typeof window.renderInventory === 'function') window.renderInventory(); 
         if(typeof window.renderInvLogs === 'function') window.renderInvLogs(); 
         if(typeof window.renderShipments === 'function') window.renderShipments(); 
@@ -516,6 +519,7 @@ window.saveEditInvoice = function() {
     }; 
     if(h) { Object.assign(h, data); h.historyLog = "[\"修改紀錄存在\"]"; } 
     window.renderHistory(); 
+    if(typeof window.renderOrderList === 'function') window.renderOrderList();
     bootstrap.Modal.getInstance(document.getElementById('editInvModal')).hide(); 
     pushToSyncQueue('updateInvoiceRecord', {action:'edit', rowIdx: idx, staff: myName, data: data}, null); 
 };
@@ -610,11 +614,11 @@ window.exportReportToEmail = function() {
 
 window.confirmExportReport = function() {
     const btn = event ? event.currentTarget : null;
-    if(window.lockButton(btn)) return; // 防連點保護
 
     const cbs = document.querySelectorAll('.dyn-email-cb:checked');
     const emails = Array.from(cbs).map(cb => cb.value);
     if(emails.length === 0) return alert("請至少勾選一個收件信箱！");
+    if(window.lockButton(btn)) return; // 防連點保護
     
     const emailStr = emails.join(','); 
     
