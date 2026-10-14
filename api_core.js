@@ -1,11 +1,11 @@
 /**
  * ============================================================================
  * 模組 1：API 核心、全域狀態與雙軌並行架構 (api_core.js) 
- * 【極速登入 ＆ 報表直出版】
+ * 【極速登入 ＆ 報表直出 ＆ 外部系統客戶代號對照升級版】
  * 1. 直連 Supabase 實現 0.1 秒極速登入
  * 2. 整合 SheetJS 於前端瞬間生成 Excel 報表，交由 GAS 遙控器寄信
- * 3. 修正報表匯出指令攔截，加入雙重變數解析與 UI 強制掃描防呆
- * 4. 完美復刻舊版 Python Excel 報表結構 (4大工作表、統計表頭與檔名)
+ * 3. 內建 customer1.xlsx 客戶代號 (CUSTID) 智慧雙向對照引擎
+ * 4. 修正同發票同品項不同數量時的總價覆蓋 Bug
  * ============================================================================
  */
 
@@ -56,6 +56,182 @@ let currentInvoiceData = { clientName:'', taxId:'', items:[] };
 let currentSearchSource = []; 
 let currentSearchCallback = null;
 let myLastSyncTime = Date.now();
+
+// ============================================================================
+// 【跨系統勾稽核心】外部系統 (customer1.xlsx) CUSTID 與客戶名稱對照字典
+// ============================================================================
+window.EXTERNAL_CUSTID_DICT = [
+    { custId: "200001", name: "中國醫藥大學附設醫院", taxId: "52600770" },
+    { custId: "300001", name: "中國醫藥大學附設醫院", taxId: "52600770" },
+    { custId: "中國-C恢", name: "中國醫藥大學附設醫院", taxId: "52600770" },
+    { custId: "中國-H恢", name: "中國醫藥大學附設醫院", taxId: "52600770" },
+    { custId: "200002", name: "中國醫藥大學兒童醫院", taxId: "" },
+    { custId: "200003", name: "衛生福利部豐原醫院", taxId: "" },
+    { custId: "200004", name: "光田醫療社團法人光田綜合醫院", taxId: "27413378" },
+    { custId: "300004", name: "光田醫療社團法人光田綜合醫院", taxId: "27413378" },
+    { custId: "光田睡", name: "光田醫療社團法人光田綜合醫院", taxId: "27413378" },
+    { custId: "200005", name: "秀傳醫療社團法人秀傳紀念醫院", taxId: "59274027" },
+    { custId: "200006", name: "國軍臺中總醫院", taxId: "" },
+    { custId: "803-同", name: "國軍臺中總醫院", taxId: "" },
+    { custId: "803-固", name: "國軍臺中總醫院", taxId: "" },
+    { custId: "200036", name: "國軍台中總醫院中清院區", taxId: "" },
+    { custId: "200007", name: "竹山秀傳醫院", taxId: "77393377" },
+    { custId: "300005", name: "竹山秀傳醫院", taxId: "77393377" },
+    { custId: "200008", name: "中國醫藥大學北港附設醫院", taxId: "" },
+    { custId: "北港藥", name: "中國醫藥大學北港附設醫院", taxId: "" },
+    { custId: "200009", name: "中山醫學大學附設醫院", taxId: "" },
+    { custId: "300009", name: "中山醫學大學", taxId: "" },
+    { custId: "中山醫", name: "中山醫學大學", taxId: "52000403" },
+    { custId: "200117", name: "中山醫學大學附設復健醫院", taxId: "02972894" },
+    { custId: "200010", name: "秀傳醫療財團法人彰濱秀傳紀念醫院", taxId: "" },
+    { custId: "200011", name: "衛生福利部台中醫院", taxId: "" },
+    { custId: "200012", name: "童綜合醫療社團法人童綜合醫院", taxId: "" },
+    { custId: "300012", name: "童綜合醫療社團法人附設護理之家", taxId: "45485710" },
+    { custId: "200013", name: "仁愛醫療財團法人", taxId: "" },
+    { custId: "200014", name: "衛生福利部苗栗醫院", taxId: "" },
+    { custId: "200015", name: "彰化基督教醫院", taxId: "" },
+    { custId: "300015", name: "財團法人彰化基督教醫院", taxId: "" },
+    { custId: "400015", name: "財團法人彰化基督教醫院", taxId: "" },
+    { custId: "200016", name: "澄清綜合醫院", taxId: "" },
+    { custId: "300016", name: "澄清綜合醫院", taxId: "" },
+    { custId: "200017", name: "衛生福利部嘉義醫院", taxId: "" },
+    { custId: "200018", name: "財團法人嘉義基督教醫院", taxId: "" },
+    { custId: "200019", name: "衛生福利部南投醫院", taxId: "" },
+    { custId: "200020", name: "埔基醫療財團法人埔里基督教醫院", taxId: "" },
+    { custId: "200021", name: "亞洲大學附設醫院", taxId: "47456418" },
+    { custId: "200021", name: "亞洲大學附屬醫院", taxId: "47456418" },
+    { custId: "200022", name: "台中市立老人復健綜合醫院", taxId: "92232549" },
+    { custId: "200022", name: "臺中市立老人復健綜合醫院(委託財團法人中國醫藥大學興建經營)", taxId: "92232549" },
+    { custId: "200023", name: "南基醫院", taxId: "06098677" },
+    { custId: "200024", name: "伍倫綜合醫院", taxId: "" },
+    { custId: "200027", name: "台中榮民總醫院", taxId: "" },
+    { custId: "中榮胸", name: "台中榮民總醫院", taxId: "" },
+    { custId: "200043", name: "佑民醫療社團法人佑民醫院", taxId: "45673380" },
+    { custId: "200046", name: "長洲醫療儀器有限公司", taxId: "52934164" },
+    { custId: "200048", name: "惠全醫療器材有限公司", taxId: "22239267" },
+    { custId: "200051", name: "瑞友儀器行", taxId: "52577074" },
+    { custId: "200055", name: "立倫醫療器材有限公司", taxId: "22239560" },
+    { custId: "200067", name: "大惟醫療儀器有限公司", taxId: "22282691" },
+    { custId: "200078", name: "春菖貿易有限公司", taxId: "20833614" },
+    { custId: "200079", name: "財團法人天主教聖馬爾定醫院", taxId: "66009707" },
+    { custId: "300079", name: "天主教聖馬爾定醫院", taxId: "66009707" },
+    { custId: "200087", name: "林新醫療社團法人林新醫院", taxId: "52697438" },
+    { custId: "200088", name: "中國醫藥大學新竹附設醫院", taxId: "" },
+    { custId: "200104", name: "臺中其他同行", taxId: "" },
+    { custId: "200105", name: "臺中個人", taxId: "" },
+    { custId: "200113", name: "茂吉儀器行", taxId: "52413621" },
+    { custId: "200115", name: "東昇化工原料儀器行", taxId: "52488869" },
+    { custId: "200116", name: "臺中其他醫院", taxId: "" },
+    { custId: "200127", name: "宏陽醫療儀器有限公司", taxId: "23539592" },
+    { custId: "200128", name: "常發醫療器材有限公司", taxId: "23186470" },
+    { custId: "200129", name: "長威儀器有限公司", taxId: "86356789" },
+    { custId: "200131", name: "嘉義榮民醫院", taxId: "" },
+    { custId: "200132", name: "天主教若瑟醫療財團法人若瑟醫院", taxId: "" },
+    { custId: "200139", name: "行政院衛生署彰化醫院", taxId: "" },
+    { custId: "200140", name: "信昌醫療儀器有限公司", taxId: "59300643" },
+    { custId: "200146", name: "衛儀醫療儀器有限公司", taxId: "23836805" },
+    { custId: "200148", name: "維明醫療儀器有限公司", taxId: "05912147" },
+    { custId: "200152", name: "台中榮民醫院埔里分院", taxId: "" },
+    { custId: "200158", name: "大千醫院", taxId: "" },
+    { custId: "大千", name: "大千綜合醫院", taxId: "" },
+    { custId: "200160", name: "鼎聖儀器有限公司", taxId: "23975073" },
+    { custId: "200161", name: "長立儀器有限公司", taxId: "86953239" },
+    { custId: "200162", name: "廣年實業股份有限公司", taxId: "23861281" },
+    { custId: "200163", name: "衛林有限公司", taxId: "86566130" },
+    { custId: "200164", name: "衛康醫療儀器股份有限公司", taxId: "" },
+    { custId: "200165", name: "行政院衛生署竹東醫院", taxId: "" },
+    { custId: "200166", name: "達健儀器有限公司", taxId: "86601087" },
+    { custId: "200167", name: "財團法人為恭紀念醫院", taxId: "" },
+    { custId: "200167", name: "為恭醫療財團法人為恭紀念醫院", taxId: "" },
+    { custId: "200176", name: "台安醫院", taxId: "77974986" },
+    { custId: "200179", name: "保健安股份有限公司", taxId: "70442438" },
+    { custId: "200180", name: "中國醫藥大學附設醫院臺北分院", taxId: "" },
+    { custId: "中北藥", name: "中國醫藥大學附設醫院臺北分院", taxId: "" },
+    { custId: "200187", name: "鴻海醫療器材股份有限公司", taxId: "" },
+    { custId: "200188", name: "惠來醫療社團法人宏仁醫院", taxId: "" },
+    { custId: "200189", name: "財團法人佛教慈濟綜合醫院台中分院", taxId: "" },
+    { custId: "200189", name: "佛教慈濟醫療財團法人台中慈濟醫院", taxId: "" },
+    { custId: "200190", name: "臺南市立安南醫院-委託中國", taxId: "37623985" },
+    { custId: "200190", name: "臺南市立安南醫院-委託中國醫藥大學興建經營", taxId: "37623985" },
+    { custId: "中安藥", name: "臺南市立安南醫院-委託中國醫藥大學興建經營", taxId: "37623985" }
+];
+
+window.normalizeClientName = function(name) {
+    if (!name) return "";
+    return String(name)
+        .replace(/\s+/g, "")
+        .replace(/臺/g, "台")
+        .replace(/附屬/g, "附設")
+        .replace(/[\(（\-]委託.*$/g, "")
+        .replace(/醫療財團法人|醫療社團法人|財團法人/g, "")
+        .toLowerCase();
+};
+
+// 根據客戶名稱與統編自動取得對應的外部 CUSTID 字串 (供前端顯示與自動補齊)
+window.resolveClientCustIds = function(clientName, taxId, existingCustId) {
+    let ids = [];
+    if (existingCustId) {
+        String(existingCustId).split(',').map(s => s.trim()).filter(Boolean).forEach(id => {
+            if (!ids.includes(id)) ids.push(id);
+        });
+    }
+    const normTarget = window.normalizeClientName(clientName);
+    const cleanTax = String(taxId || '').trim();
+
+    (window.EXTERNAL_CUSTID_DICT || []).forEach(entry => {
+        const normEntry = window.normalizeClientName(entry.name);
+        const nameMatch = (clientName === entry.name) || (normTarget && normTarget === normEntry);
+        const taxMatch = (cleanTax && entry.taxId && cleanTax === entry.taxId);
+        if (nameMatch || taxMatch) {
+            if (!ids.includes(entry.custId)) ids.push(entry.custId);
+        }
+    });
+    return ids.join(', ');
+};
+
+// 根據外部系統的 CUSTID 反查客戶名稱與比對是否與本系統客戶相符
+window.matchClientWithCustId = function(erpClientName, extCustId) {
+    const cleanExtId = String(extCustId || '').trim();
+    const cleanErpName = String(erpClientName || '').trim();
+    if (!cleanExtId || !cleanErpName) return { isMatch: false, extClientName: cleanExtId || '未填代號' };
+
+    const normErp = window.normalizeClientName(cleanErpName);
+
+    // 1. 優先從 globalClients (同步自試算表「客戶管理」F 欄) 查找
+    const matchedClientsInDb = (globalClients || []).filter(c => {
+        const cIds = String(c.custId || '').split(',').map(s => s.trim()).filter(Boolean);
+        return cIds.includes(cleanExtId);
+    });
+
+    for (const c of matchedClientsInDb) {
+        if (c.name === cleanErpName || window.normalizeClientName(c.name) === normErp) {
+            return { isMatch: true, extClientName: c.name };
+        }
+    }
+
+    // 2. 從內建 customer1.xlsx 字典查找
+    const dictMatches = (window.EXTERNAL_CUSTID_DICT || []).filter(d => d.custId === cleanExtId);
+    for (const d of dictMatches) {
+        if (d.name === cleanErpName || window.normalizeClientName(d.name) === normErp) {
+            return { isMatch: true, extClientName: d.name };
+        }
+    }
+
+    // 3. 特殊通用分類代號容錯：外部系統常將未獨立編號之同行歸入 200104 (臺中其他同行)、診所/分院歸入 200116 (臺中其他醫院)
+    if (cleanExtId === '200104' && /生技|醫技|儀器|器材|實業|企業|有限公司|股份|行$/.test(cleanErpName)) {
+        return { isMatch: true, extClientName: `臺中其他同行 (${cleanErpName})` };
+    }
+    if (cleanExtId === '200116' && /醫院|診所|分院|衛生|醫務/.test(cleanErpName)) {
+        return { isMatch: true, extClientName: `臺中其他醫院 (${cleanErpName})` };
+    }
+
+    // 若未匹配成功，回傳該代號對應的外部名稱供人工檢視
+    const fallbackName = matchedClientsInDb.length > 0
+        ? matchedClientsInDb.map(c => c.name).join('/')
+        : (dictMatches.length > 0 ? dictMatches[0].name : `未知代號(${cleanExtId})`);
+
+    return { isMatch: false, extClientName: fallbackName };
+};
 
 // 產品目錄去重輔助工具（防止資料庫重複列導致下拉選單重複出現）
 function deduplicateCatalogRows(rawRows) {
@@ -149,17 +325,21 @@ async function callApi(action, payload = {}) {
         const wsHistory = XLSX.utils.aoa_to_sheet(summaryRows);
 
         // ============================================
-        // 工作表 2: 出貨明細
+        // 工作表 2: 出貨明細 (修正同發票同品項不同數量時的總價覆蓋問題)
         // ============================================
         const lineItemRows = [
             ["開立日期", "發票號碼", "客戶名稱", "訂單編號", "長固代號", "品名", "開立數量", "單價(含稅)", "總價(含稅)", "出貨狀態", "已出貨數量"]
         ];
         (payload.lineItems || []).forEach(l => {
-            // 修正前端單價異常，向後台抓取真實價格與代號
-            const sd = globalSalesDetails.find(s => s.paperNo === l.paperNo && s.name === l.name);
-            const price = sd ? sd.price : 0;
-            const subtotal = sd ? sd.subtotal : 0;
-            const cat = globalCatalog.find(c => c.productName === l.name && c.clientName === l.client);
+            const sd = (l.rowIdx !== undefined && l.rowIdx !== null)
+                ? globalSalesDetails.find(s => s.rowIdx === l.rowIdx)
+                : globalSalesDetails.find(s => s.paperNo === l.paperNo && s.name === l.name && Number(s.qty) === Number(l.qty));
+            const fallbackSd = sd || globalSalesDetails.find(s => s.paperNo === l.paperNo && s.name === l.name);
+            const price = (l.price && Number(l.price) > 0) ? Number(l.price) : (fallbackSd ? Number(fallbackSd.price) : 0);
+            const subtotal = (l.subtotal && Number(l.subtotal) > 0) ? Number(l.subtotal) : Math.round(price * (Number(l.qty) || 0));
+            const cat = (typeof window.findProductRobust === 'function')
+                ? window.findProductRobust(l.client, null, l.name)
+                : globalCatalog.find(c => c.productName === l.name && c.clientName === l.client);
             const internalCode = cat ? (cat.internalCode || cat.assetCode || '') : '';
             
             lineItemRows.push([
@@ -430,19 +610,31 @@ async function executeSupabaseAction(action, payload) {
         }
     }
     else if (action === 'addClientData') {
+        const custIdVal = payload.custId || window.resolveClientCustIds(payload.clientName, payload.taxId, '');
         const { error } = await supabaseClient.from('clients').insert({
-            name: payload.clientName, tax_id: payload.taxId, address: payload.address, receive_dept: payload.receiveDept
+            name: payload.clientName, tax_id: payload.taxId, address: payload.address, receive_dept: payload.receiveDept, cust_id: custIdVal
         });
-        if (error) throw error;
+        if (error) {
+            // 若 Supabase 尚未建立 cust_id 欄位則自動降級寫入
+            const { error: fallbackErr } = await supabaseClient.from('clients').insert({
+                name: payload.clientName, tax_id: payload.taxId, address: payload.address, receive_dept: payload.receiveDept
+            });
+            if (fallbackErr) throw fallbackErr;
+        }
     }
     else if (action === 'updateClientData') {
-        await supabaseClient.from('clients').update({
+        const updateObj = {
             name: payload.newName, tax_id: payload.newTaxId, address: payload.address, receive_dept: payload.receiveDept
-        }).eq('name', payload.oldName);
+        };
+        if (payload.custId !== undefined) updateObj.cust_id = payload.custId;
+        const { error } = await supabaseClient.from('clients').update(updateObj).eq('name', payload.oldName);
+        if (error && updateObj.cust_id !== undefined) {
+            delete updateObj.cust_id;
+            await supabaseClient.from('clients').update(updateObj).eq('name', payload.oldName);
+        }
         await supabaseClient.from('catalog').update({ client_name: payload.newName }).eq('client_name', payload.oldName);
     }
     else if (action === 'saveAdminItem') {
-        // 【問題 4 核心修復】使用安全的整數列號並補齊欄位，防止 int4 溢位與靜默失敗
         const isEdit = !!(payload.isEdit && payload.rowIndex && Number(payload.rowIndex) < 2000000000);
         const targetIdx = (payload.rowIndex && Number(payload.rowIndex) < 2000000000)
             ? Number(payload.rowIndex)
@@ -596,7 +788,13 @@ async function loadDataFromSupabase() {
         fetchAllSupabaseTable('email_settings')
     ]);
 
-    globalClients = (c || []).map(x => ({name: x.name, taxId: x.tax_id, address: x.address, receiveDept: x.receive_dept}));
+    globalClients = (c || []).map(x => ({
+        name: x.name,
+        taxId: x.tax_id,
+        address: x.address,
+        receiveDept: x.receive_dept,
+        custId: window.resolveClientCustIds(x.name, x.tax_id, x.cust_id)
+    }));
     globalSuppliers = (s || []).map(x => ({name: x.name, code: x.code, phone: x.phone, fax: x.fax}));
     globalCatalog = deduplicateCatalogRows(cat);
     globalInventory = (inv || []).map(x => ({rowIdx: 0, name: x.name, qty: Number(x.qty), alertQty: Number(x.alert_qty), cost: Number(x.cost), supplier: x.supplier, internalCode: x.internal_code, assetCodeCombined: x.asset_code_combined, batchesStr: x.batches_str}));
@@ -630,7 +828,13 @@ async function silentRefreshTable(table) {
         
         const { data: allData } = await fetchAllSupabaseTable(table, orderByCol, ascending);
 
-        if (table === 'clients') globalClients = allData.map(x => ({name: x.name, taxId: x.tax_id, address: x.address, receiveDept: x.receive_dept}));
+        if (table === 'clients') globalClients = allData.map(x => ({
+            name: x.name,
+            taxId: x.tax_id,
+            address: x.address,
+            receiveDept: x.receive_dept,
+            custId: window.resolveClientCustIds(x.name, x.tax_id, x.cust_id)
+        }));
         else if (table === 'suppliers') globalSuppliers = allData.map(x => ({name: x.name, code: x.code, phone: x.phone, fax: x.fax}));
         else if (table === 'catalog') globalCatalog = deduplicateCatalogRows(allData);
         else if (table === 'inventory') globalInventory = allData.map(x => ({rowIdx: 0, name: x.name, qty: Number(x.qty), alertQty: Number(x.alert_qty), cost: Number(x.cost), supplier: x.supplier, internalCode: x.internal_code, assetCodeCombined: x.asset_code_combined, batchesStr: x.batches_str}));
@@ -678,6 +882,7 @@ function refreshAllUI() {
     if(document.getElementById('sys-history') && document.getElementById('sys-history').style.display === 'block') { 
         if (typeof window.renderHistory === "function") window.renderHistory(); 
         if (typeof window.generateReport === "function") window.generateReport(); 
+        if (typeof window.initReconcileCenterUI === "function") window.initReconcileCenterUI();
     }
     if(document.getElementById('sys-admin') && document.getElementById('sys-admin').style.display === 'block') { 
         if (typeof window.renderAdminItems === "function") window.renderAdminItems(); 
@@ -939,7 +1144,12 @@ window.openSearchModal = function(type, callback) {
     if(type === 'client' || type === 'admin_client' || type === 'client_ord' || type === 'client_quo') { 
         document.getElementById('searchModalTitle').innerText = '選擇客戶'; 
         const uniqueClients = [...new Map(globalClients.map(c => [(c.name || '').trim(), c])).values()];
-        currentSearchSource = uniqueClients.map(c => ({ text: c.name, sub: `統編: ${c.taxId||'無'}`, val: c.name, ref: c })); 
+        currentSearchSource = uniqueClients.map(c => ({
+            text: c.name,
+            sub: `統編: ${c.taxId||'無'}${c.custId ? ' | 代號: ' + c.custId : ''}`,
+            val: c.name,
+            ref: c
+        })); 
     }
     else if(type === 'item_adj') { 
         document.getElementById('searchModalTitle').innerText = '選擇盤點品項'; 
@@ -955,7 +1165,6 @@ window.openSearchModal = function(type, callback) {
         
         if(!clientName) { alert('請先選擇客戶！'); return; } 
         
-        // 【問題 3 核心修復】針對特定客戶的品項清單進行唯一值去重，消除重複出現的相同品名
         const clientProds = globalCatalog.filter(p => p.clientName === clientName);
         const uniqueMap = new Map();
         clientProds.forEach(p => {
@@ -1118,6 +1327,7 @@ window.enterSystem = function(modId) {
     if(modId === 'history') { 
         if (typeof window.renderHistory === "function") window.renderHistory(); 
         if (typeof window.generateReport === "function") window.generateReport(); 
+        if (typeof window.initReconcileCenterUI === "function") window.initReconcileCenterUI();
     }
     if(modId === 'admin') { 
         if (typeof window.renderAdminItems === "function") window.renderAdminItems(); 
