@@ -57,6 +57,37 @@ let currentSearchSource = [];
 let currentSearchCallback = null;
 let myLastSyncTime = Date.now();
 
+// 產品目錄去重輔助工具（防止資料庫重複列導致下拉選單重複出現）
+function deduplicateCatalogRows(rawRows) {
+    const map = new Map();
+    (rawRows || []).forEach(x => {
+        const item = {
+            rowIndex: Number(x.row_index) || 0,
+            assetCode: x.asset_code || '',
+            internalCode: x.internal_code || '',
+            clientName: x.client_name || '',
+            productName: x.product_name || '',
+            unit: x.unit || '式',
+            price: Number(x.price) || 0
+        };
+        const key = `${item.clientName.trim()}|${item.productName.trim()}|${item.assetCode.trim()}|${item.internalCode.trim()}|${item.price}`;
+        map.set(key, item);
+    });
+    return Array.from(map.values());
+}
+
+// 取得安全的新增 Catalog row_index（避免 Date.now() 超過 Postgres int4 上限）
+window.getNextCatalogRowIndex = function() {
+    let maxIdx = 1;
+    (globalCatalog || []).forEach(item => {
+        const rIdx = Number(item.rowIndex) || 0;
+        if (rIdx > 0 && rIdx < 2000000000 && rIdx > maxIdx) {
+            maxIdx = rIdx;
+        }
+    });
+    return maxIdx + 1;
+};
+
 // ============================================================================
 // API 通訊模組 (攔截前端邏輯 或 發送至機器人)
 // ============================================================================
@@ -240,23 +271,27 @@ async function executeSupabaseAction(action, payload) {
     
     if (action === 'saveOrderData') {
         const items = payload.items || [];
-        await supabaseClient.from('orders').upsert({
+        const { error } = await supabaseClient.from('orders').upsert({
             row_idx: payload.rowIdx || Date.now(),
             time: Date.now(), client: payload.clientName, order_no: payload.orderNo,
             dept: payload.department, status: payload.status, json_str: JSON.stringify(items),
             deadline: payload.deadline, source: payload.source, mail_url: payload.mailUrl
         });
+        if (error) throw error;
     } 
     else if (action === 'updateOrderStatus') {
-        await supabaseClient.from('orders').update({ status: payload.status }).in('row_idx', payload.rowIndices);
+        const { error } = await supabaseClient.from('orders').update({ status: payload.status }).in('row_idx', payload.rowIndices);
+        if (error) throw error;
     }
     else if (action === 'submitInvoice') {
-        await supabaseClient.from('invoices').insert({
+        const { error: invErr } = await supabaseClient.from('invoices').insert({
             row_idx: Date.now(), time: payload.invDate, staff: payload.staff,
             client: payload.clientName, tax_id: payload.taxId, net: payload.netTotal,
             tax: payload.tax, total: payload.totalWithTax, details: payload.detailsStr,
             paper_no: payload.paperNo, order_no: payload.orderNo, status: '正常', history_log: '[]'
         });
+        if (invErr) throw invErr;
+
         if (payload.items && payload.items.length > 0) {
             const sdArr = payload.items.map((i, idx) => ({
                 row_idx: Date.now() + Math.floor(Math.random() * 1000) + idx,
@@ -265,7 +300,8 @@ async function executeSupabaseAction(action, payload) {
                 price: i.price, subtotal: i.subtotal, ship_status: '待出貨', shipped_qty: 0,
                 lot: '', expiry: ''
             }));
-            await supabaseClient.from('sales_details').insert(sdArr);
+            const { error: sdErr } = await supabaseClient.from('sales_details').insert(sdArr);
+            if (sdErr) throw sdErr;
         }
     } 
     else if (action === 'updateInvoiceRecord') {
@@ -288,7 +324,7 @@ async function executeSupabaseAction(action, payload) {
         await supabaseClient.from('sales_details').update({ paper_no: payload.newPaperNo }).eq('paper_no', payload.oldPaperNo);
     }
     else if (action === 'adjustInventory') {
-        const { data: inv } = await supabaseClient.from('inventory').select('*').eq('name', payload.name).single();
+        const { data: inv } = await supabaseClient.from('inventory').select('*').eq('name', payload.name).maybeSingle();
         let currentNewQty = payload.changeQty;
         if (inv) {
             currentNewQty = Number(inv.qty) + payload.changeQty;
@@ -321,13 +357,13 @@ async function executeSupabaseAction(action, payload) {
     } 
     else if (action === 'updateShipment') {
         for (let u of (payload.updates || [])) {
-            const { data: sd } = await supabaseClient.from('sales_details').select('*').eq('row_idx', u.rowIdx).single();
+            const { data: sd } = await supabaseClient.from('sales_details').select('*').eq('row_idx', u.rowIdx).maybeSingle();
             if (sd) {
                 let newShipped = (sd.shipped_qty || 0) + u.shipQty;
                 let newStatus = newShipped >= sd.qty ? '已結案' : '部分出貨';
                 await supabaseClient.from('sales_details').update({ shipped_qty: newShipped, ship_status: newStatus }).eq('row_idx', u.rowIdx);
             }
-            const { data: inv } = await supabaseClient.from('inventory').select('*').eq('name', u.name).single();
+            const { data: inv } = await supabaseClient.from('inventory').select('*').eq('name', u.name).maybeSingle();
             if (inv) {
                 let newQty = Number(inv.qty) - u.shipQty;
                 let batches = JSON.parse(inv.batches_str || '[]');
@@ -376,7 +412,7 @@ async function executeSupabaseAction(action, payload) {
     }
     else if (action === 'editInvLogBatch') {
         if (payload.logRowIdx) await supabaseClient.from('inventory_logs').update({ lot: payload.newLot }).eq('row_idx', payload.logRowIdx);
-        const { data: inv } = await supabaseClient.from('inventory').select('*').eq('name', payload.name).single();
+        const { data: inv } = await supabaseClient.from('inventory').select('*').eq('name', payload.name).maybeSingle();
         if (inv) {
             let batches = JSON.parse(inv.batches_str || '[]');
             if (payload.oldLot) {
@@ -394,9 +430,10 @@ async function executeSupabaseAction(action, payload) {
         }
     }
     else if (action === 'addClientData') {
-        await supabaseClient.from('clients').insert({
+        const { error } = await supabaseClient.from('clients').insert({
             name: payload.clientName, tax_id: payload.taxId, address: payload.address, receive_dept: payload.receiveDept
         });
+        if (error) throw error;
     }
     else if (action === 'updateClientData') {
         await supabaseClient.from('clients').update({
@@ -405,11 +442,40 @@ async function executeSupabaseAction(action, payload) {
         await supabaseClient.from('catalog').update({ client_name: payload.newName }).eq('client_name', payload.oldName);
     }
     else if (action === 'saveAdminItem') {
-        const targetIdx = payload.rowIndex || Date.now();
-        await supabaseClient.from('catalog').upsert({
-            row_index: targetIdx, client_name: payload.clientName, product_name: payload.productName,
-            internal_code: payload.internalCode, unit: payload.unit, price: payload.price
-        });
+        // 【問題 4 核心修復】使用安全的整數列號並補齊欄位，防止 int4 溢位與靜默失敗
+        const isEdit = !!(payload.isEdit && payload.rowIndex && Number(payload.rowIndex) < 2000000000);
+        const targetIdx = (payload.rowIndex && Number(payload.rowIndex) < 2000000000)
+            ? Number(payload.rowIndex)
+            : window.getNextCatalogRowIndex();
+
+        const record = {
+            row_index: targetIdx,
+            asset_code: payload.assetCode || '',
+            internal_code: payload.internalCode || '',
+            client_name: payload.clientName,
+            product_name: payload.productName,
+            unit: payload.unit || '式',
+            price: Number(payload.price) || 0
+        };
+
+        if (isEdit) {
+            const { data: updated, error: updErr } = await supabaseClient
+                .from('catalog')
+                .update(record)
+                .eq('row_index', targetIdx)
+                .select();
+
+            if (updErr || !updated || updated.length === 0) {
+                const { error: upsErr } = await supabaseClient.from('catalog').upsert(record);
+                if (upsErr) throw upsErr;
+            }
+        } else {
+            const { error: insErr } = await supabaseClient.from('catalog').insert(record);
+            if (insErr) {
+                const { error: upsErr } = await supabaseClient.from('catalog').upsert(record);
+                if (upsErr) throw upsErr;
+            }
+        }
     }
     else if (action === 'saveQuotation') {
         await supabaseClient.from('quotations').upsert({
@@ -484,7 +550,7 @@ async function pushToSyncQueue(action, payload, callback) {
         if (callback) callback({ success: true });
     } catch (e) {
         console.error("資料庫操作異常:", e);
-        alert("資料庫寫入失敗：" + e.message);
+        alert("資料庫寫入失敗：" + (e.message || JSON.stringify(e)));
     }
 }
 
@@ -519,7 +585,7 @@ async function loadDataFromSupabase() {
     ] = await Promise.all([
         fetchAllSupabaseTable('clients'),
         fetchAllSupabaseTable('suppliers'),
-        fetchAllSupabaseTable('catalog'),
+        fetchAllSupabaseTable('catalog', 'row_index', true),
         fetchAllSupabaseTable('inventory'),
         fetchAllSupabaseTable('orders', 'row_idx', false),
         fetchAllSupabaseTable('invoices', 'row_idx', false),
@@ -532,7 +598,7 @@ async function loadDataFromSupabase() {
 
     globalClients = (c || []).map(x => ({name: x.name, taxId: x.tax_id, address: x.address, receiveDept: x.receive_dept}));
     globalSuppliers = (s || []).map(x => ({name: x.name, code: x.code, phone: x.phone, fax: x.fax}));
-    globalCatalog = (cat || []).map(x => ({rowIndex: x.row_index, assetCode: x.asset_code, internalCode: x.internal_code, clientName: x.client_name, productName: x.product_name, unit: x.unit, price: Number(x.price)}));
+    globalCatalog = deduplicateCatalogRows(cat);
     globalInventory = (inv || []).map(x => ({rowIdx: 0, name: x.name, qty: Number(x.qty), alertQty: Number(x.alert_qty), cost: Number(x.cost), supplier: x.supplier, internalCode: x.internal_code, assetCodeCombined: x.asset_code_combined, batchesStr: x.batches_str}));
     globalOrders = (ord || []).map(x => ({rowIdx: x.row_idx, time: Number(x.time), client: x.client, orderNo: x.order_no, dept: x.dept, status: x.status, jsonStr: x.json_str, deadline: x.deadline, source: x.source, mailUrl: x.mail_url}));
     globalHistory = (invc || []).map(x => ({rowIdx: x.row_idx, time: Number(x.time), staff: x.staff, client: x.client, taxId: x.tax_id, net: Number(x.net), tax: Number(x.tax), total: Number(x.total), details: x.details, paperNo: x.paper_no, orderNo: x.order_no, status: x.status, historyLog: x.history_log}));
@@ -557,13 +623,16 @@ async function silentRefreshTable(table) {
         let ascending = false;
         if (['orders', 'invoices', 'sales_details', 'inventory_logs', 'deliveries', 'quotations'].includes(table)) {
             orderByCol = 'row_idx';
+        } else if (table === 'catalog') {
+            orderByCol = 'row_index';
+            ascending = true;
         }
         
         const { data: allData } = await fetchAllSupabaseTable(table, orderByCol, ascending);
 
         if (table === 'clients') globalClients = allData.map(x => ({name: x.name, taxId: x.tax_id, address: x.address, receiveDept: x.receive_dept}));
         else if (table === 'suppliers') globalSuppliers = allData.map(x => ({name: x.name, code: x.code, phone: x.phone, fax: x.fax}));
-        else if (table === 'catalog') globalCatalog = allData.map(x => ({rowIndex: x.row_index, assetCode: x.asset_code, internalCode: x.internal_code, clientName: x.client_name, productName: x.product_name, unit: x.unit, price: Number(x.price)}));
+        else if (table === 'catalog') globalCatalog = deduplicateCatalogRows(allData);
         else if (table === 'inventory') globalInventory = allData.map(x => ({rowIdx: 0, name: x.name, qty: Number(x.qty), alertQty: Number(x.alert_qty), cost: Number(x.cost), supplier: x.supplier, internalCode: x.internal_code, assetCodeCombined: x.asset_code_combined, batchesStr: x.batches_str}));
         else if (table === 'orders') globalOrders = allData.map(x => ({rowIdx: x.row_idx, time: Number(x.time), client: x.client, orderNo: x.order_no, dept: x.dept, status: x.status, jsonStr: x.json_str, deadline: x.deadline, source: x.source, mailUrl: x.mail_url}));
         else if (table === 'invoices') globalHistory = allData.map(x => ({rowIdx: x.row_idx, time: Number(x.time), staff: x.staff, client: x.client, taxId: x.tax_id, net: Number(x.net), tax: Number(x.tax), total: Number(x.total), details: x.details, paperNo: x.paper_no, orderNo: x.order_no, status: x.status, historyLog: x.history_log}));
@@ -869,11 +938,12 @@ window.openSearchModal = function(type, callback) {
     
     if(type === 'client' || type === 'admin_client' || type === 'client_ord' || type === 'client_quo') { 
         document.getElementById('searchModalTitle').innerText = '選擇客戶'; 
-        currentSearchSource = globalClients.map(c => ({ text: c.name, sub: `統編: ${c.taxId||'無'}`, val: c.name, ref: c })); 
+        const uniqueClients = [...new Map(globalClients.map(c => [(c.name || '').trim(), c])).values()];
+        currentSearchSource = uniqueClients.map(c => ({ text: c.name, sub: `統編: ${c.taxId||'無'}`, val: c.name, ref: c })); 
     }
     else if(type === 'item_adj') { 
         document.getElementById('searchModalTitle').innerText = '選擇盤點品項'; 
-        const uniqueProds = [...new Map(globalCatalog.map(item => [item.productName, item])).values()]; 
+        const uniqueProds = [...new Map(globalCatalog.map(item => [(item.productName || '').trim(), item])).values()]; 
         currentSearchSource = uniqueProds.map(p => ({ text: p.productName, sub: `長固代號: ${p.internalCode||p.assetCode||'無'}`, val: p.productName, ref: p })); 
     }
     else if(type.startsWith('item_')) { 
@@ -884,7 +954,18 @@ window.openSearchModal = function(type, callback) {
         else clientName = document.getElementById('invClientInput').value; 
         
         if(!clientName) { alert('請先選擇客戶！'); return; } 
-        currentSearchSource = globalCatalog.filter(p => p.clientName === clientName).map(p => {
+        
+        // 【問題 3 核心修復】針對特定客戶的品項清單進行唯一值去重，消除重複出現的相同品名
+        const clientProds = globalCatalog.filter(p => p.clientName === clientName);
+        const uniqueMap = new Map();
+        clientProds.forEach(p => {
+            const key = `${(p.productName || '').trim()}|${(p.assetCode || '').trim()}|${(p.internalCode || '').trim()}|${p.price}`;
+            if (!uniqueMap.has(key)) {
+                uniqueMap.set(key, p);
+            }
+        });
+
+        currentSearchSource = Array.from(uniqueMap.values()).map(p => {
             let detailStr = `單價: $${p.price} / ${p.unit}`;
             if(p.assetCode) detailStr += ` | 資材碼: ${p.assetCode}`;
             return { text: p.productName, sub: detailStr, val: p.productName, ref: p };
