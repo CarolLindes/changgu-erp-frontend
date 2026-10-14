@@ -35,7 +35,7 @@ const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 // 2. 主程式入口
 // ============================================================================
 async function main() {
-  console.log("🤖 啟動長固 ERP AI 接單機器人 (Node.js 版 - 強化追蹤日誌版)...");
+  console.log("🤖 啟動長固 ERP AI 接單機器人 (Node.js 版 - 強化追蹤日誌與容錯版)...");
   
   // [除錯日誌] 檢查環境變數
   console.log("=== 環境變數載入狀態檢查 ===");
@@ -350,20 +350,33 @@ async function modifyEmailLabels(messageId, addLabelIds, removeLabelIds) {
   }
 }
 
-async function sendTelegramMsg(text) {
+async function sendTelegramMsg(text, isRetry = false) {
   if (!CONFIG.TELEGRAM_TOKEN || !CONFIG.TELEGRAM_CHAT_ID) {
       console.log(`[Telegram] 未設定 Token 或 Chat ID，略過發送訊息。訊息內容: ${text.substring(0, 30)}...`);
       return;
   }
   const url = `https://api.telegram.org/bot${CONFIG.TELEGRAM_TOKEN}/sendMessage`;
+  const payload = { chat_id: CONFIG.TELEGRAM_CHAT_ID, text: text };
+  
+  // 第一次嘗試使用 Markdown，若是重試則使用純文字
+  if (!isRetry) {
+    payload.parse_mode = "Markdown";
+  }
+
   try {
     const res = await fetch(url, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: CONFIG.TELEGRAM_CHAT_ID, text: text, parse_mode: "Markdown" })
+      body: JSON.stringify(payload)
     });
     const resData = await res.json();
+    
     if (!res.ok) {
         console.error(`[Telegram] 推播失敗，伺服器回傳:`, JSON.stringify(resData));
+        // 如果是因為 Markdown 語法衝突導致失敗，且尚未重試過，則改用純文字重試
+        if (!isRetry && resData.description && resData.description.includes("can't parse entities")) {
+            console.log(`[Telegram] 觸發 Markdown 衝突，改以純文字模式重新發送...`);
+            await sendTelegramMsg(text, true);
+        }
     } else {
         console.log(`[Telegram] 推播成功`);
     }
