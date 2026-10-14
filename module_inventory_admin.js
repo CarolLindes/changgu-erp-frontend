@@ -844,13 +844,13 @@ window.openNewClientModal = function() {
 
 window.submitNewClientOptimistic = function() { 
     const btn = event ? event.currentTarget : null;
-    if(window.lockButton(btn)) return; // 防連點保護
 
     const name = document.getElementById('addClientName').value.trim(); 
     const taxId = document.getElementById('addClientTaxId').value.trim(); 
     const address = document.getElementById('addClientAddress').value.trim(); 
     const receiveDept = document.getElementById('addClientReceiveDept').value.trim(); 
     if(!name) return alert('名稱必填'); 
+    if(window.lockButton(btn)) return; // 防連點保護
     
     globalClients.push({ name, taxId, address, receiveDept }); 
     if(typeof window.populateAdminClientFilter === 'function') window.populateAdminClientFilter(); 
@@ -871,7 +871,6 @@ window.openEditClientModal = function(name, taxId) {
 
 window.submitEditClientOptimistic = function() { 
     const btn = event ? event.currentTarget : null;
-    if(window.lockButton(btn)) return; // 防連點保護
 
     const old = document.getElementById('editClientOldName').value; 
     const name = document.getElementById('editClientName').value.trim(); 
@@ -879,6 +878,7 @@ window.submitEditClientOptimistic = function() {
     const address = document.getElementById('editClientAddress').value.trim(); 
     const receiveDept = document.getElementById('editClientReceiveDept').value.trim(); 
     if(!name) return; 
+    if(window.lockButton(btn)) return; // 防連點保護
     
     const c = globalClients.find(x => x.name === old); 
     if(c) { c.name = name; c.taxId = tax; c.address = address; c.receiveDept = receiveDept; } 
@@ -906,6 +906,7 @@ window.openAdminItemModal = function(idx) {
     const ipt = document.getElementById('editItemClientDisplay'); 
     if(idx) { 
         const p = globalCatalog.find(x => x.rowIndex === idx); 
+        if (!p) return;
         document.getElementById('editItemRowIndex').value = idx; 
         ipt.value = p.clientName; 
         document.getElementById('editItemClientVal').value = p.clientName; 
@@ -916,7 +917,9 @@ window.openAdminItemModal = function(idx) {
         document.getElementById('editItemPrice').value = p.price; 
     } else { 
         document.getElementById('editItemRowIndex').value = ''; 
-        ipt.value = ''; ipt.onclick = triggerItemClientSelect; ipt.classList.add('fake-input-btn'); 
+        ipt.value = ''; 
+        document.getElementById('editItemClientVal').value = '';
+        ipt.onclick = triggerItemClientSelect; ipt.classList.add('fake-input-btn'); 
         document.getElementById('editItemName').value = ''; 
         document.getElementById('editItemInternalCode').value = ''; 
         document.getElementById('editItemUnit').value = '式'; 
@@ -936,42 +939,55 @@ window.triggerItemClientSelect = function() {
 
 window.submitEditItemOptimistic = function() { 
     const btn = event ? event.currentTarget : null;
-    if(window.lockButton(btn)) return; // 防連點保護
 
     const idx = document.getElementById('editItemRowIndex').value; 
-    const client = document.getElementById('editItemClientVal').value; 
+    const client = (document.getElementById('editItemClientVal').value || document.getElementById('editItemClientDisplay').value || '').trim(); 
     const name = document.getElementById('editItemName').value.trim(); 
     const internalCode = document.getElementById('editItemInternalCode').value.trim(); 
-    const unit = document.getElementById('editItemUnit').value.trim(); 
-    const price = document.getElementById('editItemPrice').value; 
+    const unit = document.getElementById('editItemUnit').value.trim() || '式'; 
+    const priceStr = String(document.getElementById('editItemPrice').value || '').replace(/[^0-9.-]/g, ''); 
     
-    if(!client || !name || !price) return alert('必填未填'); 
-    
+    if(!client || !name || priceStr === '' || isNaN(Number(priceStr))) return alert('客戶名稱、品名與單價皆為必填！'); 
+    if(window.lockButton(btn)) return; // 防連點保護
+
+    // 【問題 4 修復】計算安全的遞增整數 row_index，避免 Date.now() 超過資料庫 int4 上限導致寫入失敗
+    const isEdit = !!idx;
+    const targetRowIndex = isEdit 
+        ? parseInt(idx, 10) 
+        : (typeof window.getNextCatalogRowIndex === 'function' ? window.getNextCatalogRowIndex() : (globalCatalog.length + 2));
+
+    const existingItem = isEdit ? globalCatalog.find(x => x.rowIndex === targetRowIndex) : null;
+    const assetCode = existingItem ? (existingItem.assetCode || '') : '';
+
     const payload = { 
-        rowIndex: idx ? parseInt(idx) : null, 
+        isEdit: isEdit,
+        rowIndex: targetRowIndex, 
+        assetCode: assetCode,
         clientName: client, 
         productName: name, 
         internalCode: internalCode, 
         unit: unit, 
-        price: Number(price) 
+        price: Number(priceStr) 
     }; 
     
-    if(idx) { 
-        const p = globalCatalog.find(x => x.rowIndex === payload.rowIndex); 
-        if(p) Object.assign(p, payload); 
+    if(isEdit && existingItem) { 
+        Object.assign(existingItem, payload); 
     } else { 
         globalCatalog.push({ 
-            rowIndex: Date.now(), 
+            rowIndex: targetRowIndex, 
+            assetCode: assetCode,
             clientName: client, 
             productName: name, 
             internalCode: internalCode, 
             unit: unit, 
-            price: Number(price) 
+            price: Number(priceStr) 
         }); 
     } 
     
     window.renderAdminItems(); 
     bootstrap.Modal.getOrCreateInstance(document.getElementById('editItemModal')).hide(); 
     
-    pushToSyncQueue('saveAdminItem', payload, null); 
+    pushToSyncQueue('saveAdminItem', payload, () => {
+        showToast("✅ 合約報價品項已成功儲存至資料庫");
+    }); 
 };
