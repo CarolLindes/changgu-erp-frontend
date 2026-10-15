@@ -1,7 +1,7 @@
 /**
  * ============================================================================
  * 模組 3：開立發票、歷史紀錄與報表 + 跨系統報表智慧勾稽比對中心 (module_invoice_history.js)
- * 【防連點、強健比對、三聯發票單價修正 ＆ 跨系統 AI 報表比對旗艦版】
+ * 【防連點、三聯發票單價修正、已覆核專區、進度自動記憶 ＆ 缺漏明細一鍵補登旗艦版】
  * ============================================================================
  */
 
@@ -199,8 +199,9 @@ window.submitInvoiceOptimistic = function() {
         let tempIdx = -Math.floor(Math.random() * 1000000); 
         globalSalesDetails.unshift({ 
             rowIdx: tempIdx, time: invDateTimestamp, paperNo: paperNo, client: payload.clientName, 
-            orderNo: orderNo, name: pi.name, qty: pi.qty, price: pi.price, subtotal: pi.subtotal, 
-            shippedQty: 0, shipStatus: '待出貨', lot: '', expiry: ''
+            orderNo: orderNo, name: pi.name, qty: pi.qty, unit: pi.unit, price: pi.price, subtotal: pi.subtotal, 
+            shippedQty: 0, shipStatus: '待出貨', lot: '', expiry: '',
+            payStatus: '未收款', paidAmount: 0, payDate: '', paymentNo: ''
         }); 
     });
     
@@ -219,7 +220,7 @@ window.submitInvoiceOptimistic = function() {
     for(let i=0; i < Math.max(currentInvoiceData.validItems.length, 5); i++) {
         if(i < currentInvoiceData.validItems.length) {
             const item = currentInvoiceData.validItems[i]; 
-            // 三聯式統一發票「單價」直接由「未含稅總價 ÷ 數量」計算（如 1010 ÷ 20 = 50.5）
+            // 三聯式統一發票「單價」直接由「未含稅總價 ÷ 數量」計算
             const unTaxedS = Number(item.adjustedUnTaxedSub) || 0;
             const qtyNum = parseFloat(item.qty) || 1;
             const unTaxedP = Number((unTaxedS / qtyNum).toFixed(3)).toLocaleString('en-US', { maximumFractionDigits: 3 });
@@ -520,7 +521,6 @@ window.saveEditInvoice = function() {
     if(h) {
         Object.assign(h, data);
         h.historyLog = "[\"修改紀錄存在\"]";
-        // 若編輯時修改了發票號碼，同步更新記憶體與後台的銷售明細發票號碼，防止出貨明細脫鉤
         if (oldPaperNo && newPaperNo && oldPaperNo !== newPaperNo) {
             globalSalesDetails.forEach(sd => {
                 if (sd.paperNo === oldPaperNo) sd.paperNo = newPaperNo;
@@ -685,8 +685,10 @@ window.confirmExportReport = function() {
 };
 
 // ============================================================================
-// 🤖 跨系統報表智慧勾稽比對中心 (位於「紀錄與報表 ＞ 統計報表」子模組)
+// 🤖 跨系統報表智慧勾稽比對中心 (含「已覆核專區」、「關閉網頁進度記憶」、「缺漏明細一鍵補登」)
 // ============================================================================
+const RECONCILE_STORAGE_KEY = 'changgu_erp_reconcile_workspace_v2';
+
 window.reconcileState = {
     fileName: '',
     extRawRows: [],
@@ -694,135 +696,365 @@ window.reconcileState = {
     startDate: '',
     endDate: '',
     results: [],
+    reviewedMap: {}, // { recKey: { time: '2026/10/15 14:20', staff: '林秀華' } }
+    lastSavedAt: '',
     currentFilter: 'ALL_DIFF',
     searchTerm: ''
 };
 
-// 自動將比對中心 UI 掛載於「統計報表」子模組內
+// 儲存比對中心工作進度至本機記憶體 (關閉瀏覽器或重開機皆不會遺失)
+window.saveReconcileWorkspace = function() {
+    try {
+        const now = new Date();
+        const timeStr = `${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+        window.reconcileState.lastSavedAt = timeStr;
+
+        const dataToSave = {
+            fileName: window.reconcileState.fileName,
+            extRawRows: window.reconcileState.extRawRows,
+            startDate: window.reconcileState.startDate,
+            endDate: window.reconcileState.endDate,
+            reviewedMap: window.reconcileState.reviewedMap || {},
+            lastSavedAt: timeStr
+        };
+        localStorage.setItem(RECONCILE_STORAGE_KEY, JSON.stringify(dataToSave));
+        const saveBadge = document.getElementById('recAutoSaveBadge');
+        if (saveBadge) {
+            saveBadge.innerText = `💾 進度已自動記憶 (${timeStr})`;
+            saveBadge.style.display = 'inline-block';
+        }
+    } catch (e) {
+        console.warn("儲存比對進度快取失敗:", e);
+    }
+};
+
+// 載入上次未完成的比對工作進度
+window.loadReconcileWorkspace = function() {
+    try {
+        const raw = localStorage.getItem(RECONCILE_STORAGE_KEY);
+        if (!raw) return false;
+        const parsed = JSON.parse(raw);
+        if (!parsed || !Array.isArray(parsed.extRawRows) || parsed.extRawRows.length === 0) return false;
+
+        window.reconcileState.fileName = parsed.fileName || '上次未完成報表';
+        window.reconcileState.extRawRows = parsed.extRawRows;
+        window.reconcileState.startDate = parsed.startDate || '';
+        window.reconcileState.endDate = parsed.endDate || '';
+        window.reconcileState.reviewedMap = parsed.reviewedMap || {};
+        window.reconcileState.lastSavedAt = parsed.lastSavedAt || '';
+
+        if (document.getElementById('recMetaBar')) {
+            document.getElementById('recMetaBar').style.display = 'block';
+            document.getElementById('recStartDate').value = window.reconcileState.startDate;
+            document.getElementById('recEndDate').value = window.reconcileState.endDate;
+        }
+        const saveBadge = document.getElementById('recAutoSaveBadge');
+        if (saveBadge && window.reconcileState.lastSavedAt) {
+            saveBadge.innerText = `💾 已自動還原上次進度 (${window.reconcileState.lastSavedAt})`;
+            saveBadge.style.display = 'inline-block';
+        }
+        window.runReportReconciliation(true);
+        return true;
+    } catch (e) {
+        console.warn("讀取比對進度快取失敗:", e);
+        return false;
+    }
+};
+
+// 清除比對暫存記憶
+window.clearReconcileWorkspace = function() {
+    if (!confirm("確定要清除目前的比對檔案與所有「已覆核」記憶進度嗎？\n(適用於開始新月份的報表比對)")) return;
+    localStorage.removeItem(RECONCILE_STORAGE_KEY);
+    window.reconcileState = {
+        fileName: '',
+        extRawRows: [],
+        erpGeneratedRows: [],
+        startDate: '',
+        endDate: '',
+        results: [],
+        reviewedMap: {},
+        lastSavedAt: '',
+        currentFilter: 'ALL_DIFF',
+        searchTerm: ''
+    };
+    if (document.getElementById('recMetaBar')) document.getElementById('recMetaBar').style.display = 'none';
+    if (document.getElementById('recKpiRow')) document.getElementById('recKpiRow').style.display = 'none';
+    if (document.getElementById('recFilterToolbar')) document.getElementById('recFilterToolbar').style.setProperty('display', 'none', 'important');
+    if (document.getElementById('btnDownloadReconcileExcel')) document.getElementById('btnDownloadReconcileExcel').style.display = 'none';
+    if (document.getElementById('btnClearReconcileCache')) document.getElementById('btnClearReconcileCache').style.display = 'none';
+    if (document.getElementById('recAutoSaveBadge')) document.getElementById('recAutoSaveBadge').style.display = 'none';
+    if (document.getElementById('recResultContainer')) {
+        document.getElementById('recResultContainer').innerHTML = `
+            <div class="text-center text-muted py-4 border rounded bg-light">
+                請點擊右上角「<strong>📂 上傳外部系統報表</strong>」開始自動勾稽比對
+            </div>`;
+    }
+    showToast("🗑️ 已清除比對暫存記憶");
+};
+
+// 自動將比對中心 UI 與補登視窗掛載於「統計報表」子模組內
 window.initReconcileCenterUI = function() {
-    if (document.getElementById('reconcileCenterCard')) return;
-    const repTotalEl = document.getElementById('repTotal');
-    if (!repTotalEl) return;
+    if (!document.getElementById('reconcileCenterCard')) {
+        const repTotalEl = document.getElementById('repTotal');
+        if (!repTotalEl) return;
 
-    // 尋找「統計報表」子模組的容器
-    let reportPane = repTotalEl.closest('.tab-pane') || repTotalEl.closest('.card')?.parentElement || repTotalEl.parentElement;
-    if (!reportPane) return;
+        let reportPane = repTotalEl.closest('.tab-pane') || repTotalEl.closest('.card')?.parentElement || repTotalEl.parentElement;
+        if (!reportPane) return;
 
-    const cardHtml = `
-    <div id="reconcileCenterCard" class="card border-0 shadow-sm mt-4 mb-4" style="border-top: 4px solid #0d6efd !important;">
-        <div class="card-body p-3 p-md-4">
-            <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 border-bottom pb-3">
-                <div>
-                    <h5 class="fw-bold text-dark mb-1">🤖 跨系統報表智慧勾稽比對中心</h5>
-                    <div class="small text-muted">
-                        上傳外部系統發票檔（如 <code>INVOICES-1151014.xlsx</code>），系統將自動識別日期區間、於後台生成本系統「出貨明細」並針對 6 大核心欄位進行雙向精準比對。
-                    </div>
-                </div>
-                <div class="mt-2 mt-md-0 d-flex gap-2">
-                    <label class="btn btn-primary fw-bold shadow-sm mb-0" style="cursor: pointer;">
-                        📂 上傳外部系統報表 (.xlsx / .csv)
-                        <input type="file" id="extReportFileInput" accept=".xlsx,.xls,.csv" style="display: none;" onchange="window.handleExternalReportUpload(this)">
-                    </label>
-                    <button id="btnDownloadReconcileExcel" class="btn btn-success fw-bold shadow-sm" style="display: none;" onclick="window.exportReconciliationExcel()">
-                        📥 下載比對差異報告 (.xlsx)
-                    </button>
-                </div>
-            </div>
-
-            <!-- 檔案與自動識別區間資訊列 -->
-            <div id="recMetaBar" class="p-3 rounded bg-light border mb-3" style="display: none;">
-                <div class="row g-2 align-items-center">
-                    <div class="col-12 col-md-5">
-                        <div class="small text-muted fw-bold">📄 已載入外部檔案：</div>
-                        <div id="recFileNameDisplay" class="fw-bold text-primary text-truncate"></div>
-                    </div>
-                    <div class="col-12 col-md-5">
-                        <div class="small text-muted fw-bold mb-1">📅 自動識別比對區間（可手動微調重算）：</div>
-                        <div class="d-flex align-items-center gap-1">
-                            <input type="date" id="recStartDate" class="form-control form-control-sm fw-bold">
-                            <span class="fw-bold text-muted">~</span>
-                            <input type="date" id="recEndDate" class="form-control form-control-sm fw-bold">
+        const cardHtml = `
+        <div id="reconcileCenterCard" class="card border-0 shadow-sm mt-4 mb-4" style="border-top: 4px solid #0d6efd !important;">
+            <div class="card-body p-3 p-md-4">
+                <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 border-bottom pb-3">
+                    <div>
+                        <div class="d-flex align-items-center gap-2 flex-wrap">
+                            <h5 class="fw-bold text-dark mb-0">🤖 跨系統報表智慧勾稽比對中心</h5>
+                            <span id="recAutoSaveBadge" class="badge bg-info text-dark" style="display:none;">💾 進度自動記憶中</span>
+                        </div>
+                        <div class="small text-muted mt-1">
+                            上傳外部系統發票檔（如 <code>INVOICES-1151014.xlsx</code>），自動識別區間、支援「<strong>✅ 人工已覆核歸檔</strong>」、「<strong>🛠️ 缺漏明細一鍵補登</strong>」與「<strong>💾 跨日進度自動記憶</strong>」。
                         </div>
                     </div>
-                    <div class="col-12 col-md-2 text-end">
-                        <button class="btn btn-sm btn-outline-primary fw-bold w-100 mt-2 mt-md-4" onclick="window.runReportReconciliation()">
-                            🔄 重新比對
+                    <div class="mt-2 mt-md-0 d-flex flex-wrap gap-2">
+                        <label class="btn btn-primary fw-bold shadow-sm mb-0" style="cursor: pointer;">
+                            📂 上傳外部系統報表 (.xlsx / .csv)
+                            <input type="file" id="extReportFileInput" accept=".xlsx,.xls,.csv" style="display: none;" onchange="window.handleExternalReportUpload(this)">
+                        </label>
+                        <button id="btnDownloadReconcileExcel" class="btn btn-success fw-bold shadow-sm" style="display: none;" onclick="window.exportReconciliationExcel()">
+                            📥 下載比對差異報告 (.xlsx)
+                        </button>
+                        <button id="btnClearReconcileCache" class="btn btn-outline-secondary fw-bold" style="display: none;" onclick="window.clearReconcileWorkspace()" title="清除記憶並開始新比對">
+                            🗑️ 清除暫存
                         </button>
                     </div>
                 </div>
-            </div>
 
-            <!-- 四大稽核狀態 KPI 篩選小卡 -->
-            <div id="recKpiRow" class="row g-2 mb-3" style="display: none;">
-                <div class="col-6 col-md-2">
-                    <div class="p-2 border rounded text-center shadow-sm rec-kpi-card" id="kpi_ALL_DIFF" style="cursor:pointer; background:#fff8f6; border-color:#dc3545 !important;" onclick="window.setReconcileFilter('ALL_DIFF')">
-                        <div class="small fw-bold text-danger">⚠️ 異常總數</div>
-                        <div class="fs-4 fw-bold text-danger" id="recCountAllDiff">0</div>
-                        <div class="text-muted" style="font-size:0.75rem;">需人工複查</div>
+                <!-- 檔案與自動識別區間資訊列 -->
+                <div id="recMetaBar" class="p-3 rounded bg-light border mb-3" style="display: none;">
+                    <div class="row g-2 align-items-center">
+                        <div class="col-12 col-md-5">
+                            <div class="small text-muted fw-bold">📄 已載入外部檔案（關閉網頁自動保留）：</div>
+                            <div id="recFileNameDisplay" class="fw-bold text-primary text-truncate"></div>
+                        </div>
+                        <div class="col-12 col-md-5">
+                            <div class="small text-muted fw-bold mb-1">📅 自動識別比對區間（可手動微調重算）：</div>
+                            <div class="d-flex align-items-center gap-1">
+                                <input type="date" id="recStartDate" class="form-control form-control-sm fw-bold">
+                                <span class="fw-bold text-muted">~</span>
+                                <input type="date" id="recEndDate" class="form-control form-control-sm fw-bold">
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-2 text-end">
+                            <button class="btn btn-sm btn-outline-primary fw-bold w-100 mt-2 mt-md-4" onclick="window.runReportReconciliation()">
+                                🔄 重新比對
+                            </button>
+                        </div>
                     </div>
                 </div>
-                <div class="col-6 col-md-3">
-                    <div class="p-2 border rounded text-center shadow-sm rec-kpi-card" id="kpi_VALUE_DIFF" style="cursor:pointer; background:#fffdf5;" onclick="window.setReconcileFilter('VALUE_DIFF')">
-                        <div class="small fw-bold text-warning text-dark">🟡 欄位資料相異</div>
-                        <div class="fs-4 fw-bold text-dark" id="recCountValDiff">0</div>
-                        <div class="text-muted" style="font-size:0.75rem;">代號/數量/單價/總價/客戶</div>
+
+                <!-- 六大稽核狀態 KPI 篩選小卡 (含「☑️ 已覆核」專區) -->
+                <div id="recKpiRow" class="row g-2 mb-3" style="display: none;">
+                    <div class="col-6 col-md-2">
+                        <div class="p-2 border rounded text-center shadow-sm rec-kpi-card" id="kpi_ALL_DIFF" style="cursor:pointer; background:#fff8f6; border-color:#dc3545 !important;" onclick="window.setReconcileFilter('ALL_DIFF')">
+                            <div class="small fw-bold text-danger">⚠️ 待處理異常</div>
+                            <div class="fs-4 fw-bold text-danger" id="recCountAllDiff">0</div>
+                            <div class="text-muted" style="font-size:0.72rem;">尚未覆核之異常</div>
+                        </div>
+                    </div>
+                    <div class="col-6 col-md-2">
+                        <div class="p-2 border rounded text-center shadow-sm rec-kpi-card" id="kpi_VALUE_DIFF" style="cursor:pointer; background:#fffdf5;" onclick="window.setReconcileFilter('VALUE_DIFF')">
+                            <div class="small fw-bold text-warning text-dark">🟡 資料相異</div>
+                            <div class="fs-4 fw-bold text-dark" id="recCountValDiff">0</div>
+                            <div class="text-muted" style="font-size:0.72rem;">代號/數量/金額/客戶</div>
+                        </div>
+                    </div>
+                    <div class="col-6 col-md-2">
+                        <div class="p-2 border rounded text-center shadow-sm rec-kpi-card" id="kpi_ONLY_EXT" style="cursor:pointer; background:#fff5f5;" onclick="window.setReconcileFilter('ONLY_EXT')">
+                            <div class="small fw-bold text-danger">🔴 僅外部有</div>
+                            <div class="fs-4 fw-bold text-danger" id="recCountOnlyExt">0</div>
+                            <div class="text-muted" style="font-size:0.72rem;">可一鍵補登明細</div>
+                        </div>
+                    </div>
+                    <div class="col-6 col-md-2">
+                        <div class="p-2 border rounded text-center shadow-sm rec-kpi-card" id="kpi_ONLY_ERP" style="cursor:pointer; background:#f0f7ff;" onclick="window.setReconcileFilter('ONLY_ERP')">
+                            <div class="small fw-bold text-primary">🔵 僅本系統有</div>
+                            <div class="fs-4 fw-bold text-primary" id="recCountOnlyErp">0</div>
+                            <div class="text-muted" style="font-size:0.72rem;">外部缺漏/借用單</div>
+                        </div>
+                    </div>
+                    <div class="col-6 col-md-2">
+                        <div class="p-2 border rounded text-center shadow-sm rec-kpi-card" id="kpi_REVIEWED" style="cursor:pointer; background:#eef2ff; border-color:#6610f2 !important;" onclick="window.setReconcileFilter('REVIEWED')">
+                            <div class="small fw-bold" style="color:#6610f2;">☑️ 已覆核專區</div>
+                            <div class="fs-4 fw-bold" style="color:#6610f2;" id="recCountReviewed">0</div>
+                            <div class="text-muted" style="font-size:0.72rem;">可檢視與隨時還原</div>
+                        </div>
+                    </div>
+                    <div class="col-6 col-md-2">
+                        <div class="p-2 border rounded text-center shadow-sm rec-kpi-card" id="kpi_MATCH" style="cursor:pointer; background:#f3fbf6;" onclick="window.setReconcileFilter('MATCH')">
+                            <div class="small fw-bold text-success">🟢 完全吻合</div>
+                            <div class="fs-4 fw-bold text-success" id="recCountMatch">0</div>
+                            <div class="text-muted" style="font-size:0.72rem;">6大欄位一致</div>
+                        </div>
                     </div>
                 </div>
-                <div class="col-6 col-md-3">
-                    <div class="p-2 border rounded text-center shadow-sm rec-kpi-card" id="kpi_ONLY_EXT" style="cursor:pointer; background:#fff5f5;" onclick="window.setReconcileFilter('ONLY_EXT')">
-                        <div class="small fw-bold text-danger">🔴 僅外部系統有</div>
-                        <div class="fs-4 fw-bold text-danger" id="recCountOnlyExt">0</div>
-                        <div class="text-muted" style="font-size:0.75rem;">本系統出貨明細缺漏</div>
+
+                <!-- 搜尋、頁籤與批次覆核工具列 -->
+                <div id="recFilterToolbar" class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3" style="display: none !important;">
+                    <div class="d-flex flex-wrap gap-1 align-items-center">
+                        <div class="btn-group btn-group-sm flex-wrap" role="group">
+                            <button type="button" class="btn btn-outline-danger active fw-bold" id="btnRecTab_ALL_DIFF" onclick="window.setReconcileFilter('ALL_DIFF')">⚠️ 待處理異常</button>
+                            <button type="button" class="btn btn-outline-warning text-dark fw-bold" id="btnRecTab_VALUE_DIFF" onclick="window.setReconcileFilter('VALUE_DIFF')">🟡 資料相異</button>
+                            <button type="button" class="btn btn-outline-danger fw-bold" id="btnRecTab_ONLY_EXT" onclick="window.setReconcileFilter('ONLY_EXT')">🔴 僅外部有</button>
+                            <button type="button" class="btn btn-outline-primary fw-bold" id="btnRecTab_ONLY_ERP" onclick="window.setReconcileFilter('ONLY_ERP')">🔵 僅本系統有</button>
+                            <button type="button" class="btn btn-outline-dark fw-bold" id="btnRecTab_REVIEWED" onclick="window.setReconcileFilter('REVIEWED')">☑️ 已覆核專區</button>
+                            <button type="button" class="btn btn-outline-success fw-bold" id="btnRecTab_MATCH" onclick="window.setReconcileFilter('MATCH')">🟢 完全吻合</button>
+                            <button type="button" class="btn btn-outline-secondary fw-bold" id="btnRecTab_ALL" onclick="window.setReconcileFilter('ALL')">📋 全部</button>
+                        </div>
+                        <button type="button" id="btnBatchReview" class="btn btn-sm btn-success fw-bold ms-1 shadow-sm" onclick="window.batchToggleReconcileReview(true)">
+                            ✅ 批次標記已覆核
+                        </button>
+                        <button type="button" id="btnBatchUnreview" class="btn btn-sm btn-warning fw-bold ms-1 shadow-sm" style="display:none;" onclick="window.batchToggleReconcileReview(false)">
+                            ↩️ 批次還原未覆核
+                        </button>
+                    </div>
+                    <div style="min-width: 240px; flex-grow: 1; max-width: 340px;">
+                        <input type="text" id="recSearchInput" class="form-control form-control-sm" placeholder="🔍 搜尋發票號碼、客戶、CUSTID、代號、品名..." oninput="window.onReconcileSearch(this.value)">
                     </div>
                 </div>
-                <div class="col-6 col-md-2">
-                    <div class="p-2 border rounded text-center shadow-sm rec-kpi-card" id="kpi_ONLY_ERP" style="cursor:pointer; background:#f0f7ff;" onclick="window.setReconcileFilter('ONLY_ERP')">
-                        <div class="small fw-bold text-primary">🔵 僅本系統有</div>
-                        <div class="fs-4 fw-bold text-primary" id="recCountOnlyErp">0</div>
-                        <div class="text-muted" style="font-size:0.75rem;">外部系統缺漏/借用</div>
-                    </div>
-                </div>
-                <div class="col-12 col-md-2">
-                    <div class="p-2 border rounded text-center shadow-sm rec-kpi-card" id="kpi_MATCH" style="cursor:pointer; background:#f3fbf6;" onclick="window.setReconcileFilter('MATCH')">
-                        <div class="small fw-bold text-success">🟢 完全吻合</div>
-                        <div class="fs-4 fw-bold text-success" id="recCountMatch">0</div>
-                        <div class="text-muted" style="font-size:0.75rem;">6大欄位一致</div>
+
+                <!-- 比對結果清單容器 -->
+                <div id="recResultContainer">
+                    <div class="text-center text-muted py-4 border rounded bg-light">
+                        請點擊右上角「<strong>📂 上傳外部系統報表</strong>」開始自動勾稽比對
                     </div>
                 </div>
             </div>
+        </div>`;
 
-            <!-- 搜尋與顯示切換列 -->
-            <div id="recFilterToolbar" class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3" style="display: none !important;">
-                <div class="btn-group btn-group-sm" role="group">
-                    <button type="button" class="btn btn-outline-danger active fw-bold" id="btnRecTab_ALL_DIFF" onclick="window.setReconcileFilter('ALL_DIFF')">⚠️ 全部異常</button>
-                    <button type="button" class="btn btn-outline-warning text-dark fw-bold" id="btnRecTab_VALUE_DIFF" onclick="window.setReconcileFilter('VALUE_DIFF')">🟡 資料相異</button>
-                    <button type="button" class="btn btn-outline-danger fw-bold" id="btnRecTab_ONLY_EXT" onclick="window.setReconcileFilter('ONLY_EXT')">🔴 僅外部有</button>
-                    <button type="button" class="btn btn-outline-primary fw-bold" id="btnRecTab_ONLY_ERP" onclick="window.setReconcileFilter('ONLY_ERP')">🔵 僅本系統有</button>
-                    <button type="button" class="btn btn-outline-success fw-bold" id="btnRecTab_MATCH" onclick="window.setReconcileFilter('MATCH')">🟢 完全吻合</button>
-                    <button type="button" class="btn btn-outline-secondary fw-bold" id="btnRecTab_ALL" onclick="window.setReconcileFilter('ALL')">📋 顯示全部</button>
-                </div>
-                <div style="min-width: 240px; flex-grow: 1; max-width: 360px;">
-                    <input type="text" id="recSearchInput" class="form-control form-control-sm" placeholder="🔍 搜尋發票號碼、客戶、CUSTID、長固代號、品名..." oninput="window.onReconcileSearch(this.value)">
+        reportPane.insertAdjacentHTML('beforeend', cardHtml);
+    }
+
+    // 確保「🛠️ 跨系統比對 — 智慧補登本系統出貨明細」Modal 存在
+    if (!document.getElementById('reconcileFixModal')) {
+        const fixModalHtml = `
+        <div class="modal fade" id="reconcileFixModal" tabindex="-1">
+            <div class="modal-dialog modal-dialog-centered modal-lg">
+                <div class="modal-content border-0 shadow-lg">
+                    <div class="modal-header bg-primary text-white">
+                        <h5 class="modal-title fw-bold">🛠️ 智慧補登本系統「出貨明細」精靈</h5>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body bg-light">
+                        <input type="hidden" id="rf_recKey">
+                        <!-- 雙向參考資訊對照面板 -->
+                        <div class="row g-2 mb-3">
+                            <div class="col-12 col-md-6">
+                                <div class="p-2 bg-white border border-primary rounded h-100">
+                                    <div class="small fw-bold text-primary border-bottom pb-1 mb-1">📘 本系統「發票總表」既有紀錄對照</div>
+                                    <div id="rf_erpHistoryInfo" class="small text-dark" style="white-space: pre-wrap;"></div>
+                                </div>
+                            </div>
+                            <div class="col-12 col-md-6">
+                                <div class="p-2 bg-white border border-danger rounded h-100">
+                                    <div class="small fw-bold text-danger border-bottom pb-1 mb-1">📙 外部系統報表 (INVOICES) 資料對照</div>
+                                    <div id="rf_extReportInfo" class="small text-dark" style="white-space: pre-wrap;"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="p-3 bg-white border rounded shadow-sm">
+                            <h6 class="fw-bold text-dark border-bottom pb-2 mb-3">✍️ 確認欲補登至本系統「銷售明細總表 (出貨明細)」之內容：</h6>
+                            <div class="row g-2 mb-2">
+                                <div class="col-md-4">
+                                    <label class="small fw-bold text-muted">開立日期 <span class="text-danger">*</span></label>
+                                    <input type="date" id="rf_date" class="form-control fw-bold text-primary">
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="small fw-bold text-muted">發票號碼 <span class="text-danger">*</span></label>
+                                    <input type="text" id="rf_paperNo" class="form-control fw-bold" style="text-transform: uppercase;">
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="small fw-bold text-muted">訂單編號 (選填)</label>
+                                    <input type="text" id="rf_orderNo" class="form-control fw-bold">
+                                </div>
+                            </div>
+
+                            <div class="mb-2">
+                                <label class="small fw-bold text-muted">客戶名稱 <span class="text-danger">*</span></label>
+                                <div class="input-group">
+                                    <input type="text" id="rf_client" class="form-control fw-bold" placeholder="自動帶入或點擊右側選擇...">
+                                    <button class="btn btn-outline-secondary fw-bold" type="button" onclick="openSearchModal('client', (val)=>{ document.getElementById('rf_client').value = val; })">🔍 選客戶</button>
+                                </div>
+                            </div>
+
+                            <div class="row g-2 mb-2">
+                                <div class="col-md-8">
+                                    <label class="small fw-bold text-muted">品名規格 <span class="text-danger">*</span></label>
+                                    <div class="input-group">
+                                        <input type="text" id="rf_name" class="form-control fw-bold text-dark" placeholder="系統自動根據代號/發票總表反查...">
+                                        <button class="btn btn-outline-primary fw-bold" type="button" onclick="openSearchModal('item_recfix', (val, ref)=>{ document.getElementById('rf_name').value = val; if(ref){ document.getElementById('rf_code').value = ref.internalCode || ref.assetCode || ''; document.getElementById('rf_unit').value = ref.unit || '式'; if(!document.getElementById('rf_price').value) document.getElementById('rf_price').value = ref.price || 0; window.recalcFixSubtotal(); } })">📦 從合約庫選品名</button>
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="small fw-bold text-muted">長固代號 (ISPN)</label>
+                                    <input type="text" id="rf_code" class="form-control fw-bold text-info bg-light">
+                                </div>
+                            </div>
+
+                            <div class="row g-2 mb-3">
+                                <div class="col-md-3">
+                                    <label class="small fw-bold text-muted">開立數量 <span class="text-danger">*</span></label>
+                                    <input type="number" id="rf_qty" class="form-control fw-bold text-danger text-center" step="any" oninput="window.recalcFixSubtotal()">
+                                </div>
+                                <div class="col-md-2">
+                                    <label class="small fw-bold text-muted">單位</label>
+                                    <input type="text" id="rf_unit" class="form-control text-center" value="式">
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="small fw-bold text-muted">單價(含稅) <span class="text-danger">*</span></label>
+                                    <input type="number" id="rf_price" class="form-control fw-bold text-end" step="any" oninput="window.recalcFixSubtotal()">
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="small fw-bold text-muted">總價(含稅) <span class="text-danger">*</span></label>
+                                    <input type="number" id="rf_subtotal" class="form-control fw-bold text-primary text-end" step="any">
+                                </div>
+                            </div>
+
+                            <div class="p-2 rounded bg-light border mb-2">
+                                <label class="small fw-bold text-dark d-block mb-1">📦 補登後之出貨與庫存處理方式：</label>
+                                <select id="rf_shipStatus" class="form-select form-select-sm fw-bold">
+                                    <option value="已結案" selected>🟢 直接標記為「已結案」（僅補齊出貨明細帳務，不重複扣減目前實體庫存）</option>
+                                    <option value="待出貨">🟡 標記為「待出貨」（需後續至欠貨出貨模組執行實際扣庫出貨）</option>
+                                </select>
+                            </div>
+
+                            <div id="rf_createInvBox" class="form-check mt-2" style="display:none;">
+                                <input class="form-check-input" type="checkbox" id="rf_alsoCreateInv" checked>
+                                <label class="form-check-label small fw-bold text-danger" for="rf_alsoCreateInv">
+                                    ⚠️ 本系統「發票總表」亦查無此發票，勾選以同步補登一筆發票總表紀錄
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer bg-white border-0">
+                        <button type="button" class="btn btn-secondary fw-bold" data-bs-dismiss="modal">取消</button>
+                        <button type="button" class="btn btn-primary fw-bold px-4 shadow-sm" onclick="window.confirmReconcileFixSubmit()">💾 確認補登並立即重新比對</button>
+                    </div>
                 </div>
             </div>
+        </div>`;
+        document.body.insertAdjacentHTML('beforeend', fixModalHtml);
+    }
 
-            <!-- 比對結果清單容器 -->
-            <div id="recResultContainer">
-                <div class="text-center text-muted py-4 border rounded bg-light">
-                    請點擊右上角「<strong>📂 上傳外部系統報表</strong>」開始自動勾稽比對
-                </div>
-            </div>
-        </div>
-    </div>`;
-
-    reportPane.insertAdjacentHTML('beforeend', cardHtml);
+    // 若記憶體尚無比對資料，嘗試從 localStorage 自動還原上次未完成的工作進度
+    if ((!window.reconcileState.extRawRows || window.reconcileState.extRawRows.length === 0)) {
+        window.loadReconcileWorkspace();
+    }
 };
 
-// 解析外部報表的各種日期格式 (支援 '01-Oct-26', Excel 序列數字, '2026/10/01', 民國年 '1151014')
+// 解析外部報表的各種日期格式
 window.parseExternalDateStr = function(rawVal) {
     if (rawVal === undefined || rawVal === null || rawVal === '') return null;
 
-    // 1. 若為 Excel 日期序列數字 (例如 46296)
     if (typeof rawVal === 'number' && rawVal > 25000 && rawVal < 80000) {
         const utcDays = Math.floor(rawVal - 25569);
         const d = new Date(utcDays * 86400 * 1000);
@@ -834,7 +1066,6 @@ window.parseExternalDateStr = function(rawVal) {
     const s = String(rawVal).trim();
     if (!s) return null;
 
-    // 2. 處理 DD-MMM-YY 或 DD-MMM-YYYY (例如 01-Oct-26, 14-Oct-2026)
     const mEng = s.match(/^(\d{1,2})[-/\s]([A-Za-z]{3})[-/\s](\d{2,4})$/);
     if (mEng) {
         const day = parseInt(mEng[1], 10);
@@ -848,7 +1079,6 @@ window.parseExternalDateStr = function(rawVal) {
         }
     }
 
-    // 3. 處理 YYYY/MM/DD 或 YYYY-MM-DD 或民國 YYY/MM/DD
     const mSlash = s.match(/^(\d{3,4})[-/](\d{1,2})[-/](\d{1,2})/);
     if (mSlash) {
         let yr = parseInt(mSlash[1], 10);
@@ -860,7 +1090,16 @@ window.parseExternalDateStr = function(rawVal) {
         }
     }
 
-    // 4. 一般 Date 解析
+    const mUsSlash = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (mUsSlash) {
+        const mon = parseInt(mUsSlash[1], 10);
+        const day = parseInt(mUsSlash[2], 10);
+        const yr = parseInt(mUsSlash[3], 10);
+        if (mon >= 1 && mon <= 12 && day >= 1 && day <= 31) {
+            return `${yr}-${String(mon).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        }
+    }
+
     const dObj = new Date(s);
     if (!isNaN(dObj.getTime())) {
         return `${dObj.getFullYear()}-${String(dObj.getMonth() + 1).padStart(2, '0')}-${String(dObj.getDate()).padStart(2, '0')}`;
@@ -895,7 +1134,6 @@ window.handleExternalReportUpload = function(input) {
                 return alert("上傳的報表檔案無內容或格式不符！");
             }
 
-            // 尋找表頭列 (預設第 1 列，若包含 INVOICE / CUSTID / NOINVOICE 則動態對齊，同時強制兼容固定欄位位置 B,C,D,E,G,H,J)
             let headerRowIdx = 0;
             for (let r = 0; r < Math.min(10, aoa.length); r++) {
                 const rowStr = aoa[r].map(x => String(x || '').toUpperCase().trim()).join(',');
@@ -911,7 +1149,6 @@ window.handleExternalReportUpload = function(input) {
                 return idx >= 0 ? idx : defaultIdx;
             };
 
-            // 依照使用者指定對應：B欄(1):CUSTID, C欄(2):DATE, D欄(3):ISPN, E欄(4):QTY, G欄(6):PRICE, H欄(7):TOTAL, J欄(9):NOINVOICE
             const idxSysInv = findCol('INVOICE', 0);
             const idxCustId = findCol('CUSTID', 1);
             const idxDate   = findCol('DATE', 2);
@@ -943,8 +1180,7 @@ window.handleExternalReportUpload = function(input) {
                 const noInvoice = String(row[idxNoInv] || '').trim().toUpperCase();
                 const poNumber = String(row[idxPoNum] || '').trim();
 
-                // 忽略完全空白的列
-                if (!sysInv && !custId && !ispn && !noInvoice && qty === 0 && total === 0) continue;
+                if (!sysInv && !custId && !ispn && !noInvoice) continue;
 
                 const cleanDate = window.parseExternalDateStr(rawDate);
                 if (cleanDate) detectedDates.push(cleanDate);
@@ -970,7 +1206,6 @@ window.handleExternalReportUpload = function(input) {
                 return alert("外部報表中未解析到任何有效明細資料列！");
             }
 
-            // 自動決定起訖日期區間
             let minDate = '';
             let maxDate = '';
             if (detectedDates.length > 0) {
@@ -978,7 +1213,6 @@ window.handleExternalReportUpload = function(input) {
                 minDate = detectedDates[0];
                 maxDate = detectedDates[detectedDates.length - 1];
             } else {
-                // 若檔案內無日期，嘗試從檔名如 INVOICES-1151014.xlsx 推算當月 1 號至該日
                 const fnMatch = fileName.match(/(\d{3})(\d{2})(\d{2})/);
                 if (fnMatch) {
                     const yr = parseInt(fnMatch[1], 10) + 1911;
@@ -992,6 +1226,13 @@ window.handleExternalReportUpload = function(input) {
                 }
             }
 
+            // 若上傳的是不同檔名的新報表，詢問是否保留舊的「已覆核」標記
+            if (window.reconcileState.fileName && window.reconcileState.fileName !== fileName && Object.keys(window.reconcileState.reviewedMap || {}).length > 0) {
+                if (!confirm(`偵測到上傳新檔案「${fileName}」，是否保留先前已標記為「已覆核」的紀錄？\n(按「確定」保留，按「取消」清空重新開始)`)) {
+                    window.reconcileState.reviewedMap = {};
+                }
+            }
+
             window.reconcileState.fileName = fileName;
             window.reconcileState.extRawRows = parsedRows;
             window.reconcileState.startDate = minDate;
@@ -1001,11 +1242,11 @@ window.handleExternalReportUpload = function(input) {
             document.getElementById('recStartDate').value = minDate;
             document.getElementById('recEndDate').value = maxDate;
 
-            // 同步更新上方統計報表的日期區間
             if (document.getElementById('repStart')) document.getElementById('repStart').value = minDate;
             if (document.getElementById('repEnd')) document.getElementById('repEnd').value = maxDate;
             if (typeof window.generateReport === 'function') window.generateReport();
 
+            window.saveReconcileWorkspace();
             hideLoading();
             window.runReportReconciliation();
         } catch (err) {
@@ -1019,14 +1260,29 @@ window.handleExternalReportUpload = function(input) {
     reader.readAsArrayBuffer(file);
 };
 
-// 執行「本系統出貨明細（後台自動生成）」與「外部系統報表」六大欄位深度比對
-window.runReportReconciliation = function() {
-    const extRows = window.reconcileState.extRawRows || [];
-    if (extRows.length === 0) return alert("請先上傳外部系統報表！");
+// 為每一筆比對結果產生穩定且唯一的識別碼 (供「已覆核」跨日記憶綁定)
+window.buildReconcileItemKey = function(r) {
+    return [
+        String(r.invNo || '').trim().toUpperCase(),
+        String(r.erpCode || '').trim().toUpperCase(),
+        String(r.extCode || '').trim().toUpperCase(),
+        String(r.extSysInv || '').trim(),
+        r.erpQty !== null ? r.erpQty : 'N',
+        r.extQty !== null ? r.extQty : 'N'
+    ].join('|');
+};
 
-    const sVal = document.getElementById('recStartDate').value;
-    const eVal = document.getElementById('recEndDate').value;
-    if (!sVal || !eVal) return alert("請設定有效的比對起訖日期！");
+// 執行六大欄位深度比對
+window.runReportReconciliation = function(isSilentRestore = false) {
+    const extRows = window.reconcileState.extRawRows || [];
+    if (extRows.length === 0) {
+        if (!isSilentRestore) alert("請先上傳外部系統報表！");
+        return;
+    }
+
+    const sVal = document.getElementById('recStartDate').value || window.reconcileState.startDate;
+    const eVal = document.getElementById('recEndDate').value || window.reconcileState.endDate;
+    if (!sVal || !eVal) return;
 
     window.reconcileState.startDate = sVal;
     window.reconcileState.endDate = eVal;
@@ -1034,15 +1290,13 @@ window.runReportReconciliation = function() {
     const sDate = new Date(sVal); sDate.setHours(0, 0, 0, 0);
     const eDate = new Date(eVal); eDate.setHours(23, 59, 59, 999);
 
-    // 1. 在後台自動生成對應日期區間的「本系統報表 - 出貨明細」
-    // 欄位結構對應：[開立日期(A), 發票號碼(B), 客戶名稱(C), 訂單編號(D), 長固代號(E), 品名(F), 開立數量(G), 單價(含稅)(H), 總價(含稅)(I), 出貨狀態(J), 已出貨數量(K)]
+    // 1. 後台自動生成對應日期區間的「本系統報表 - 出貨明細」
     const erpRows = [];
     (globalSalesDetails || []).forEach(s => {
-        if (s.shipStatus === '作廢') return;
+        if (s.shipStatus === '作廢' || s.shipStatus === '歷史已結案') return;
         const d = new Date(s.time);
         if (isNaN(d.getTime()) || d < sDate || d > eDate) return;
 
-        // 確認對應發票在發票總表是否已被作廢
         const parentInv = (globalHistory || []).find(h => h.paperNo === s.paperNo);
         if (parentInv && parentInv.status === '作廢') return;
 
@@ -1055,7 +1309,6 @@ window.runReportReconciliation = function() {
         const price = Math.round((Number(s.price) || 0) * 1000) / 1000;
         const expectedSub = Math.round(qty * price);
         const rawSub = Math.round((Number(s.subtotal) || 0) * 100) / 100;
-        // 若舊資料因同發票同品名導致 subtotal 異常，自動提供精準乘積與原始值雙重比對
         const subtotal = rawSub > 0 ? rawSub : expectedSub;
 
         erpRows.push({
@@ -1077,7 +1330,6 @@ window.runReportReconciliation = function() {
 
     window.reconcileState.erpGeneratedRows = erpRows;
 
-    // 過濾外部報表於該日期區間內的明細（若外部列無日期則一併納入檢查）
     const extFiltered = extRows.filter(r => {
         if (!r.date || !/^\d{4}-\d{2}-\d{2}$/.test(r.date)) return true;
         const d = new Date(r.date); d.setHours(12, 0, 0, 0);
@@ -1090,7 +1342,6 @@ window.runReportReconciliation = function() {
         <span class="badge bg-primary ms-1">本系統同區間出貨明細: ${erpRows.length} 筆</span>
     `;
 
-    // 2. 將兩邊資料依「發票號碼 (B欄 vs J欄 NOINVOICE)」分組，且同發票同長固代號先行智慧歸戶
     const groupItemsByCode = (items, isErp) => {
         const map = new Map();
         items.forEach(item => {
@@ -1138,7 +1389,6 @@ window.runReportReconciliation = function() {
     const allInvNos = Array.from(new Set([...erpByInv.keys(), ...extByInv.keys()])).sort();
     const results = [];
 
-    // 輔助函式：執行單一配對項目的 6 大欄位比對
     const comparePairedGroup = (invNo, erpG, extG) => {
         const eFirst = erpG.rawItems[0];
         const xFirst = extG.rawItems[0];
@@ -1185,16 +1435,11 @@ window.runReportReconciliation = function() {
             diffFields.total = true;
         }
 
-        const erpCustIds = (typeof window.resolveClientCustIds === 'function')
-            ? window.resolveClientCustIds(erpClient, '', '')
-            : '';
-
-        results.push({
+        const itemObj = {
             category: diffs.length === 0 ? 'MATCH' : 'VALUE_DIFF',
             invNo: invNo,
             date: eFirst.date || xFirst.date,
             erpClient: erpClient,
-            erpCustIds: erpCustIds,
             extCustId: extCustId,
             extClientName: clientCheck.extClientName,
             erpCode: erpG.code || '(未填代號)',
@@ -1212,22 +1457,23 @@ window.runReportReconciliation = function() {
             erpMergeCount: erpG.count,
             extMergeCount: extG.count,
             diffs: diffs,
-            diffFields: diffFields
-        });
+            diffFields: diffFields,
+            canSupplementErp: false
+        };
+        itemObj.recKey = window.buildReconcileItemKey(itemObj);
+        results.push(itemObj);
     };
 
     allInvNos.forEach(invNo => {
         const eItems = erpByInv.get(invNo) || [];
         const xItems = extByInv.get(invNo) || [];
 
-        // 情況 A：兩邊都有這張發票號碼
         if (eItems.length > 0 && xItems.length > 0) {
             const eGroups = groupItemsByCode(eItems, true);
             const xGroups = groupItemsByCode(xItems, false);
             const usedE = new Set();
             const usedX = new Set();
 
-            // 第一輪：優先以「相同長固代號 (E欄 === D欄 ISPN)」配對
             eGroups.forEach((eg, eIdx) => {
                 const eCode = String(eg.code || '').replace(/\s+/g, '').toUpperCase();
                 if (!eCode) return;
@@ -1239,7 +1485,6 @@ window.runReportReconciliation = function() {
                 }
             });
 
-            // 第二輪：同張發票內剩餘未配對項目，若「數量+單價+總價」相同，代表人員選錯長固代號，將其配對並標示代號差異
             eGroups.forEach((eg, eIdx) => {
                 if (usedE.has(eIdx)) return;
                 const xIdx = xGroups.findIndex((xg, idx) =>
@@ -1254,7 +1499,6 @@ window.runReportReconciliation = function() {
                 }
             });
 
-            // 第三輪：同張發票若兩邊各只剩 1 筆未配對，直接並排配對以利人工對照
             const remE = eGroups.map((g, i) => ({ g, i })).filter(x => !usedE.has(x.i));
             const remX = xGroups.map((g, i) => ({ g, i })).filter(x => !usedX.has(x.i));
             const pairLen = Math.min(remE.length, remX.length);
@@ -1264,16 +1508,14 @@ window.runReportReconciliation = function() {
                 comparePairedGroup(invNo, remE[k].g, remX[k].g);
             }
 
-            // 第四輪：同張發票內多出或少掉的品項明細
             eGroups.forEach((eg, eIdx) => {
                 if (usedE.has(eIdx)) return;
                 const eFirst = eg.rawItems[0];
-                results.push({
+                const itemObj = {
                     category: 'ONLY_ERP',
                     invNo: invNo,
                     date: eFirst.date,
                     erpClient: eFirst.client,
-                    erpCustIds: window.resolveClientCustIds ? window.resolveClientCustIds(eFirst.client, '', '') : '',
                     extCustId: '--',
                     extClientName: '--',
                     erpCode: eg.code || '(無代號)',
@@ -1291,26 +1533,29 @@ window.runReportReconciliation = function() {
                     erpMergeCount: eg.count,
                     extMergeCount: 0,
                     diffs: [`同發票(${invNo})內，本系統多出此品項明細，外部系統無此品項`],
-                    diffFields: { missingExt: true }
-                });
+                    diffFields: { missingExt: true },
+                    canSupplementErp: false
+                };
+                itemObj.recKey = window.buildReconcileItemKey(itemObj);
+                results.push(itemObj);
             });
 
             xGroups.forEach((xg, xIdx) => {
                 if (usedX.has(xIdx)) return;
                 const xFirst = xg.rawItems[0];
-                const cInfo = window.matchClientWithCustId ? window.matchClientWithCustId('', xFirst.custId) : { extClientName: xFirst.custId };
-                results.push({
+                const inHistory = (globalHistory || []).find(h => String(h.paperNo || '').trim().toUpperCase() === invNo);
+                const cInfo = window.matchClientWithCustId ? window.matchClientWithCustId(inHistory ? inHistory.client : '', xFirst.custId) : { extClientName: xFirst.custId };
+                const itemObj = {
                     category: 'ONLY_EXT',
                     invNo: invNo,
                     date: xFirst.date,
-                    erpClient: '--',
-                    erpCustIds: '--',
+                    erpClient: eItems[0]?.client || (inHistory ? inHistory.client : '--'),
                     extCustId: xFirst.custId,
                     extClientName: cInfo.extClientName,
                     erpCode: '--',
                     extCode: xg.code || '(無ISPN)',
-                    erpName: '(外部獨有品項)',
-                    erpOrderNo: '--',
+                    erpName: inHistory ? `發票總表明細: ${inHistory.details || ''}` : '(本系統出貨明細缺漏此項)',
+                    erpOrderNo: eItems[0]?.orderNo || (inHistory ? inHistory.orderNo : '--'),
                     extPoNo: xFirst.poNumber || xFirst.note1 || '',
                     extSysInv: xFirst.sysInv || '',
                     erpQty: null,
@@ -1321,12 +1566,15 @@ window.runReportReconciliation = function() {
                     extTotal: xg.total,
                     erpMergeCount: 0,
                     extMergeCount: xg.count,
-                    diffs: [`同發票(${invNo})內，外部系統有此品項，但本系統出貨明細缺漏`],
-                    diffFields: { missingErp: true }
-                });
+                    diffs: [`同發票(${invNo})內，外部系統有此品項，但本系統出貨明細缺漏（可點擊右側「🛠️ 補登明細」一鍵補齊）`],
+                    diffFields: { missingErp: true },
+                    canSupplementErp: true,
+                    inHistoryRecord: inHistory || null
+                };
+                itemObj.recKey = window.buildReconcileItemKey(itemObj);
+                results.push(itemObj);
             });
         }
-        // 情況 B：僅本系統有此發票 (外部系統無此發票號碼)
         else if (eItems.length > 0 && xItems.length === 0) {
             const eGroups = groupItemsByCode(eItems, true);
             const isBorrowed = String(invNo).startsWith('[借用中]');
@@ -1335,12 +1583,11 @@ window.runReportReconciliation = function() {
                 const reason = isBorrowed
                     ? `本系統為「借用發票(${invNo})」尚未補登正式發票號碼（訂單號: ${eFirst.orderNo || '無'}）`
                     : `本系統有此發票明細(${invNo})，但外部系統報表查無此發票號碼`;
-                results.push({
+                const itemObj = {
                     category: 'ONLY_ERP',
                     invNo: invNo,
                     date: eFirst.date,
                     erpClient: eFirst.client,
-                    erpCustIds: window.resolveClientCustIds ? window.resolveClientCustIds(eFirst.client, '', '') : '',
                     extCustId: '--',
                     extClientName: '--',
                     erpCode: eg.code || '(無代號)',
@@ -1358,28 +1605,28 @@ window.runReportReconciliation = function() {
                     erpMergeCount: eg.count,
                     extMergeCount: 0,
                     diffs: [reason],
-                    diffFields: { missingExt: true }
-                });
+                    diffFields: { missingExt: true },
+                    canSupplementErp: false
+                };
+                itemObj.recKey = window.buildReconcileItemKey(itemObj);
+                results.push(itemObj);
             });
         }
-        // 情況 C：僅外部系統有此發票 (本系統「出貨明細」查無此發票號碼)
         else if (xItems.length > 0 && eItems.length === 0) {
             const xGroups = groupItemsByCode(xItems, false);
-            // 檢查這張發票是否存在於本系統「發票總表 (globalHistory)」中
             const inHistory = (globalHistory || []).find(h => String(h.paperNo || '').trim().toUpperCase() === invNo);
             xGroups.forEach(xg => {
                 const xFirst = xg.rawItems[0];
                 const cInfo = window.matchClientWithCustId ? window.matchClientWithCustId(inHistory ? inHistory.client : '', xFirst.custId) : { extClientName: xFirst.custId };
                 let reason = `外部系統有此發票(${invNo})，但本系統「出貨明細」查無紀錄`;
                 if (inHistory) {
-                    reason += ` (⚠️ 系統偵測到此發票存在於本系統「發票總表」[${inHistory.client} 總計:$${inHistory.total}]，但「出貨明細」中無對應項目或單號未連動)`;
+                    reason += ` (⚠️ 系統偵測到此發票存在於本系統「發票總表」[${inHistory.client} 總計:$${inHistory.total}]，但「出貨明細」中無對應項目或單號未連動 — 請點擊右側「🛠️ 補登明細」一鍵修復)`;
                 }
-                results.push({
+                const itemObj = {
                     category: 'ONLY_EXT',
                     invNo: invNo,
                     date: xFirst.date,
                     erpClient: inHistory ? `${inHistory.client} (僅存於發票總表)` : '--',
-                    erpCustIds: '--',
                     extCustId: xFirst.custId,
                     extClientName: cInfo.extClientName,
                     erpCode: '--',
@@ -1397,21 +1644,23 @@ window.runReportReconciliation = function() {
                     erpMergeCount: 0,
                     extMergeCount: xg.count,
                     diffs: [reason],
-                    diffFields: { missingErp: true }
-                });
+                    diffFields: { missingErp: true },
+                    canSupplementErp: true,
+                    inHistoryRecord: inHistory || null
+                };
+                itemObj.recKey = window.buildReconcileItemKey(itemObj);
+                results.push(itemObj);
             });
         }
     });
 
-    // 處理外部系統報表中「未填寫發票號碼 (NOINVOICE 為空白)」的項目
     extEmptyInvRows.forEach(xRow => {
         const cInfo = window.matchClientWithCustId ? window.matchClientWithCustId('', xRow.custId) : { extClientName: xRow.custId };
-        results.push({
+        const itemObj = {
             category: 'ONLY_EXT',
             invNo: '(外部未填發票號碼)',
             date: xRow.date,
             erpClient: '--',
-            erpCustIds: '--',
             extCustId: xRow.custId,
             extClientName: cInfo.extClientName,
             erpCode: '--',
@@ -1429,37 +1678,114 @@ window.runReportReconciliation = function() {
             erpMergeCount: 0,
             extMergeCount: 1,
             diffs: [`外部系統此筆紀錄未填寫發票號碼 (NOINVOICE 空白，外部單號: ${xRow.sysInv}，訂單號: ${xRow.poNumber || xRow.note1 || '無'})`],
-            diffFields: { missingErp: true }
-        });
+            diffFields: { missingErp: true },
+            canSupplementErp: false
+        };
+        itemObj.recKey = window.buildReconcileItemKey(itemObj);
+        results.push(itemObj);
     });
 
     window.reconcileState.results = results;
-
-    // 統計各分類數量
-    const countValDiff = results.filter(r => r.category === 'VALUE_DIFF').length;
-    const countOnlyExt = results.filter(r => r.category === 'ONLY_EXT').length;
-    const countOnlyErp = results.filter(r => r.category === 'ONLY_ERP').length;
-    const countMatch   = results.filter(r => r.category === 'MATCH').length;
-    const countAllDiff = countValDiff + countOnlyExt + countOnlyErp;
-
-    document.getElementById('recCountAllDiff').innerText = countAllDiff;
-    document.getElementById('recCountValDiff').innerText = countValDiff;
-    document.getElementById('recCountOnlyExt').innerText = countOnlyExt;
-    document.getElementById('recCountOnlyErp').innerText = countOnlyErp;
-    document.getElementById('recCountMatch').innerText   = countMatch;
+    window.updateReconcileKpiCounts();
 
     document.getElementById('recKpiRow').style.display = 'flex';
     document.getElementById('recFilterToolbar').style.setProperty('display', 'flex', 'important');
     document.getElementById('btnDownloadReconcileExcel').style.display = 'inline-block';
+    if (document.getElementById('btnClearReconcileCache')) {
+        document.getElementById('btnClearReconcileCache').style.display = 'inline-block';
+    }
 
-    // 若有異常預設顯示「全部異常」，若 100% 吻合則顯示「完全吻合」
-    window.setReconcileFilter(countAllDiff > 0 ? 'ALL_DIFF' : 'MATCH');
-    showToast(`✅ 比對完成！共發現 ${countAllDiff} 筆差異項目、${countMatch} 筆完全吻合`);
+    window.saveReconcileWorkspace();
+    window.setReconcileFilter(window.reconcileState.currentFilter || 'ALL_DIFF');
+};
+
+// 更新上方 KPI 數字（已標記為「已覆核」的項目會從異常數字中扣除，並計入「☑️ 已覆核專區」）
+window.updateReconcileKpiCounts = function() {
+    const results = window.reconcileState.results || [];
+    const revMap = window.reconcileState.reviewedMap || {};
+
+    let countValDiff = 0;
+    let countOnlyExt = 0;
+    let countOnlyErp = 0;
+    let countReviewed = 0;
+    let countMatch = 0;
+
+    results.forEach(r => {
+        const isRev = !!revMap[r.recKey];
+        if (r.category === 'MATCH') {
+            countMatch++;
+        } else if (isRev) {
+            countReviewed++;
+        } else {
+            if (r.category === 'VALUE_DIFF') countValDiff++;
+            else if (r.category === 'ONLY_EXT') countOnlyExt++;
+            else if (r.category === 'ONLY_ERP') countOnlyErp++;
+        }
+    });
+
+    const countAllDiff = countValDiff + countOnlyExt + countOnlyErp;
+
+    setSafeText('recCountAllDiff', countAllDiff);
+    setSafeText('recCountValDiff', countValDiff);
+    setSafeText('recCountOnlyExt', countOnlyExt);
+    setSafeText('recCountOnlyErp', countOnlyErp);
+    setSafeText('recCountReviewed', countReviewed);
+    setSafeText('recCountMatch', countMatch);
+};
+
+// 單筆切換「已覆核 / 還原」
+window.toggleReconcileReviewItem = function(recKey, markReviewed) {
+    if (!window.reconcileState.reviewedMap) window.reconcileState.reviewedMap = {};
+    if (markReviewed) {
+        const now = new Date();
+        const tStr = `${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+        window.reconcileState.reviewedMap[recKey] = {
+            time: tStr,
+            staff: myName || '管理員'
+        };
+        showToast("✅ 已標記為「已覆核」並移入已覆核專區");
+    } else {
+        delete window.reconcileState.reviewedMap[recKey];
+        showToast("↩️ 已還原回待處理異常清單");
+    }
+    window.saveReconcileWorkspace();
+    window.updateReconcileKpiCounts();
+    window.renderReconcileTable();
+};
+
+// 批次切換「已覆核 / 還原」
+window.batchToggleReconcileReview = function(markReviewed) {
+    const cbs = document.querySelectorAll('.cb-rec-item:checked');
+    if (cbs.length === 0) return alert("請先在表格左側勾選至少一筆項目！");
+
+    if (!window.reconcileState.reviewedMap) window.reconcileState.reviewedMap = {};
+    const now = new Date();
+    const tStr = `${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+
+    cbs.forEach(cb => {
+        const key = cb.value;
+        if (markReviewed) {
+            window.reconcileState.reviewedMap[key] = { time: tStr, staff: myName || '管理員' };
+        } else {
+            delete window.reconcileState.reviewedMap[key];
+        }
+    });
+
+    window.saveReconcileWorkspace();
+    window.updateReconcileKpiCounts();
+    window.renderReconcileTable();
+    showToast(markReviewed ? `✅ 已批次將 ${cbs.length} 筆標記為「已覆核」` : `↩️ 已批次還原 ${cbs.length} 筆項目`);
+};
+
+window.toggleAllReconcileCheckboxes = function(masterCb) {
+    document.querySelectorAll('.cb-rec-item').forEach(cb => {
+        cb.checked = masterCb.checked;
+    });
 };
 
 window.setReconcileFilter = function(filterType) {
     window.reconcileState.currentFilter = filterType;
-    ['ALL_DIFF', 'VALUE_DIFF', 'ONLY_EXT', 'ONLY_ERP', 'MATCH', 'ALL'].forEach(t => {
+    ['ALL_DIFF', 'VALUE_DIFF', 'ONLY_EXT', 'ONLY_ERP', 'REVIEWED', 'MATCH', 'ALL'].forEach(t => {
         const btn = document.getElementById('btnRecTab_' + t);
         if (btn) {
             if (t === filterType) btn.classList.add('active');
@@ -1470,6 +1796,22 @@ window.setReconcileFilter = function(filterType) {
             kpi.style.boxShadow = (t === filterType) ? '0 0 0 3px rgba(13,110,253,0.35)' : '';
         }
     });
+
+    const btnBatchRev = document.getElementById('btnBatchReview');
+    const btnBatchUnrev = document.getElementById('btnBatchUnreview');
+    if (btnBatchRev && btnBatchUnrev) {
+        if (filterType === 'REVIEWED') {
+            btnBatchRev.style.display = 'none';
+            btnBatchUnrev.style.display = 'inline-block';
+        } else if (filterType === 'MATCH') {
+            btnBatchRev.style.display = 'none';
+            btnBatchUnrev.style.display = 'none';
+        } else {
+            btnBatchRev.style.display = 'inline-block';
+            btnBatchUnrev.style.display = 'none';
+        }
+    }
+
     window.renderReconcileTable();
 };
 
@@ -1478,17 +1820,25 @@ window.onReconcileSearch = debounce(function(val) {
     window.renderReconcileTable();
 }, 250);
 
-// 渲染左右對照式差異檢視表
+// 渲染左右對照式差異檢視表（含「✅ 已覆核」、「↩️ 還原」與「🛠️ 補登明細」按鈕）
 window.renderReconcileTable = function() {
     const container = document.getElementById('recResultContainer');
     if (!container) return;
 
     const filter = window.reconcileState.currentFilter || 'ALL_DIFF';
     const term = window.reconcileState.searchTerm || '';
+    const revMap = window.reconcileState.reviewedMap || {};
     let list = window.reconcileState.results || [];
 
-    if (filter === 'ALL_DIFF') list = list.filter(r => r.category !== 'MATCH');
-    else if (filter !== 'ALL') list = list.filter(r => r.category === filter);
+    if (filter === 'ALL_DIFF') {
+        list = list.filter(r => r.category !== 'MATCH' && !revMap[r.recKey]);
+    } else if (filter === 'REVIEWED') {
+        list = list.filter(r => r.category !== 'MATCH' && !!revMap[r.recKey]);
+    } else if (filter === 'MATCH') {
+        list = list.filter(r => r.category === 'MATCH');
+    } else if (filter !== 'ALL') {
+        list = list.filter(r => r.category === filter && !revMap[r.recKey]);
+    }
 
     if (term) {
         list = list.filter(r =>
@@ -1506,7 +1856,7 @@ window.renderReconcileTable = function() {
     }
 
     if (list.length === 0) {
-        container.innerHTML = `<div class="text-center text-muted py-4 border rounded bg-light">🎉 此分類條件下沒有任何紀錄</div>`;
+        container.innerHTML = `<div class="text-center text-muted py-4 border rounded bg-light">🎉 此分類條件下沒有任何待處理紀錄</div>`;
         return;
     }
 
@@ -1519,6 +1869,8 @@ window.renderReconcileTable = function() {
 
     const rowsHtml = list.map((r, idx) => {
         const df = r.diffFields || {};
+        const isReviewed = !!revMap[r.recKey];
+        const revInfo = revMap[r.recKey];
         const hlStyle = 'background-color: #ffe3e3; color: #c92a2a; font-weight: bold; padding: 2px 6px; border-radius: 4px; display: inline-block;';
 
         const clientCell = `
@@ -1551,8 +1903,35 @@ window.renderReconcileTable = function() {
             ? r.diffs.map(d => `<div class="text-danger small fw-bold mb-1">▪ ${escapeQuotes(d)}</div>`).join('')
             : `<div class="text-success small fw-bold">✓ 發票、客戶代號、長固代號、數量、單價、總價全數吻合</div>`;
 
+        let actionBtnsHtml = '';
+        if (r.category !== 'MATCH') {
+            if (isReviewed) {
+                actionBtnsHtml += `
+                    <div class="badge bg-secondary mb-1 d-block">☑️ 已覆核 (${escapeQuotes(revInfo.staff)} ${escapeQuotes(revInfo.time)})</div>
+                    <button class="btn btn-sm btn-outline-warning text-dark fw-bold w-100 mb-1" onclick="window.toggleReconcileReviewItem('${escapeQuotes(r.recKey)}', false)">↩️ 還原未覆核</button>
+                `;
+            } else {
+                actionBtnsHtml += `
+                    <button class="btn btn-sm btn-success fw-bold w-100 mb-1 shadow-sm" onclick="window.toggleReconcileReviewItem('${escapeQuotes(r.recKey)}', true)">✅ 已覆核</button>
+                `;
+            }
+
+            if (r.canSupplementErp) {
+                actionBtnsHtml += `
+                    <button class="btn btn-sm btn-primary fw-bold w-100 shadow-sm" onclick="window.openReconcileFixModal('${escapeQuotes(r.recKey)}')">🛠️ 補登明細</button>
+                `;
+            }
+        } else {
+            actionBtnsHtml = `<span class="badge bg-light text-success border">無需處理</span>`;
+        }
+
+        const cbCell = r.category !== 'MATCH'
+            ? `<input type="checkbox" class="form-check-input cb-rec-item" value="${escapeQuotes(r.recKey)}" style="transform: scale(1.2); cursor:pointer;">`
+            : '';
+
         return `
-        <tr style="${r.category !== 'MATCH' ? 'background-color: #fffdfd;' : ''}">
+        <tr style="${isReviewed ? 'background-color: #f8f9ff;' : (r.category !== 'MATCH' ? 'background-color: #fffdfd;' : '')}">
+            <td class="text-center">${cbCell}</td>
             <td class="text-center fw-bold text-secondary">${idx + 1}</td>
             <td>
                 <div class="fw-bold text-primary fs-6">${escapeQuotes(r.invNo)}</div>
@@ -1566,23 +1945,26 @@ window.renderReconcileTable = function() {
             <td class="text-end">${qtyCell}</td>
             <td class="text-end">${priceCell}</td>
             <td class="text-end">${totalCell}</td>
-            <td style="min-width: 220px;">${diffDescHtml}</td>
+            <td style="min-width: 210px;">${diffDescHtml}</td>
+            <td class="text-center" style="min-width: 135px;">${actionBtnsHtml}</td>
         </tr>`;
     }).join('');
 
     container.innerHTML = `
-    <div class="table-responsive border rounded shadow-sm" style="max-height: 620px; overflow-y: auto;">
-        <table class="table table-hover table-bordered align-middle mb-0" style="font-size: 0.88rem;">
+    <div class="table-responsive border rounded shadow-sm" style="max-height: 640px; overflow-y: auto;">
+        <table class="table table-hover table-bordered align-middle mb-0" style="font-size: 0.87rem;">
             <thead class="table-light position-sticky top-0" style="z-index: 5;">
                 <tr>
-                    <th class="text-center" style="width: 45px;">#</th>
-                    <th style="min-width: 150px;">發票號碼 (B欄 vs J欄)</th>
-                    <th style="min-width: 190px;">客戶名稱 (C欄 vs B欄CUSTID)</th>
-                    <th style="min-width: 190px;">長固代號 (E欄 vs D欄ISPN)</th>
-                    <th class="text-end" style="min-width: 125px;">數量 (G欄 vs E欄)</th>
-                    <th class="text-end" style="min-width: 130px;">單價 (H欄 vs G欄)</th>
-                    <th class="text-end" style="min-width: 135px;">總價 (I欄 vs H欄)</th>
-                    <th style="min-width: 240px;">AI 智慧勾稽診斷說明</th>
+                    <th class="text-center" style="width: 38px;"><input type="checkbox" class="form-check-input" onchange="window.toggleAllReconcileCheckboxes(this)" title="全選本頁"></th>
+                    <th class="text-center" style="width: 42px;">#</th>
+                    <th style="min-width: 145px;">發票號碼 (B欄 vs J欄)</th>
+                    <th style="min-width: 185px;">客戶名稱 (C欄 vs B欄CUSTID)</th>
+                    <th style="min-width: 185px;">長固代號 (E欄 vs D欄ISPN)</th>
+                    <th class="text-end" style="min-width: 120px;">數量 (G欄 vs E欄)</th>
+                    <th class="text-end" style="min-width: 125px;">單價 (H欄 vs G欄)</th>
+                    <th class="text-end" style="min-width: 130px;">總價 (I欄 vs H欄)</th>
+                    <th style="min-width: 220px;">AI 智慧勾稽診斷說明</th>
+                    <th class="text-center" style="min-width: 135px;">覆核與補登操作</th>
                 </tr>
             </thead>
             <tbody>
@@ -1592,11 +1974,192 @@ window.renderReconcileTable = function() {
     </div>`;
 };
 
-// 匯出精美排版好的跨系統比對差異 Excel 檔案
+// 開啟「🛠️ 智慧補登本系統出貨明細」精靈視窗 (自動預填 95% 欄位)
+window.openReconcileFixModal = function(recKey) {
+    const r = (window.reconcileState.results || []).find(x => x.recKey === recKey);
+    if (!r) return;
+
+    document.getElementById('rf_recKey').value = recKey;
+
+    const inHistory = (globalHistory || []).find(h => String(h.paperNo || '').trim().toUpperCase() === r.invNo);
+    const erpInfoEl = document.getElementById('rf_erpHistoryInfo');
+    const extInfoEl = document.getElementById('rf_extReportInfo');
+
+    if (inHistory) {
+        const d = new Date(inHistory.time);
+        const dtStr = isNaN(d.getTime()) ? r.date : `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+        erpInfoEl.innerText = `發票號碼：${inHistory.paperNo}\n開立日期：${dtStr}\n客戶名稱：${inHistory.client}\n訂單編號：${inHistory.orderNo || '無'}\n發票總額：$${Number(inHistory.total).toLocaleString()}\n購買明細原文：\n${inHistory.details || '(無)'}`;
+        document.getElementById('rf_createInvBox').style.display = 'none';
+        document.getElementById('rf_alsoCreateInv').checked = false;
+    } else {
+        erpInfoEl.innerText = `⚠️ 本系統「發票總表」與「出貨明細」皆查無發票 ${r.invNo}。\n（您可以在下方勾選同步補登至發票總表與出貨明細）`;
+        document.getElementById('rf_createInvBox').style.display = 'block';
+        document.getElementById('rf_alsoCreateInv').checked = true;
+    }
+
+    extInfoEl.innerText = `發票號碼 (NOINVOICE)：${r.invNo}\n外部日期 (DATE)：${r.date || '無'}\n客戶代號 (CUSTID)：${r.extCustId} (${r.extClientName})\n產品代號 (ISPN)：${r.extCode}\n數量 (QTY)：${r.extQty} | 單價：$${r.extPrice} | 總價：$${r.extTotal}\n外部單號/PONUMBER：${r.extPoNo || r.extSysInv || '無'}`;
+
+    // 自動預填表單
+    let prefillDate = r.date && /^\d{4}-\d{2}-\d{2}$/.test(r.date) ? r.date : getTodayStr();
+    if (inHistory && inHistory.time) {
+        const hd = new Date(inHistory.time);
+        if (!isNaN(hd.getTime())) {
+            prefillDate = `${hd.getFullYear()}-${String(hd.getMonth()+1).padStart(2,'0')}-${String(hd.getDate()).padStart(2,'0')}`;
+        }
+    }
+
+    const prefillClient = inHistory
+        ? inHistory.client
+        : (window.getErpClientNameByCustId ? window.getErpClientNameByCustId(r.extCustId) : r.extClientName);
+
+    const prefillOrderNo = (inHistory && inHistory.orderNo) ? inHistory.orderNo : (r.extPoNo !== '--' ? r.extPoNo : '');
+    const prodLookup = window.findProductNameByCode ? window.findProductNameByCode(r.extCode, prefillClient) : { name: '', unit: '式' };
+
+    // 若發票總表只有單行明細，亦可直接從發票總表明細擷取品名
+    let fallbackNameFromHistory = '';
+    if (inHistory && inHistory.details) {
+        const firstLine = String(inHistory.details).split('\n')[0];
+        const m = firstLine.match(/^(.*)\s+x[0-9.]+/);
+        if (m) fallbackNameFromHistory = m[1].trim();
+    }
+
+    document.getElementById('rf_date').value = prefillDate;
+    document.getElementById('rf_paperNo').value = r.invNo;
+    document.getElementById('rf_orderNo').value = prefillOrderNo;
+    document.getElementById('rf_client').value = prefillClient;
+    document.getElementById('rf_code').value = r.extCode !== '(無ISPN)' ? r.extCode : '';
+    document.getElementById('rf_name').value = (prodLookup.name && prodLookup.name !== r.extCode) ? prodLookup.name : (fallbackNameFromHistory || prodLookup.name || '');
+    document.getElementById('rf_unit').value = prodLookup.unit || '式';
+    document.getElementById('rf_qty').value = r.extQty || 1;
+    document.getElementById('rf_price').value = r.extPrice || 0;
+    document.getElementById('rf_subtotal').value = r.extTotal || Math.round((r.extQty || 0) * (r.extPrice || 0));
+    document.getElementById('rf_shipStatus').value = '已結案';
+
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('reconcileFixModal')).show();
+};
+
+window.recalcFixSubtotal = function() {
+    const q = parseFloat(document.getElementById('rf_qty').value) || 0;
+    const p = parseFloat(document.getElementById('rf_price').value) || 0;
+    document.getElementById('rf_subtotal').value = Math.round(q * p);
+};
+
+// 確認送出補登明細並即時重算比對結果
+window.confirmReconcileFixSubmit = function() {
+    const btn = event ? event.currentTarget : null;
+
+    const dateVal = document.getElementById('rf_date').value;
+    const paperNo = document.getElementById('rf_paperNo').value.trim().toUpperCase();
+    const orderNo = document.getElementById('rf_orderNo').value.trim();
+    const client = document.getElementById('rf_client').value.trim();
+    const name = document.getElementById('rf_name').value.trim();
+    const code = document.getElementById('rf_code').value.trim();
+    const unit = document.getElementById('rf_unit').value.trim() || '式';
+    const qty = parseFloat(document.getElementById('rf_qty').value);
+    const price = parseFloat(document.getElementById('rf_price').value) || 0;
+    const subtotal = parseFloat(document.getElementById('rf_subtotal').value) || Math.round(qty * price);
+    const shipStatus = document.getElementById('rf_shipStatus').value;
+    const alsoCreateInv = document.getElementById('rf_alsoCreateInv').checked && document.getElementById('rf_createInvBox').style.display !== 'none';
+
+    if (!dateVal || !paperNo || !client || !name || isNaN(qty) || qty <= 0) {
+        return alert("請完整填寫日期、發票號碼、客戶名稱、品名與大於 0 的數量！");
+    }
+    if (window.lockButton(btn)) return;
+
+    const timestamp = new Date(dateVal).getTime() || Date.now();
+    const newRowIdx = Date.now() + Math.floor(Math.random() * 1000);
+    const shippedQty = shipStatus === '已結案' ? qty : 0;
+
+    // 1. 立即寫入前端記憶體 globalSalesDetails
+    globalSalesDetails.unshift({
+        rowIdx: newRowIdx,
+        time: timestamp,
+        paperNo: paperNo,
+        client: client,
+        orderNo: orderNo,
+        name: name,
+        qty: qty,
+        unit: unit,
+        price: price,
+        subtotal: subtotal,
+        shipStatus: shipStatus,
+        shippedQty: shippedQty,
+        lot: '',
+        expiry: '',
+        payStatus: '未收款',
+        paidAmount: 0,
+        payDate: '',
+        paymentNo: ''
+    });
+
+    // 若該客戶與品名尚未對應長固代號，臨時加入記憶體目錄對照以確保比對中心立即識別出長固代號
+    if (code && !window.findProductRobust(client, code, name)) {
+        globalCatalog.push({
+            rowIndex: window.getNextCatalogRowIndex ? window.getNextCatalogRowIndex() : 99999,
+            assetCode: '',
+            internalCode: code,
+            clientName: client,
+            productName: name,
+            unit: unit,
+            price: price
+        });
+    }
+
+    const cObj = (globalClients || []).find(c => c.name === client);
+    const taxId = cObj ? (cObj.taxId || '') : '';
+
+    if (alsoCreateInv) {
+        const net = Math.round(subtotal / 1.05);
+        const tax = subtotal - net;
+        const detailLine = `${name} x${qty} (單價: $${price.toFixed(3)}) ${orderNo ? '[' + orderNo + ']' : ''}`.trim();
+        globalHistory.unshift({
+            rowIdx: newRowIdx + 1,
+            time: timestamp,
+            staff: myName,
+            client: client,
+            taxId: taxId,
+            net: net,
+            tax: tax,
+            total: subtotal,
+            details: detailLine,
+            paperNo: paperNo,
+            orderNo: orderNo,
+            status: '正常',
+            historyLog: '["跨系統勾稽補登"]'
+        });
+    }
+
+    // 2. 同步寫入 Supabase
+    pushToSyncQueue('supplementSalesDetail', {
+        rowIdx: newRowIdx,
+        time: timestamp,
+        paperNo: paperNo,
+        client: client,
+        taxId: taxId,
+        orderNo: orderNo,
+        name: name,
+        qty: qty,
+        unit: unit,
+        price: price,
+        subtotal: subtotal,
+        shipStatus: shipStatus,
+        shippedQty: shippedQty,
+        alsoCreateInvoiceRecord: alsoCreateInv,
+        staff: myName
+    }, () => {
+        bootstrap.Modal.getInstance(document.getElementById('reconcileFixModal')).hide();
+        window.runReportReconciliation(true);
+        showToast(`✅ 已成功補登發票 ${paperNo} 之出貨明細，比對結果已即時更新！`);
+    });
+};
+
+// 匯出精美排版好的跨系統比對差異 Excel 檔案 (含「人工已覆核專區」工作表)
 window.exportReconciliationExcel = function() {
     if (typeof XLSX === 'undefined') return alert("Excel 模組載入中，請稍後再試！");
     const results = window.reconcileState.results || [];
     if (results.length === 0) return alert("目前無比對結果可供下載！");
+
+    const revMap = window.reconcileState.reviewedMap || {};
 
     const statusLabelMap = {
         'VALUE_DIFF': '🟡 欄位數值相異',
@@ -1608,6 +2171,7 @@ window.exportReconciliationExcel = function() {
     const buildSheetRows = (targetList) => {
         const header = [
             "比對狀態",
+            "人工覆核狀態",
             "日期",
             "發票號碼 (本系統B欄 / 外部J欄NOINVOICE)",
             "本系統客戶名稱 (C欄)",
@@ -1635,9 +2199,12 @@ window.exportReconciliationExcel = function() {
             const qtyDiff = (r.erpQty !== null && r.extQty !== null) ? (r.erpQty - r.extQty) : '';
             const priceDiff = (r.erpPrice !== null && r.extPrice !== null) ? Math.round((r.erpPrice - r.extPrice) * 1000) / 1000 : '';
             const totalDiff = (r.erpTotal !== null && r.extTotal !== null) ? Math.round((r.erpTotal - r.extTotal) * 100) / 100 : '';
+            const revInfo = revMap[r.recKey];
+            const revText = revInfo ? `☑️ 已覆核 (${revInfo.staff} ${revInfo.time})` : (r.category === 'MATCH' ? '系統自動吻合' : '⚠️ 待處理');
 
             rows.push([
                 statusLabelMap[r.category] || r.category,
+                revText,
                 r.date || '',
                 r.invNo || '',
                 r.erpClient || '',
@@ -1665,50 +2232,41 @@ window.exportReconciliationExcel = function() {
 
     const setSheetColWidths = (ws) => {
         ws['!cols'] = [
-            { wch: 28 }, { wch: 12 }, { wch: 22 }, { wch: 30 }, { wch: 16 },
-            { wch: 28 }, { wch: 18 }, { wch: 18 }, { wch: 34 }, { wch: 14 },
-            { wch: 14 }, { wch: 10 }, { wch: 14 }, { wch: 14 }, { wch: 10 },
-            { wch: 15 }, { wch: 15 }, { wch: 12 }, { wch: 18 }, { wch: 18 },
-            { wch: 65 }
+            { wch: 26 }, { wch: 24 }, { wch: 12 }, { wch: 22 }, { wch: 30 },
+            { wch: 16 }, { wch: 28 }, { wch: 18 }, { wch: 18 }, { wch: 34 },
+            { wch: 14 }, { wch: 14 }, { wch: 10 }, { wch: 14 }, { wch: 14 },
+            { wch: 10 }, { wch: 15 }, { wch: 15 }, { wch: 12 }, { wch: 18 },
+            { wch: 18 }, { wch: 65 }
         ];
     };
 
-    const allDiffList = results.filter(r => r.category !== 'MATCH');
-    const valDiffList = results.filter(r => r.category === 'VALUE_DIFF');
-    const missingList = results.filter(r => r.category === 'ONLY_EXT' || r.category === 'ONLY_ERP');
-    const matchList   = results.filter(r => r.category === 'MATCH');
+    const unreviewedDiffList = results.filter(r => r.category !== 'MATCH' && !revMap[r.recKey]);
+    const valDiffList        = results.filter(r => r.category === 'VALUE_DIFF' && !revMap[r.recKey]);
+    const missingList        = results.filter(r => (r.category === 'ONLY_EXT' || r.category === 'ONLY_ERP') && !revMap[r.recKey]);
+    const reviewedList       = results.filter(r => r.category !== 'MATCH' && !!revMap[r.recKey]);
+    const matchList          = results.filter(r => r.category === 'MATCH');
 
     const wb = XLSX.utils.book_new();
 
-    // 工作表 1: 異常差異總表 (最優先供人工複查)
-    const wsAllDiff = XLSX.utils.aoa_to_sheet(buildSheetRows(allDiffList));
+    const wsAllDiff = XLSX.utils.aoa_to_sheet(buildSheetRows(unreviewedDiffList));
     setSheetColWidths(wsAllDiff);
-    XLSX.utils.book_append_sheet(wb, wsAllDiff, "1_異常差異總表");
+    XLSX.utils.book_append_sheet(wb, wsAllDiff, "1_待處理異常總表");
 
-    // 工作表 2: 欄位數值不符明細
     const wsValDiff = XLSX.utils.aoa_to_sheet(buildSheetRows(valDiffList));
     setSheetColWidths(wsValDiff);
     XLSX.utils.book_append_sheet(wb, wsValDiff, "2_欄位數值不符明細");
 
-    // 工作表 3: 單邊缺漏明細
     const wsMissing = XLSX.utils.aoa_to_sheet(buildSheetRows(missingList));
     setSheetColWidths(wsMissing);
     XLSX.utils.book_append_sheet(wb, wsMissing, "3_單邊缺漏明細");
 
-    // 工作表 4: 完全吻合明細
+    const wsReviewed = XLSX.utils.aoa_to_sheet(buildSheetRows(reviewedList));
+    setSheetColWidths(wsReviewed);
+    XLSX.utils.book_append_sheet(wb, wsReviewed, "4_人工已覆核專區");
+
     const wsMatch = XLSX.utils.aoa_to_sheet(buildSheetRows(matchList));
     setSheetColWidths(wsMatch);
-    XLSX.utils.book_append_sheet(wb, wsMatch, "4_完全吻合明細");
-
-    // 工作表 5: 後台自動生成之本系統同區間「出貨明細」原始基準表
-    const erpHeader = ["開立日期", "發票號碼", "客戶名稱", "訂單編號", "長固代號", "品名", "開立數量", "單價(含稅)", "總價(含稅)", "出貨狀態", "已出貨數量"];
-    const erpRows = [erpHeader];
-    (window.reconcileState.erpGeneratedRows || []).forEach(r => {
-        erpRows.push([r.date, r.paperNo, r.client, r.orderNo, r.internalCode, r.name, r.qty, r.price, r.subtotal, r.shipStatus, r.shippedQty]);
-    });
-    const wsErpBase = XLSX.utils.aoa_to_sheet(erpRows);
-    wsErpBase['!cols'] = [{ wch: 12 }, { wch: 16 }, { wch: 32 }, { wch: 18 }, { wch: 18 }, { wch: 36 }, { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 12 }];
-    XLSX.utils.book_append_sheet(wb, wsErpBase, "5_本系統同區間出貨明細");
+    XLSX.utils.book_append_sheet(wb, wsMatch, "5_完全吻合明細");
 
     const rangeStr = `${window.reconcileState.startDate || ''}_至_${window.reconcileState.endDate || ''}`;
     const outFileName = `長固ERP_跨系統比對差異報告_${rangeStr}.xlsx`;
