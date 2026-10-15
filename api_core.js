@@ -1,11 +1,11 @@
 /**
  * ============================================================================
  * 模組 1：API 核心、全域狀態與雙軌並行架構 (api_core.js) 
- * 【極速登入 ＆ 報表直出 ＆ 外部系統客戶代號對照升級版】
+ * 【極速登入 ＆ 報表直出 ＆ 外部系統客戶代號對照 ＆ 沖帳中樞升級版】
  * 1. 直連 Supabase 實現 0.1 秒極速登入
  * 2. 整合 SheetJS 於前端瞬間生成 Excel 報表，交由 GAS 遙控器寄信
  * 3. 內建 customer1.xlsx 客戶代號 (CUSTID) 智慧雙向對照引擎
- * 4. 修正同發票同品項不同數量時的總價覆蓋 Bug
+ * 4. 支援跨系統明細補登、5月前歷史帳移轉、收款沖帳與雙向狀態連動
  * ============================================================================
  */
 
@@ -46,6 +46,7 @@ let globalSalesDetails = [];
 let globalInvLogs = []; 
 let globalQuotes = []; 
 let globalDeliveries = []; 
+let globalPayments = []; 
 let emailSettingsData = { list: [], selected: [] };
 
 let aiTempData = null; 
@@ -167,7 +168,7 @@ window.normalizeClientName = function(name) {
         .toLowerCase();
 };
 
-// 根據客戶名稱與統編自動取得對應的外部 CUSTID 字串 (供前端顯示與自動補齊)
+// 根據客戶名稱與統編自動取得對應的外部 CUSTID 字串
 window.resolveClientCustIds = function(clientName, taxId, existingCustId) {
     let ids = [];
     if (existingCustId) {
@@ -189,15 +190,40 @@ window.resolveClientCustIds = function(clientName, taxId, existingCustId) {
     return ids.join(', ');
 };
 
+// 根據外部系統的 CUSTID 反查本系統標準客戶名稱
+window.getErpClientNameByCustId = function(extCustId) {
+    const cleanExtId = String(extCustId || '').trim();
+    if (!cleanExtId) return '';
+
+    // 1. 優先從本系統 globalClients 查找
+    const matchedClient = (globalClients || []).find(c => {
+        const cIds = String(c.custId || '').split(',').map(s => s.trim()).filter(Boolean);
+        return cIds.includes(cleanExtId);
+    });
+    if (matchedClient) return matchedClient.name;
+
+    // 2. 從內建字典查找，並優先對應回 globalClients 內存在的名稱
+    const dictMatches = (window.EXTERNAL_CUSTID_DICT || []).filter(d => d.custId === cleanExtId);
+    if (dictMatches.length > 0) {
+        for (const dm of dictMatches) {
+            const normDm = window.normalizeClientName(dm.name);
+            const inGlobal = (globalClients || []).find(c => window.normalizeClientName(c.name) === normDm);
+            if (inGlobal) return inGlobal.name;
+        }
+        return dictMatches[0].name;
+    }
+    return `未知客戶(${cleanExtId})`;
+};
+
 // 根據外部系統的 CUSTID 反查客戶名稱與比對是否與本系統客戶相符
 window.matchClientWithCustId = function(erpClientName, extCustId) {
     const cleanExtId = String(extCustId || '').trim();
     const cleanErpName = String(erpClientName || '').trim();
-    if (!cleanExtId || !cleanErpName) return { isMatch: false, extClientName: cleanExtId || '未填代號' };
+    if (!cleanExtId || !cleanErpName) return { isMatch: false, extClientName: window.getErpClientNameByCustId(cleanExtId) || cleanExtId || '未填代號' };
 
     const normErp = window.normalizeClientName(cleanErpName);
 
-    // 1. 優先從 globalClients (同步自試算表「客戶管理」F 欄) 查找
+    // 1. 優先從 globalClients 查找
     const matchedClientsInDb = (globalClients || []).filter(c => {
         const cIds = String(c.custId || '').split(',').map(s => s.trim()).filter(Boolean);
         return cIds.includes(cleanExtId);
@@ -217,7 +243,7 @@ window.matchClientWithCustId = function(erpClientName, extCustId) {
         }
     }
 
-    // 3. 特殊通用分類代號容錯：外部系統常將未獨立編號之同行歸入 200104 (臺中其他同行)、診所/分院歸入 200116 (臺中其他醫院)
+    // 3. 特殊通用分類代號容錯：200104 (臺中其他同行)、200105 (臺中個人)、200116 (臺中其他醫院)
     if (cleanExtId === '200104' && /生技|醫技|儀器|器材|實業|企業|有限公司|股份|行$/.test(cleanErpName)) {
         return { isMatch: true, extClientName: `臺中其他同行 (${cleanErpName})` };
     }
@@ -225,7 +251,6 @@ window.matchClientWithCustId = function(erpClientName, extCustId) {
         return { isMatch: true, extClientName: `臺中其他醫院 (${cleanErpName})` };
     }
 
-    // 若未匹配成功，回傳該代號對應的外部名稱供人工檢視
     const fallbackName = matchedClientsInDb.length > 0
         ? matchedClientsInDb.map(c => c.name).join('/')
         : (dictMatches.length > 0 ? dictMatches[0].name : `未知代號(${cleanExtId})`);
@@ -233,7 +258,38 @@ window.matchClientWithCustId = function(erpClientName, extCustId) {
     return { isMatch: false, extClientName: fallbackName };
 };
 
-// 產品目錄去重輔助工具（防止資料庫重複列導致下拉選單重複出現）
+// 透過長固代號 (ISPN) 與客戶名稱，自動反查產品品名與單位
+window.findProductNameByCode = function(ispnCode, clientName) {
+    const cleanCode = String(ispnCode || '').trim().toUpperCase();
+    if (!cleanCode) return { name: '', unit: '式', price: 0 };
+
+    // 1. 優先找同客戶且同長固代號/資材碼的合約品項
+    if (clientName) {
+        const normClient = window.normalizeClientName(clientName);
+        const exactCat = (globalCatalog || []).find(c =>
+            (c.clientName === clientName || window.normalizeClientName(c.clientName) === normClient) &&
+            (String(c.internalCode || '').trim().toUpperCase() === cleanCode || String(c.assetCode || '').trim().toUpperCase() === cleanCode)
+        );
+        if (exactCat) return { name: exactCat.productName, unit: exactCat.unit || '式', price: exactCat.price || 0 };
+    }
+
+    // 2. 找全產品價格表中相同長固代號的品項
+    const anyCat = (globalCatalog || []).find(c =>
+        String(c.internalCode || '').trim().toUpperCase() === cleanCode ||
+        String(c.assetCode || '').trim().toUpperCase() === cleanCode
+    );
+    if (anyCat) return { name: anyCat.productName, unit: anyCat.unit || '式', price: anyCat.price || 0 };
+
+    // 3. 找庫存管理表中的品名
+    const invItem = (globalInventory || []).find(i =>
+        String(i.internalCode || '').trim().toUpperCase() === cleanCode
+    );
+    if (invItem) return { name: invItem.name, unit: '式', price: 0 };
+
+    return { name: cleanCode, unit: '式', price: 0 };
+};
+
+// 產品目錄去重輔助工具
 function deduplicateCatalogRows(rawRows) {
     const map = new Map();
     (rawRows || []).forEach(x => {
@@ -252,7 +308,6 @@ function deduplicateCatalogRows(rawRows) {
     return Array.from(map.values());
 }
 
-// 取得安全的新增 Catalog row_index（避免 Date.now() 超過 Postgres int4 上限）
 window.getNextCatalogRowIndex = function() {
     let maxIdx = 1;
     (globalCatalog || []).forEach(item => {
@@ -275,22 +330,17 @@ async function callApi(action, payload = {}) {
         return { success: true };
     }
     
-    // 【全新機制】攔截報表發送請求，完美生成 4 個工作表
+    // 攔截報表發送請求，生成 4 個工作表
     if (action === 'exportExcelReport' || action === 'sendPendingOrdersReport') {
         if (typeof XLSX === 'undefined') throw new Error("Excel 模組仍在載入中，請稍後再試！");
         
         let emails = [];
-        
-        // 1. 智慧變數解析：嘗試讀取陣列格式
         if (payload.emails && Array.isArray(payload.emails)) {
             emails = payload.emails;
-        } 
-        // 2. 智慧變數解析：嘗試讀取字串格式 (對應 module_invoice_history.js)
-        else if (payload.email && typeof payload.email === 'string') {
+        } else if (payload.email && typeof payload.email === 'string') {
             emails = payload.email.split(',').map(e => e.trim()).filter(e => e !== '');
         }
 
-        // 3. 終極防呆機制：如果上面都沒抓到，強制掃描畫面上有被打勾的信箱
         if (emails.length === 0) {
             const checkedBoxes = document.querySelectorAll('.dyn-email-cb:checked');
             if (checkedBoxes && checkedBoxes.length > 0) {
@@ -306,9 +356,7 @@ async function callApi(action, payload = {}) {
 
         showLoading("📊 正在套用客製化格式生成報表...");
         
-        // ============================================
-        // 工作表 1: 發票總表 (完美還原舊版排版)
-        // ============================================
+        // 工作表 1: 發票總表
         const summaryRows = [
             ["報表期間", payload.dateRange || '未提供', "", "", "", "", "", "", "", "", ""],
             ["總開立張數", payload.summary ? payload.summary.count : 0, "", "", "", "", "", "", "", "", ""],
@@ -324,9 +372,7 @@ async function callApi(action, payload = {}) {
         });
         const wsHistory = XLSX.utils.aoa_to_sheet(summaryRows);
 
-        // ============================================
-        // 工作表 2: 出貨明細 (修正同發票同品項不同數量時的總價覆蓋問題)
-        // ============================================
+        // 工作表 2: 出貨明細
         const lineItemRows = [
             ["開立日期", "發票號碼", "客戶名稱", "訂單編號", "長固代號", "品名", "開立數量", "單價(含稅)", "總價(含稅)", "出貨狀態", "已出貨數量"]
         ];
@@ -348,9 +394,7 @@ async function callApi(action, payload = {}) {
         });
         const wsDelivery = XLSX.utils.aoa_to_sheet(lineItemRows);
 
-        // ============================================
         // 工作表 3: 目前庫存表
-        // ============================================
         const invRows = [
             ["品名", "長固代號", "目前庫存數量"]
         ];
@@ -361,9 +405,7 @@ async function callApi(action, payload = {}) {
         });
         const wsInventory = XLSX.utils.aoa_to_sheet(invRows);
 
-        // ============================================
         // 工作表 4: 客戶營收分析表
-        // ============================================
         const clientRows = [
             ["客戶/醫院名稱", "總銷售額(含稅)"]
         ];
@@ -374,7 +416,6 @@ async function callApi(action, payload = {}) {
         });
         const wsClient = XLSX.utils.aoa_to_sheet(clientRows);
 
-        // 組合 Excel
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, wsHistory, "發票總表");
         XLSX.utils.book_append_sheet(wb, wsDelivery, "出貨明細");
@@ -383,14 +424,12 @@ async function callApi(action, payload = {}) {
 
         const base64Data = XLSX.write(wb, { bookType: 'xlsx', type: 'base64' });
         
-        // 檔名格式處理
         let cleanDateRange = "未定期間";
         if (payload.dateRange) {
             cleanDateRange = payload.dateRange.replace(/\//g, '-').trim();
         }
         const fileName = `長固ERP_發票報表_${cleanDateRange}.xlsx`;
 
-        // 將指令轉換為呼叫 GAS 遙控器的寄信通道
         action = 'sendExcelEmail';
         payload = {
             toEmails: emails,
@@ -423,7 +462,6 @@ async function callApi(action, payload = {}) {
         return { success: true, count: count };
     }
     
-    // 映射路由給 GitHub AI 機器人遠端遙控 (保留原本觸發按鈕的相容性)
     if (action === 'scanEmailOrders') action = 'triggerScan'; 
 
     if (API_URL.includes("請填入你的")) throw new Error("⚠️ 尚未設定 API_URL，請更新 api_core.js 中 changgu.erp 的網址！");
@@ -478,12 +516,160 @@ async function executeSupabaseAction(action, payload) {
                 time: payload.invDate, paper_no: payload.paperNo, client: payload.clientName,
                 order_no: payload.orderNo, name: i.name, qty: i.qty, unit: i.unit,
                 price: i.price, subtotal: i.subtotal, ship_status: '待出貨', shipped_qty: 0,
-                lot: '', expiry: ''
+                lot: '', expiry: '', pay_status: '未收款', paid_amount: 0, pay_date: '', payment_no: ''
             }));
             const { error: sdErr } = await supabaseClient.from('sales_details').insert(sdArr);
-            if (sdErr) throw sdErr;
+            if (sdErr) {
+                // 若 sales_details 尚未擴充 pay_status 欄位則自動降級寫入
+                const fallbackArr = payload.items.map((i, idx) => ({
+                    row_idx: Date.now() + Math.floor(Math.random() * 1000) + idx,
+                    time: payload.invDate, paper_no: payload.paperNo, client: payload.clientName,
+                    order_no: payload.orderNo, name: i.name, qty: i.qty, unit: i.unit,
+                    price: i.price, subtotal: i.subtotal, ship_status: '待出貨', shipped_qty: 0,
+                    lot: '', expiry: ''
+                }));
+                const { error: fbErr } = await supabaseClient.from('sales_details').insert(fallbackArr);
+                if (fbErr) throw fbErr;
+            }
         }
     } 
+    else if (action === 'supplementSalesDetail') {
+        // 【比對中心專用】一鍵補登本系統缺漏的「出貨明細 (sales_details)」與選填補登「發票總表 (invoices)」
+        const record = {
+            row_idx: payload.rowIdx || (Date.now() + Math.floor(Math.random() * 1000)),
+            time: payload.time || Date.now(),
+            paper_no: payload.paperNo,
+            client: payload.client,
+            order_no: payload.orderNo || '',
+            name: payload.name,
+            qty: Number(payload.qty) || 0,
+            unit: payload.unit || '式',
+            price: Number(payload.price) || 0,
+            subtotal: Number(payload.subtotal) || Math.round((Number(payload.qty) || 0) * (Number(payload.price) || 0)),
+            ship_status: payload.shipStatus || '已結案',
+            shipped_qty: payload.shippedQty !== undefined ? Number(payload.shippedQty) : (Number(payload.qty) || 0),
+            lot: payload.lot || '',
+            expiry: payload.expiry || '',
+            pay_status: payload.payStatus || '未收款',
+            paid_amount: 0,
+            pay_date: '',
+            payment_no: ''
+        };
+        const { error: sdErr } = await supabaseClient.from('sales_details').insert(record);
+        if (sdErr) {
+            delete record.pay_status; delete record.paid_amount; delete record.pay_date; delete record.payment_no;
+            const { error: fbErr } = await supabaseClient.from('sales_details').insert(record);
+            if (fbErr) throw fbErr;
+        }
+
+        if (payload.alsoCreateInvoiceRecord) {
+            const total = record.subtotal;
+            const net = Math.round(total / 1.05);
+            const tax = total - net;
+            const detailLine = `${record.name} x${record.qty} (單價: $${record.price.toFixed(3)}) ${record.order_no ? '[' + record.order_no + ']' : ''}`.trim();
+            await supabaseClient.from('invoices').insert({
+                row_idx: Date.now() + Math.floor(Math.random() * 1000),
+                time: record.time,
+                staff: payload.staff || myName,
+                client: record.client,
+                tax_id: payload.taxId || '',
+                net: net,
+                tax: tax,
+                total: total,
+                details: detailLine,
+                paper_no: record.paper_no,
+                order_no: record.order_no,
+                status: '正常',
+                history_log: '["跨系統勾稽補登"]'
+            });
+        }
+    }
+    else if (action === 'executePaymentReconcile') {
+        // 【收款與沖帳模組】寫入沖帳記錄表 (payment_records) 並連動更新銷售明細總表 (sales_details)
+        const pRec = payload.paymentRecord;
+        const { error: payErr } = await supabaseClient.from('payment_records').upsert({
+            row_idx: pRec.rowIdx,
+            payment_no: pRec.paymentNo,
+            time: pRec.time,
+            pay_date: pRec.payDate,
+            client: pRec.client,
+            pay_method: pRec.payMethod,
+            paper_nos: pRec.paperNos,
+            receivable_total: pRec.receivableTotal,
+            received_amount: pRec.receivedAmount,
+            diff_amount: pRec.diffAmount,
+            status: pRec.status,
+            items_json: pRec.itemsJson,
+            source_type: pRec.sourceType,
+            staff: pRec.staff,
+            memo: pRec.memo
+        });
+        if (payErr) throw payErr;
+
+        for (const upd of (payload.salesUpdates || [])) {
+            const { error: uErr } = await supabaseClient.from('sales_details').update({
+                pay_status: upd.payStatus,
+                paid_amount: upd.paidAmount,
+                pay_date: upd.payDate,
+                payment_no: upd.paymentNo
+            }).eq('row_idx', upd.rowIdx);
+            if (uErr) console.error("更新 sales_details 沖帳狀態失敗:", uErr);
+        }
+    }
+    else if (action === 'voidPaymentRecord') {
+        // 作廢沖帳單並將關聯銷售明細退回「未收款」
+        const { error: vErr } = await supabaseClient.from('payment_records').update({
+            status: '已作廢'
+        }).eq('row_idx', payload.rowIdx);
+        if (vErr) throw vErr;
+
+        if (payload.salesRowIndices && payload.salesRowIndices.length > 0) {
+            await supabaseClient.from('sales_details').update({
+                pay_status: '未收款',
+                paid_amount: 0,
+                pay_date: '',
+                payment_no: ''
+            }).in('row_idx', payload.salesRowIndices);
+        }
+        if (payload.paymentNo) {
+            await supabaseClient.from('sales_details').update({
+                pay_status: '未收款',
+                paid_amount: 0,
+                pay_date: '',
+                payment_no: ''
+            }).eq('payment_no', payload.paymentNo);
+        }
+    }
+    else if (action === 'importHistoricalUnpaid') {
+        // 批次匯入 5 月以前的歷史未收帳款至 sales_details（狀態設為「歷史已結案」，不扣減現有庫存）
+        const rows = (payload.items || []).map(x => ({
+            row_idx: x.rowIdx,
+            time: x.time,
+            paper_no: x.paperNo,
+            client: x.client,
+            order_no: x.orderNo,
+            name: x.name,
+            qty: x.qty,
+            unit: x.unit || '式',
+            price: x.price,
+            subtotal: x.subtotal,
+            ship_status: '歷史已結案',
+            shipped_qty: x.qty,
+            lot: x.lot || '[5月前歷史應收]',
+            expiry: x.expiry || '',
+            pay_status: '未收款',
+            paid_amount: 0,
+            pay_date: '',
+            payment_no: ''
+        }));
+
+        const chunkSize = 150;
+        for (let i = 0; i < rows.length; i += chunkSize) {
+            const chunk = rows.slice(i, i + chunkSize);
+            const { error } = await supabaseClient.from('sales_details').upsert(chunk);
+            if (error) throw error;
+        }
+    }
     else if (action === 'updateInvoiceRecord') {
         if (payload.action === 'void') {
             await supabaseClient.from('invoices').update({ status: '作廢' }).eq('row_idx', payload.rowIdx);
@@ -615,7 +801,6 @@ async function executeSupabaseAction(action, payload) {
             name: payload.clientName, tax_id: payload.taxId, address: payload.address, receive_dept: payload.receiveDept, cust_id: custIdVal
         });
         if (error) {
-            // 若 Supabase 尚未建立 cust_id 欄位則自動降級寫入
             const { error: fallbackErr } = await supabaseClient.from('clients').insert({
                 name: payload.clientName, tax_id: payload.taxId, address: payload.address, receive_dept: payload.receiveDept
             });
@@ -747,9 +932,9 @@ async function pushToSyncQueue(action, payload, callback) {
 }
 
 // ============================================================================
-// 分頁抓取引擎
+// 分頁抓取引擎 (支援容錯讀取)
 // ============================================================================
-async function fetchAllSupabaseTable(table, orderByCol = null, ascending = false) {
+async function fetchAllSupabaseTable(table, orderByCol = null, ascending = false, ignoreError = false) {
     let allData = [];
     let rangeStart = 0;
     const limit = 1000;
@@ -757,13 +942,62 @@ async function fetchAllSupabaseTable(table, orderByCol = null, ascending = false
         let query = supabaseClient.from(table).select('*');
         if (orderByCol) query = query.order(orderByCol, {ascending: ascending});
         const { data, error } = await query.range(rangeStart, rangeStart + limit - 1);
-        if (error) throw error;
+        if (error) {
+            if (ignoreError) {
+                console.warn(`讀取資料表 ${table} 略過:`, error.message);
+                return { data: [] };
+            }
+            throw error;
+        }
         if (!data || data.length === 0) break;
         allData = allData.concat(data);
         if (data.length < limit) break;
         rangeStart += limit;
     }
     return { data: allData };
+}
+
+function mapSalesDetailRow(x) {
+    return {
+        rowIdx: x.row_idx,
+        time: Number(x.time),
+        paperNo: x.paper_no,
+        client: x.client,
+        orderNo: x.order_no,
+        name: x.name,
+        qty: Number(x.qty),
+        unit: x.unit,
+        price: Number(x.price),
+        subtotal: Number(x.subtotal),
+        shipStatus: x.ship_status,
+        shippedQty: Number(x.shipped_qty),
+        lot: x.lot,
+        expiry: x.expiry,
+        payStatus: x.pay_status || '未收款',
+        paidAmount: Number(x.paid_amount) || 0,
+        payDate: x.pay_date || '',
+        paymentNo: x.payment_no || ''
+    };
+}
+
+function mapPaymentRecordRow(x) {
+    return {
+        rowIdx: x.row_idx,
+        paymentNo: x.payment_no || '',
+        time: Number(x.time) || Date.now(),
+        payDate: x.pay_date || '',
+        client: x.client || '',
+        payMethod: x.pay_method || '匯款',
+        paperNos: x.paper_nos || '',
+        receivableTotal: Number(x.receivable_total) || 0,
+        receivedAmount: Number(x.received_amount) || 0,
+        diffAmount: Number(x.diff_amount) || 0,
+        status: x.status || '已沖帳結清',
+        itemsJson: x.items_json || '[]',
+        sourceType: x.source_type || 'ERP原生帳款',
+        staff: x.staff || '',
+        memo: x.memo || ''
+    };
 }
 
 // ============================================================================
@@ -773,7 +1007,7 @@ async function loadDataFromSupabase() {
     console.log("⚡ 從 Supabase 極速載入全系統資料...");
     const [
         {data: c}, {data: s}, {data: cat}, {data: inv}, {data: ord},
-        {data: invc}, {data: sd}, {data: log}, {data: del}, {data: quo}, {data: em}
+        {data: invc}, {data: sd}, {data: log}, {data: del}, {data: quo}, {data: em}, {data: pay}
     ] = await Promise.all([
         fetchAllSupabaseTable('clients'),
         fetchAllSupabaseTable('suppliers'),
@@ -785,7 +1019,8 @@ async function loadDataFromSupabase() {
         fetchAllSupabaseTable('inventory_logs', 'row_idx', false),
         fetchAllSupabaseTable('deliveries', 'row_idx', false),
         fetchAllSupabaseTable('quotations', 'row_idx', false),
-        fetchAllSupabaseTable('email_settings')
+        fetchAllSupabaseTable('email_settings'),
+        fetchAllSupabaseTable('payment_records', 'row_idx', false, true)
     ]);
 
     globalClients = (c || []).map(x => ({
@@ -800,10 +1035,11 @@ async function loadDataFromSupabase() {
     globalInventory = (inv || []).map(x => ({rowIdx: 0, name: x.name, qty: Number(x.qty), alertQty: Number(x.alert_qty), cost: Number(x.cost), supplier: x.supplier, internalCode: x.internal_code, assetCodeCombined: x.asset_code_combined, batchesStr: x.batches_str}));
     globalOrders = (ord || []).map(x => ({rowIdx: x.row_idx, time: Number(x.time), client: x.client, orderNo: x.order_no, dept: x.dept, status: x.status, jsonStr: x.json_str, deadline: x.deadline, source: x.source, mailUrl: x.mail_url}));
     globalHistory = (invc || []).map(x => ({rowIdx: x.row_idx, time: Number(x.time), staff: x.staff, client: x.client, taxId: x.tax_id, net: Number(x.net), tax: Number(x.tax), total: Number(x.total), details: x.details, paperNo: x.paper_no, orderNo: x.order_no, status: x.status, historyLog: x.history_log}));
-    globalSalesDetails = (sd || []).map(x => ({rowIdx: x.row_idx, time: Number(x.time), paperNo: x.paper_no, client: x.client, orderNo: x.order_no, name: x.name, qty: Number(x.qty), unit: x.unit, price: Number(x.price), subtotal: Number(x.subtotal), shipStatus: x.ship_status, shippedQty: Number(x.shipped_qty), lot: x.lot, expiry: x.expiry}));
+    globalSalesDetails = (sd || []).map(mapSalesDetailRow);
     globalInvLogs = (log || []).map(x => ({rowIdx: x.row_idx, time: Number(x.time), staff: x.staff, name: x.name, type: x.type, qtyChange: Number(x.qty_change), newQty: Number(x.new_qty), lot: x.lot, expiry: x.expiry, invoiceNo: x.invoice_no, orderNo: x.order_no, memo: x.memo, arrivalDate: x.arrival_date, snapshot: x.snapshot, internalCode: x.internal_code}));
     globalDeliveries = (del || []).map(x => ({rowIdx: x.row_idx, time: Number(x.time), paperNo: x.paper_no, client: x.client, itemsStr: x.items_str, status: x.status, deliveryDate: x.delivery_date, deliveryMethod: x.delivery_method, memo: x.memo, signature: x.signature, staff: x.staff, orderNo: x.order_no, lot: x.lot, expiry: x.expiry}));
     globalQuotes = (quo || []).map(x => ({rowIdx: x.row_idx, time: Number(x.time), quoteNo: x.quote_no, quoteDate: x.quote_date, client: x.client, status: x.status, jsonStr: x.json_str, useSeal: x.use_seal, mergeId: x.merge_id, staff: x.staff, memo: x.memo}));
+    globalPayments = (pay || []).map(mapPaymentRecordRow);
     
     emailSettingsData.list = (em || []).map(x => ({email: x.email, memo: x.memo}));
     emailSettingsData.selected = emailSettingsData.selected || [];
@@ -819,14 +1055,14 @@ async function silentRefreshTable(table) {
         console.log(`🔄 針對變更資料表 [${table}] 進行局部更新...`);
         let orderByCol = null;
         let ascending = false;
-        if (['orders', 'invoices', 'sales_details', 'inventory_logs', 'deliveries', 'quotations'].includes(table)) {
+        if (['orders', 'invoices', 'sales_details', 'inventory_logs', 'deliveries', 'quotations', 'payment_records'].includes(table)) {
             orderByCol = 'row_idx';
         } else if (table === 'catalog') {
             orderByCol = 'row_index';
             ascending = true;
         }
         
-        const { data: allData } = await fetchAllSupabaseTable(table, orderByCol, ascending);
+        const { data: allData } = await fetchAllSupabaseTable(table, orderByCol, ascending, true);
 
         if (table === 'clients') globalClients = allData.map(x => ({
             name: x.name,
@@ -840,10 +1076,11 @@ async function silentRefreshTable(table) {
         else if (table === 'inventory') globalInventory = allData.map(x => ({rowIdx: 0, name: x.name, qty: Number(x.qty), alertQty: Number(x.alert_qty), cost: Number(x.cost), supplier: x.supplier, internalCode: x.internal_code, assetCodeCombined: x.asset_code_combined, batchesStr: x.batches_str}));
         else if (table === 'orders') globalOrders = allData.map(x => ({rowIdx: x.row_idx, time: Number(x.time), client: x.client, orderNo: x.order_no, dept: x.dept, status: x.status, jsonStr: x.json_str, deadline: x.deadline, source: x.source, mailUrl: x.mail_url}));
         else if (table === 'invoices') globalHistory = allData.map(x => ({rowIdx: x.row_idx, time: Number(x.time), staff: x.staff, client: x.client, taxId: x.tax_id, net: Number(x.net), tax: Number(x.tax), total: Number(x.total), details: x.details, paperNo: x.paper_no, orderNo: x.order_no, status: x.status, historyLog: x.history_log}));
-        else if (table === 'sales_details') globalSalesDetails = allData.map(x => ({rowIdx: x.row_idx, time: Number(x.time), paperNo: x.paper_no, client: x.client, orderNo: x.order_no, name: x.name, qty: Number(x.qty), unit: x.unit, price: Number(x.price), subtotal: Number(x.subtotal), shipStatus: x.ship_status, shippedQty: Number(x.shipped_qty), lot: x.lot, expiry: x.expiry}));
+        else if (table === 'sales_details') globalSalesDetails = allData.map(mapSalesDetailRow);
         else if (table === 'inventory_logs') globalInvLogs = allData.map(x => ({rowIdx: x.row_idx, time: Number(x.time), staff: x.staff, name: x.name, type: x.type, qtyChange: Number(x.qty_change), newQty: Number(x.new_qty), lot: x.lot, expiry: x.expiry, invoiceNo: x.invoice_no, orderNo: x.order_no, memo: x.memo, arrivalDate: x.arrival_date, snapshot: x.snapshot, internalCode: x.internal_code}));
         else if (table === 'deliveries') globalDeliveries = allData.map(x => ({rowIdx: x.row_idx, time: Number(x.time), paperNo: x.paper_no, client: x.client, itemsStr: x.items_str, status: x.status, deliveryDate: x.delivery_date, deliveryMethod: x.delivery_method, memo: x.memo, signature: x.signature, staff: x.staff, orderNo: x.order_no, lot: x.lot, expiry: x.expiry}));
         else if (table === 'quotations') globalQuotes = allData.map(x => ({rowIdx: x.row_idx, time: Number(x.time), quoteNo: x.quote_no, quoteDate: x.quote_date, client: x.client, status: x.status, jsonStr: x.json_str, useSeal: x.use_seal, mergeId: x.merge_id, staff: x.staff, memo: x.memo}));
+        else if (table === 'payment_records') globalPayments = allData.map(mapPaymentRecordRow);
         else if (table === 'email_settings') emailSettingsData.list = allData.map(x => ({email: x.email, memo: x.memo}));
 
         refreshAllUI();
@@ -901,6 +1138,9 @@ function refreshAllUI() {
     }
     if(document.getElementById('sys-delivery') && document.getElementById('sys-delivery').style.display === 'block') {
         if (typeof window.renderDeliveryList === "function") window.renderDeliveryList(); 
+    }
+    if(document.getElementById('sys-payment') && document.getElementById('sys-payment').style.display === 'block') {
+        if (typeof window.renderPaymentModule === "function") window.renderPaymentModule(); 
     }
 }
 
@@ -1141,7 +1381,7 @@ window.openSearchModal = function(type, callback) {
     document.getElementById('searchModalList').innerHTML = ''; 
     document.getElementById('searchModalInput').value = '';
     
-    if(type === 'client' || type === 'admin_client' || type === 'client_ord' || type === 'client_quo') { 
+    if(type === 'client' || type === 'admin_client' || type === 'client_ord' || type === 'client_quo' || type === 'client_pay') { 
         document.getElementById('searchModalTitle').innerText = '選擇客戶'; 
         const uniqueClients = [...new Map(globalClients.map(c => [(c.name || '').trim(), c])).values()];
         currentSearchSource = uniqueClients.map(c => ({
@@ -1161,6 +1401,7 @@ window.openSearchModal = function(type, callback) {
         let clientName = ''; 
         if(type.startsWith('item_ord_')) clientName = document.getElementById('e_ordClient').value; 
         else if(type.startsWith('item_quo_')) clientName = document.getElementById('e_quoClient').value; 
+        else if(type.startsWith('item_recfix')) clientName = document.getElementById('rf_client') ? document.getElementById('rf_client').value : '';
         else clientName = document.getElementById('invClientInput').value; 
         
         if(!clientName) { alert('請先選擇客戶！'); return; } 
@@ -1177,6 +1418,7 @@ window.openSearchModal = function(type, callback) {
         currentSearchSource = Array.from(uniqueMap.values()).map(p => {
             let detailStr = `單價: $${p.price} / ${p.unit}`;
             if(p.assetCode) detailStr += ` | 資材碼: ${p.assetCode}`;
+            if(p.internalCode) detailStr += ` | 長固: ${p.internalCode}`;
             return { text: p.productName, sub: detailStr, val: p.productName, ref: p };
         }); 
     }
@@ -1206,7 +1448,7 @@ window.renderSearchList = function(arr) {
 
 window.onSearchSelect = function(itemObj) { 
     bootstrap.Modal.getOrCreateInstance(document.getElementById('searchModal')).hide(); 
-    if(currentSearchCallback) currentSearchCallback(itemObj.val); 
+    if(currentSearchCallback) currentSearchCallback(itemObj.val, itemObj.ref); 
 };
 
 // ============================================================================
@@ -1317,11 +1559,22 @@ window.refreshData = function() {
 
 window.enterSystem = function(modId) {
     document.getElementById('homeMenu').style.display = 'none'; document.getElementById('mainApp').style.display = 'block';
-    document.querySelectorAll('.sys-module').forEach(el => el.style.display = 'none'); document.getElementById(`sys-${modId}`).style.display = 'block';
+    document.querySelectorAll('.sys-module').forEach(el => el.style.display = 'none');
+    const modEl = document.getElementById(`sys-${modId}`);
+    if (modEl) modEl.style.display = 'block';
     
-    const titles = {'order':'📦 訂單辨識建檔', 'invoice':'📝 開立發票', 'inventory': '🏭 產品庫存管理', 'history':'📊 紀錄與報表', 'admin':'⚙️ 管理員後台', 'quotation': '📑 開立估價單', 'delivery': '🚚 送貨與電子簽收'}; 
+    const titles = {
+        'order':'📦 訂單辨識建檔',
+        'invoice':'📝 開立發票',
+        'inventory': '🏭 產品庫存管理',
+        'history':'📊 紀錄與報表',
+        'admin':'⚙️ 管理員後台',
+        'quotation': '📑 開立估價單',
+        'delivery': '🚚 送貨與電子簽收',
+        'payment': '💰 收款明細與沖帳'
+    }; 
     
-    if(document.getElementById('sysTitle')) document.getElementById('sysTitle').innerText = titles[modId]; 
+    if(document.getElementById('sysTitle')) document.getElementById('sysTitle').innerText = titles[modId] || '長固 ERP'; 
     document.getElementById('mainApp').scrollTo(0,0);
     
     if(modId === 'history') { 
@@ -1346,6 +1599,10 @@ window.enterSystem = function(modId) {
     }
     if(modId === 'delivery') {
         if (typeof window.renderDeliveryList === "function") window.renderDeliveryList(); 
+    }
+    if(modId === 'payment') {
+        if (typeof window.initPaymentModule === "function") window.initPaymentModule();
+        if (typeof window.renderPaymentModule === "function") window.renderPaymentModule(); 
     }
 };
 
