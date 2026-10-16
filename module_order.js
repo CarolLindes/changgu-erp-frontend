@@ -1,7 +1,7 @@
 /**
  * ============================================================================
  * 模組 2：訂單辨識建檔 (module_order.js)
- * 【強健比對升級版】引入雙重金鑰(資材碼優先)與消除空白強健字串比對、防連點保護
+ * 【強健比對、匯入日期顯示、同單號多單位核銷 ＆ AI 失敗信件自動重試升級版】
  * ============================================================================
  */
 
@@ -42,23 +42,21 @@ window.isSameOrderItem = function(clientName, orderItem, targetName) {
     return false;
 };
 
-// 【核心修復】智慧計算單筆訂單品項的「已開立數量」（支援同單號、不同申請單位精準拆分核銷）
+// 智慧計算單筆訂單品項的「已開立數量」（支援同單號、不同申請單位精準拆分核銷）
 window.getOrderInvoicedQty = function(order, item) {
     if (!order || !order.orderNo || !item) return 0;
     const targetOrderNo = String(order.orderNo).trim();
     const targetDept = String(order.dept || '').trim();
     const expectedTag = targetDept ? `${targetOrderNo} ${targetDept}` : targetOrderNo;
 
-    // 找出所有包含此單號且未作廢的銷售明細
     const matchingSales = (globalSalesDetails || []).filter(d => {
-        if (d.shipStatus === '作廢') return false;
+        if (d.shipStatus === '作廢' || d.shipStatus === '歷史已結案') return false;
         const dOrderNos = String(d.orderNo || '').split(',').map(s => s.trim());
         return dOrderNos.includes(targetOrderNo) && window.isSameOrderItem(order.client, item, d.name);
     });
 
     if (matchingSales.length === 0) return 0;
 
-    // 依發票號碼分組解析，優先從發票明細的 [單號 申請單位] 標籤精準核對
     const paperNos = [...new Set(matchingSales.map(d => d.paperNo).filter(Boolean))];
     let totalInvoiced = 0;
     let hasUntaggedQty = 0;
@@ -69,7 +67,6 @@ window.getOrderInvoicedQty = function(order, item) {
 
         if (inv && inv.details && inv.details.includes('[')) {
             const lines = String(inv.details).split('\n');
-            // 檢查此張發票是否有針對該單號標註申請單位標籤
             const hasOrderTag = lines.some(line => {
                 const m = line.match(/\[([^\]]+)\]\s*$/);
                 if (!m) return false;
@@ -88,12 +85,10 @@ window.getOrderInvoicedQty = function(order, item) {
 
                         if (window.isSameOrderItem(order.client, item, lineName)) {
                             if (targetDept) {
-                                // 若訂單有申請單位，必須與標籤完全吻合，或標籤僅有單號(無單位)
                                 if (lineTag === expectedTag || lineTag === targetOrderNo) {
                                     totalInvoiced += lineQty;
                                 }
                             } else {
-                                // 若訂單本身無申請單位，則匹配純單號標籤
                                 if (lineTag === targetOrderNo) {
                                     totalInvoiced += lineQty;
                                 }
@@ -110,7 +105,6 @@ window.getOrderInvoicedQty = function(order, item) {
         }
     });
 
-    // 若有無標籤的歷史明細，且系統內有多筆同單號同單位的訂單，依建檔順序進行安全分配避免負數
     if (hasUntaggedQty > 0) {
         const sameGroupOrders = (globalOrders || []).filter(o =>
             o.status !== '已作廢' && o.status !== '作廢' &&
@@ -143,26 +137,24 @@ window.getOrderInvoicedQty = function(order, item) {
 };
 
 // ============================================================================
-// AI 與信箱自動辨識系統
+// AI 與信箱自動辨識系統 (整合失敗信件自動拔標籤重試機制)
 // ============================================================================
 
-window.triggerEmailScan = function() {
-    showLoading("⚡ 正在喚醒 AI 機器人...");
-    callApi('scanEmailOrders', {}).then(res => {
+window.triggerEmailScan = function(retryFailed = false) {
+    const loadingMsg = retryFailed
+        ? "🔄 正在自動拔除「ERP處理失敗」標籤、設回未讀並重新喚醒 AI..."
+        : "⚡ 正在喚醒 AI 機器人並檢查待重試信件...";
+    showLoading(loadingMsg);
+
+    callApi('scanEmailOrders', { retryFailed: !!retryFailed }).then(res => {
         hideLoading();
-        
-        // 【升級版非同步處理】
-        // 由於後端已經改為背景獨立執行，前端不再需要等待訂單資料回傳，
-        // 只要瞬間彈出安撫提示，讓畫面立刻恢復順暢操作即可！
         if (res && res.msg) {
             showToast(res.msg);
         } else {
             showToast("✅ 已成功喚醒 AI 機器人！系統將於背景獨立執行解析，請留意 Telegram 進度通知。");
         }
-        
     }).catch(err => {
         hideLoading();
-        // 攔截並優化超時或連線錯誤的安撫提示
         if (err.message && err.message.toLowerCase().includes('timeout')) {
             showToast("⏳ 系統已轉由背景繼續解析，請稍後（約1~3分鐘）點擊上方刷新按鈕查看最新訂單！");
         } else {
@@ -176,23 +168,42 @@ window.processOrderUpload = function(input) {
     const file = input.files[0]; 
     const mimeType = file.type || 'application/pdf'; 
     const reader = new FileReader();
-    reader.onload = function(e) {
-        showLoading("✨ Gemini AI 智慧辨識中...");
-        callApi('processOrderImage', { base64Str: e.target.result, mimeType: mimeType }).then(res => { 
-            hideLoading(); 
-            let previewData = Array.isArray(res) ? res[0] : res;
-            if(!previewData) return alert('未辨識到訂單資訊');
-            aiTempData = previewData; 
-            document.getElementById('aiClient').value = previewData.clientName || ''; 
-            document.getElementById('aiOrderNo').value = previewData.orderNo || ''; 
-            document.getElementById('aiDept').value = previewData.department || ''; 
-            document.getElementById('aiDeadline').value = ''; 
-            window.recheckAiItems(); 
-            document.getElementById('ordStep1').style.display = 'none'; 
-            document.getElementById('ordStep2').style.display = 'block'; 
-        }).catch(err => { hideLoading(); alert(err.message); });
+    reader.onload = async function(e) {
+        const base64Data = e.target.result;
+        const maxAttempts = 3;
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                showLoading(attempt === 1
+                    ? "✨ Gemini AI 智慧辨識中..."
+                    : `🔄 AI 忙碌中，正在自動進行第 ${attempt} 次重試辨識...`
+                );
+                const res = await callApi('processOrderImage', { base64Str: base64Data, mimeType: mimeType });
+                hideLoading();
+                let previewData = Array.isArray(res) ? res[0] : res;
+                if(!previewData) throw new Error('未辨識到訂單資訊');
+
+                aiTempData = previewData; 
+                document.getElementById('aiClient').value = previewData.clientName || ''; 
+                document.getElementById('aiOrderNo').value = previewData.orderNo || ''; 
+                document.getElementById('aiDept').value = previewData.department || ''; 
+                document.getElementById('aiDeadline').value = ''; 
+                window.recheckAiItems(); 
+                document.getElementById('ordStep1').style.display = 'none'; 
+                document.getElementById('ordStep2').style.display = 'block'; 
+                return;
+            } catch (err) {
+                if (attempt < maxAttempts) {
+                    await new Promise(r => setTimeout(r, attempt * 2000));
+                } else {
+                    hideLoading();
+                    alert("AI 辨識失敗（已自動重試 3 次）：" + err.message);
+                }
+            }
+        }
     };
-    reader.readAsDataURL(file); input.value = '';
+    reader.readAsDataURL(file);
+    input.value = '';
 };
 
 window.recheckAiItems = function() {
@@ -202,7 +213,6 @@ window.recheckAiItems = function() {
         let internalCode = ""; 
         let assetCode = "";
         if (clientName) { 
-            // 替換為強健比對引擎
             const p = window.findProductRobust(clientName, i.code || i.internalCode, i.name);
             if(p) {
                 internalCode = p.internalCode || "";
@@ -238,7 +248,6 @@ window.saveOrderAI = function() {
     
     if(!aiTempData.clientName) return alert("客戶名稱必填");
 
-    // 【問題 6 修復】建立重複單號時跳出警告視窗
     if (aiTempData.orderNo) {
         const dupOrders = globalOrders.filter(x => 
             x.status !== '已作廢' && x.status !== '作廢' && 
@@ -255,11 +264,9 @@ window.saveOrderAI = function() {
     if(window.lockButton(btn)) return; // 防連點保護
 
     aiTempData.items.forEach(i => { 
-        // 替換為強健比對引擎
         const p = window.findProductRobust(aiTempData.clientName, i.code || i.internalCode, i.name);
         if(p) {
             i.internalCode = p.internalCode || "";
-            // 若 AI 沒抓到資材碼，但資料庫有，順便補齊
             if (!i.code && p.assetCode) i.code = p.assetCode;
         } 
     });
@@ -315,14 +322,12 @@ window.renderOrderList = debounce(function() {
         let orderFullyShipped = true; let hasPartial = false;
         
         let displayItems = items.map(i => {
-            // 【問題 7 修復】使用支援申請單位標籤與強健品名的核銷計算引擎
             let invoicedQty = window.getOrderInvoicedQty(o, i);
             
             let remaining = i.qty - invoicedQty; 
             if (remaining > 0) orderFullyShipped = false; 
             if (invoicedQty > 0) hasPartial = true;
             
-            // 替換為強健比對引擎
             const p = window.findProductRobust(o.client, i.code || i.internalCode, i.name);
             const intCodeBadge = (p && p.internalCode) ? `<span class="badge bg-info text-dark ms-1">長固: ${p.internalCode}</span>` : '';
             
@@ -350,7 +355,6 @@ window.renderOrderList = debounce(function() {
             else deadlineHtml = `<span class="badge bg-success ms-2">🟢 期限: ${o.deadline}</span>`;
         }
 
-        // 【問題 1 修復】額外顯示匯入系統日期（僅年/月/日）與申請單位
         let importDateHtml = '';
         if (o.time) {
             const dObj = new Date(Number(o.time));
@@ -465,7 +469,6 @@ window.addOrderManualItemRow = function() {
 
 window.selectProductForOrderManual = function(rowId, prodName) { 
     const clientName = document.getElementById('e_ordClient').value;
-    // 雖然下拉選單本身就是用精確的字串回傳，但保險起見使用強健比對
     const p = window.findProductRobust(clientName, null, prodName); 
     if(!p) return; 
     const item = currentOrderManualItems.find(x => x.id === rowId); 
@@ -501,7 +504,6 @@ window.saveEditOrder = function() {
     }
     if (items.length === 0) return alert('請至少新增一項品項！');
 
-    // 【問題 6 修復】建立或修改訂單時，若單號重複則跳出警告視窗
     if (o) {
         const dupOrders = globalOrders.filter(x => 
             x.rowIdx !== idx && 
@@ -595,20 +597,17 @@ window.groupFulfillOrders = function() {
     selectedOrderCache.forEach(order => {
         let items = []; try { items = JSON.parse(order.jsonStr || '[]'); } catch(e){}
         items.forEach(i => {
-            // 【問題 7 修復】合併開票載入剩餘數量時，同樣使用支援申請單位標籤的核銷計算引擎
             let invoicedQty = window.getOrderInvoicedQty(order, i);
             
             let remaining = i.qty - invoicedQty;
             if (remaining > 0) {
                 const rowId = `invR_${Date.now()}_${Math.random().toString(36).substring(2)}`; 
-                
-                // 【核心修復】使用強健比對引擎，徹底解決資材碼與品名符號差異問題
                 const p = window.findProductRobust(client, i.code || i.internalCode, i.name);
                 
                 let price = p ? p.price : 0; 
                 let unit = p ? p.unit : '式'; 
                 let internalCode = p ? (p.internalCode || p.assetCode) : '';
-                let finalName = p ? p.productName : i.name; // 若對應成功，統一轉換為建檔品名
+                let finalName = p ? p.productName : i.name;
                 
                 currentInvoiceData.items.push({ id: rowId, product: p ? {productName: finalName, unit: unit, price: price, internalCode: internalCode} : null, qty: remaining, orderRef: order.orderNo, deptRef: order.dept });
             }
