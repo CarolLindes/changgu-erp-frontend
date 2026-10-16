@@ -427,7 +427,7 @@ window.updatePaymentClientDropdowns = function() {
         const el = document.getElementById(id);
         if (el) {
             const cur = el.value;
-            el.innerHTML = '<option value="">🏢 所有客戶 (全部)</option>' + sorted.map(c => `<option value="escapeQuotes(c)">{escapeQuotes(c)}</option>`).join('');
+            el.innerHTML = '<option value="">🏢 所有客戶 (全部)</option>' + sorted.map(c => `<option value="${escapeQuotes(c)}">${escapeQuotes(c)}</option>`).join('');
             if (sorted.includes(cur)) el.value = cur;
         }
     });
@@ -562,7 +562,7 @@ window.renderPendingReceivables = debounce(function() {
         let html = '';
         groups.forEach(g => {
             const d = new Date(g.time);
-            const dateStr = isNaN(d.getTime()) ? '' : `d.getFullYear()/{String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`;
+            const dateStr = isNaN(d.getTime()) ? '' : `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`;
             const allChecked = g.items.every(i => selSet.has(i.rowIdx));
             const rowIdsJson = JSON.stringify(g.items.map(i => i.rowIdx));
             const eraBadge = g.isLegacy
@@ -574,8 +574,8 @@ window.renderPendingReceivables = debounce(function() {
                 return `
                 <div class="d-flex justify-content-between align-items-center py-1 border-bottom" style="font-size:0.86rem;">
                     <div class="d-flex align-items-center">
-                        <input type="checkbox" class="form-check-input me-2" itemCheckedonchange="window.toggleReceivableItem({i.rowIdx}, this.checked)">
-                        <span>escapeQuotes(i.name)<spanclass="badgebg-lighttext-darkborderms-1">x{i.qty}</span> <small class="text-muted">(單價: $${Number(i.price).toLocaleString()})</small></span>
+                        <input type="checkbox" class="form-check-input me-2" ${itemChecked} onchange="window.toggleReceivableItem(${i.rowIdx}, this.checked)">
+                        <span>${escapeQuotes(i.name)} <span class="badge bg-light text-dark border ms-1">x${i.qty}</span> <small class="text-muted">(單價: $${Number(i.price).toLocaleString()})</small></span>
                     </div>
                     <strong class="text-dark">$${i.remainSub.toLocaleString()}</strong>
                 </div>`;
@@ -585,11 +585,11 @@ window.renderPendingReceivables = debounce(function() {
             <div class="item-row bg-white shadow-sm p-3 mb-2 border-start border-4 ${allChecked ? 'border-success' : (g.isLegacy ? 'border-warning' : 'border-primary')}">
                 <div class="d-flex justify-content-between align-items-start border-bottom pb-2 mb-2">
                     <div class="d-flex align-items-center">
-                        <input type="checkbox" class="form-check-input me-3" style="transform: scale(1.35); cursor:pointer;" allChecked?'checked':''onchange='window.toggleReceivableInvoiceGroup({rowIdsJson}, this.checked)'>
+                        <input type="checkbox" class="form-check-input me-3" style="transform: scale(1.35); cursor:pointer;" ${allChecked ? 'checked' : ''} onchange='window.toggleReceivableInvoiceGroup(${rowIdsJson}, this.checked)'>
                         <div>
                             <div class="fw-bold fs-6 text-dark">${escapeQuotes(g.client)} ${eraBadge}</div>
                             <div class="small text-muted mt-1">
-                                發票號碼：<strong class="text-primary">escapeQuotes(g.paperNo)</strong>｜開立日：{dateStr} ｜ 單號：${escapeQuotes(Array.from(g.orderNos).join(', ') || '--')}
+                                發票號碼：<strong class="text-primary">${escapeQuotes(g.paperNo)}</strong> ｜ 開立日：${dateStr} ｜ 單號：${escapeQuotes(Array.from(g.orderNos).join(', ') || '--')}
                             </div>
                         </div>
                     </div>
@@ -606,14 +606,14 @@ window.renderPendingReceivables = debounce(function() {
         // 依單一品項明細表格檢視
         const rowsHtml = list.map(s => {
             const d = new Date(s.time);
-            const dateStr = isNaN(d.getTime()) ? '' : `d.getFullYear()/{String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`;
+            const dateStr = isNaN(d.getTime()) ? '' : `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`;
             const sub = Math.round((Number(s.subtotal) || ((Number(s.qty)||0) * (Number(s.price)||0))) - (Number(s.paidAmount) || 0));
             const isChecked = selSet.has(s.rowIdx) ? 'checked' : '';
             const isLeg = window.isLegacySalesItem(s);
 
             return `
             <tr>
-                <td class="text-center"><input type="checkbox" class="form-check-input" style="transform:scale(1.2);" isCheckedonchange="window.toggleReceivableItem({s.rowIdx}, this.checked)"></td>
+                <td class="text-center"><input type="checkbox" class="form-check-input" style="transform:scale(1.2);" ${isChecked} onchange="window.toggleReceivableItem(${s.rowIdx}, this.checked)"></td>
                 <td>${dateStr} ${isLeg ? '<span class="badge bg-warning text-dark">5月前</span>' : ''}</td>
                 <td class="fw-bold text-primary">${escapeQuotes(s.paperNo || '--')}</td>
                 <td class="fw-bold">${escapeQuotes(s.client)}</td>
@@ -705,14 +705,14 @@ window.openExecutePaymentModal = function() {
 
     const clients = [...new Set(selectedItems.map(s => s.client).filter(Boolean))];
     if (clients.length > 1) {
-        if (!confirm(`⚠️ 您勾選的明細包含 clients.length間不同客戶（{clients.join('、')}）。\n確定要合併在同一筆沖帳單中嗎？`)) {
+        if (!confirm(`⚠️ 您勾選的明細包含 ${clients.length} 間不同客戶（${clients.join('、')}）。\n確定要合併在同一筆沖帳單中嗎？`)) {
             return;
         }
     }
 
     const todayCompact = getTodayStr().replace(/-/g, '');
     const seq = String((globalPayments || []).filter(p => String(p.paymentNo || '').includes(todayCompact)).length + 1).padStart(3, '0');
-    const paymentNo = `PAY-todayCompact-{seq}`;
+    const paymentNo = `PAY-${todayCompact}-${seq}`;
 
     const paperNos = [...new Set(selectedItems.map(s => s.paperNo).filter(Boolean))].join(', ');
     let receivableTotal = 0;
@@ -720,7 +720,7 @@ window.openExecutePaymentModal = function() {
         const sub = Math.round((Number(s.subtotal) || ((Number(s.qty)||0) * (Number(s.price)||0))) - (Number(s.paidAmount) || 0));
         receivableTotal += sub;
         return `<div class="d-flex justify-content-between border-bottom py-1">
-            <span><strong>[${escapeQuotes(s.paperNo || '無單號')}]</strong> escapeQuotes(s.name)x{s.qty}</span>
+            <span><strong>[${escapeQuotes(s.paperNo || '無單號')}]</strong> ${escapeQuotes(s.name)} x${s.qty}</span>
             <strong class="text-primary">$${sub.toLocaleString()}</strong>
         </div>`;
     }).join('');
@@ -867,7 +867,7 @@ window.renderPaymentHistory = debounce(function() {
         try { items = JSON.parse(p.itemsJson || '[]'); } catch (e) { items = []; }
 
         const itemsHtml = items.map(i =>
-            `<div class="small text-secondary">▪ [${escapeQuotes(i.paperNo || '--')}] escapeQuotes(i.name)x{i.qty} ($${Number(i.subtotal || 0).toLocaleString()})</div>`
+            `<div class="small text-secondary">▪ [${escapeQuotes(i.paperNo || '--')}] ${escapeQuotes(i.name)} x${i.qty} ($${Number(i.subtotal || 0).toLocaleString()})</div>`
         ).join('');
 
         const badgeStatus = isVoid
@@ -888,15 +888,13 @@ window.renderPaymentHistory = debounce(function() {
                         <span class="badge bg-info text-dark ms-1">${escapeQuotes(p.sourceType)}</span>
                     </div>
                     <div class="small text-muted mt-1">
-                        沖帳單號：<strong class="text-primary">escapeQuotes(p.paymentNo)</strong>｜實際收款日：<strong>{escapeQuotes(p.payDate)}</strong> ｜ 經辦：${escapeQuotes(p.staff)}
+                        沖帳單號：<strong class="text-primary">${escapeQuotes(p.paymentNo)}</strong> ｜ 實際收款日：<strong>${escapeQuotes(p.payDate)}</strong> ｜ 經辦：${escapeQuotes(p.staff)}
                     </div>
                     <div class="small text-secondary mt-1">沖銷發票：${escapeQuotes(p.paperNos)}</div>
                     ${p.memo ? `<div class="small text-danger fw-bold mt-1">📝 備註：${escapeQuotes(p.memo)}</div>` : ''}
                 </div>
                 <div class="text-end">
-                    <div class="small text-muted">應收:
-Number(p.receivableTotal).toLocaleString()|差額:
-{Number(p.diffAmount).toLocaleString()}</div>
+                    <div class="small text-muted">應收: $${Number(p.receivableTotal).toLocaleString()} | 差額: $${Number(p.diffAmount).toLocaleString()}</div>
                     <div class="fs-5 fw-bold text-success">實收: $${Number(p.receivedAmount).toLocaleString()}</div>
                     <div class="mt-1">${voidBtn}</div>
                 </div>
@@ -1129,19 +1127,19 @@ window.renderLegacyUnpaidManager = function() {
                 <td class="text-center"><input type="checkbox" class="form-check-input cb-legacy-import" value="${i}" checked></td>
                 <td>${escapeQuotes(x.date)}</td>
                 <td class="fw-bold text-primary">${escapeQuotes(x.paperNo || '--')}</td>
-                <td class="fw-bold">escapeQuotes(x.clientName)<smallclass="text-muted">({escapeQuotes(x.custId)})</small></td>
-                <td><code>escapeQuotes(x.ispn)</code><br><small>{escapeQuotes(x.productName)}</small></td>
+                <td class="fw-bold">${escapeQuotes(x.clientName)} <small class="text-muted">(${escapeQuotes(x.custId)})</small></td>
+                <td><code>${escapeQuotes(x.ispn)}</code><br><small>${escapeQuotes(x.productName)}</small></td>
                 <td class="text-center">${x.qty}</td>
                 <td class="text-end">$${x.price.toLocaleString()}</td>
                 <td class="text-end fw-bold text-danger">$${x.total.toLocaleString()}</td>
-                <td><small class="text-secondary">單號: escapeQuotes(x.orderNo)<br>{escapeQuotes(x.auditNote)}</small></td>
+                <td><small class="text-secondary">單號: ${escapeQuotes(x.orderNo)}<br>${escapeQuotes(x.auditNote)}</small></td>
             </tr>
         `).join('');
 
         stagingBox.innerHTML = `
         <div class="card border-warning shadow-sm">
             <div class="card-header bg-warning bg-opacity-25 d-flex justify-content-between align-items-center">
-                <span class="fw-bold text-dark">🔎 掃描發現 <strong>staged.length筆</strong>尚未匯入本系統之「2026/05/01前歷史未收明細」（合計<strongclass="text-danger">${totalStagedAmt.toLocaleString()}</strong>）</span>
+                <span class="fw-bold text-dark">🔎 掃描發現 <strong>${staged.length} 筆</strong> 尚未匯入本系統之「2026/05/01 前歷史未收明細」（合計 <strong class="text-danger">$${totalStagedAmt.toLocaleString()}</strong>）</span>
                 <button class="btn btn-sm btn-primary fw-bold shadow-sm" onclick="window.confirmImportLegacyUnpaid()">📥 立即匯入勾選項目至待沖帳池</button>
             </div>
             <div class="table-responsive" style="max-height: 360px; overflow-y: auto;">
@@ -1177,7 +1175,7 @@ window.renderLegacyUnpaidManager = function() {
 
     const existRowsHtml = existingLegacy.map(s => {
         const d = new Date(s.time);
-        const dtStr = isNaN(d.getTime()) ? '' : `d.getFullYear()/{String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`;
+        const dtStr = isNaN(d.getTime()) ? '' : `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`;
         const isPaid = s.payStatus === '已沖帳';
         const statusBadge = isPaid
             ? `<span class="badge bg-success">🟢 已沖帳 (${escapeQuotes(s.paymentNo || '')})</span>`
@@ -1233,7 +1231,7 @@ window.confirmImportLegacyUnpaid = function() {
     const payloadItems = toImport.map((item, idx) => {
         const ts = new Date(item.date).getTime() || (baseNow - 86400000 * 60);
         const rIdx = baseNow + idx;
-        const lotInfo = `[5月前歷史應收] 外部單號:item.extOrderCode{item.auditNote ? ' ' + item.auditNote : ''}`.trim();
+        const lotInfo = `[5月前歷史應收] 外部單號:${item.extOrderCode}${item.auditNote ? ' ' + item.auditNote : ''}`.trim();
 
         const sdObj = {
             rowIdx: rIdx,
@@ -1274,7 +1272,7 @@ window.confirmImportLegacyUnpaid = function() {
 window.saveUnpaidReconcileWorkspace = function() {
     try {
         const now = new Date();
-        const tStr = `now.getMonth()+1/{now.getDate()} String(now.getHours()).padStart(2,'0'):{String(now.getMinutes()).padStart(2,'0')}`;
+        const tStr = `${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
         const ur = window.paymentModuleState.unpaidReconcile;
         ur.uploadedAt = tStr;
 
@@ -1422,9 +1420,7 @@ window.runUnpaidReconciliation = function(silent = false) {
                     extPayStatus: '未收款',
                     diag: (isAmtMatch && isQtyMatch)
                         ? '🟢 兩邊系統皆為「未收款」且數量、總金額完全一致'
-                        : `🟡 兩邊皆未收，但數值不符（本系統: 數量 ${eQty} / 總額
-eTotal.toLocaleString()vs外部:數量$xQty/總額
-{xTotal.toLocaleString()}）`,
+                        : `🟡 兩邊皆未收，但數值不符（本系統: 數量 ${eQty} / 總額 $${eTotal.toLocaleString()} vs 外部: 數量 ${xQty} / 總額 $${xTotal.toLocaleString()}）`,
                     erpRowIndices: eList.map(e => e.rowIdx)
                 };
                 results.push(item);
@@ -1459,7 +1455,7 @@ eTotal.toLocaleString()vs外部:數量$xQty/總額
 
             const eFirst = unpaidErpList[0];
             const d = new Date(eFirst.time);
-            const dtStr = isNaN(d.getTime()) ? '' : `d.getFullYear()-{String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+            const dtStr = isNaN(d.getTime()) ? '' : `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
             const uTotal = Math.round(unpaidErpList.reduce((sum, e) => sum + (Number(e.subtotal) || ((Number(e.qty)||0)*(Number(e.price)||0))), 0));
             const uQty   = Math.round(unpaidErpList.reduce((sum, e) => sum + (Number(e.qty) || 0), 0) * 1000) / 1000;
 
@@ -1546,7 +1542,7 @@ window.toggleUnpaidReviewItem = function(recKey, markReviewed) {
     if (markReviewed) {
         const now = new Date();
         ur.reviewedMap[recKey] = {
-            time: `now.getMonth()+1/{now.getDate()} String(now.getHours()).padStart(2,'0'):{String(now.getMinutes()).padStart(2,'0')}`,
+            time: `${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`,
             staff: myName || '管理員'
         };
     } else {
@@ -1562,7 +1558,7 @@ window.batchToggleUnpaidReview = function(markReviewed) {
     const ur = window.paymentModuleState.unpaidReconcile;
     if (!ur.reviewedMap) ur.reviewedMap = {};
     const now = new Date();
-    const tStr = `now.getMonth()+1/{now.getDate()} String(now.getHours()).padStart(2,'0'):{String(now.getMinutes()).padStart(2,'0')}`;
+    const tStr = `${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
 
     cbs.forEach(cb => {
         if (markReviewed) ur.reviewedMap[cb.value] = { time: tStr, staff: myName || '管理員' };
@@ -1634,10 +1630,10 @@ window.renderUnpaidReconcileTable = function() {
         <tr>
             <td class="text-center">${r.category !== 'MATCH' ? `<input type="checkbox" class="form-check-input cb-unpaid-rec" value="${escapeQuotes(r.recKey)}">` : ''}</td>
             <td class="text-center text-muted fw-bold">${i + 1}</td>
-            <td><strong class="text-primary">escapeQuotes(r.invNo)</strong><divclass="smalltext-muted">{escapeQuotes(r.date || '')}</div></td>
-            <td><div class="fw-bold">escapeQuotes(r.client)</div>{r.extCustId && r.extCustId !== '--' ? `<small class="text-muted">外部代號: ${escapeQuotes(r.extCustId)}</small>` : ''}</td>
+            <td><strong class="text-primary">${escapeQuotes(r.invNo)}</strong><div class="small text-muted">${escapeQuotes(r.date || '')}</div></td>
+            <td><div class="fw-bold">${escapeQuotes(r.client)}</div>${r.extCustId && r.extCustId !== '--' ? `<small class="text-muted">外部代號: ${escapeQuotes(r.extCustId)}</small>` : ''}</td>
             <td><div class="small fw-bold text-primary">本系統: ${escapeQuotes(r.erpPayStatus)}</div><div class="small text-danger mt-1">外部表: ${escapeQuotes(r.extPayStatus)}</div></td>
-            <td class="text-end"><div>本系統: <strong>r.erpQty!==null?r.erpQty:'--'</strong></div><div>外部:<strong>{r.extQty !== null ? r.extQty : '--'}</strong></div></td>
+            <td class="text-end"><div>本系統: <strong>${r.erpQty !== null ? r.erpQty : '--'}</strong></div><div>外部: <strong>${r.extQty !== null ? r.extQty : '--'}</strong></div></td>
             <td class="text-end"><div>本系統: <strong class="text-primary">${r.erpTotal !== null ? '$' + r.erpTotal.toLocaleString() : '--'}</strong></div><div>外部: <strong class="text-danger">${r.extTotal !== null ? '$' + r.extTotal.toLocaleString() : '--'}</strong></div></td>
             <td class="small fw-bold text-dark" style="min-width:220px;">${escapeQuotes(r.diag)}</td>
             <td class="text-center" style="min-width:130px;">${actionHtml}</td>
@@ -1699,4 +1695,3 @@ window.exportUnpaidReconcileExcel = function() {
     XLSX.utils.book_append_sheet(wb, ws, "未收與沖帳跨系統比對報告");
     XLSX.writeFile(wb, `長固ERP_未收與沖帳跨系統比對報告_${getTodayStr()}.xlsx`);
 };
-
