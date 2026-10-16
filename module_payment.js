@@ -1,20 +1,24 @@
 /**
  * ============================================================================
  * 模組 7：收款明細與沖帳 + 跨系統未收款智慧勾稽中心 (module_payment.js)
+ * 【快速沖帳彈跳視窗 ＆ 防呆返回上一步升級版】
  * 1. 待收款管理與收款沖帳 (雙向連動「沖帳記錄表」與「銷售明細總表」N~Q欄)
  * 2. 沖帳記錄總表查詢、作廢退回重沖、Excel 匯出
  * 3. 2026年5月前歷史未收帳款 (期初應收) 安全隔離匯入與進度追蹤
- * 4. 跨系統「未收款明細.xlsx」AI 智慧勾稽比對中心 (含已覆核專區、進度記憶、一鍵同步沖帳)
+ * 4. 跨系統「未收款明細.xlsx」AI 智慧勾稽比對中心
+ * 5. 上傳後自動彈出「⚡ 比對無誤資料一鍵快速沖帳視窗」、完成自動消失 ＆ 防呆撤銷返回機制
  * ============================================================================
  */
 
-const PAYMENT_RECONCILE_STORAGE_KEY = 'changgu_erp_unpaid_reconcile_v1';
+const PAYMENT_RECONCILE_STORAGE_KEY = 'changgu_erp_unpaid_reconcile_v2';
 const ERP_START_CUTOFF_DATE = '2026-05-01';
 
 window.paymentModuleState = {
     viewMode: 'invoice', // 'invoice' (依發票歸戶) | 'item' (依單一品項)
     selectedRowIndices: new Set(),
     legacyStagedItems: [],
+    fastModalMode: 'ALL_ACCURATE', // 'ALL_ACCURATE' | 'SYNC_PAID' | 'EXACT_MATCH'
+    fastBatchHistoryStack: [], // 儲存每次快速沖帳的批次紀錄供「返回上一步 (撤銷)」使用
     unpaidReconcile: {
         fileName: '',
         uploadedAt: '',
@@ -194,7 +198,7 @@ window.initPaymentModule = function() {
                 </div>
 
                 <div id="payLegacyStagingBox" style="display:none;" class="mb-4"></div>
-                <h6 class="fw-bold text-dark border-bottom pb-2 mb-2">📋目前已存在於本系統中之「2026/05/01 前歷史應收明細」清單：</h6>
+                <h6 class="fw-bold text-dark border-bottom pb-2 mb-2">📋 目前已存在於本系統中之「2026/05/01 前歷史應收明細」清單：</h6>
                 <div id="payLegacyExistingContainer"></div>
             </div>
 
@@ -209,7 +213,7 @@ window.initPaymentModule = function() {
                                     <span id="unpaidRecSaveBadge" class="badge bg-info text-dark" style="display:none;">💾 進度自動記憶中</span>
                                 </div>
                                 <div class="small text-muted mt-1">
-                                    上傳外部系統產出的 <code>未收款明細.xlsx</code>（<code>未付款-OLD</code> 工作表），AI 自動比對兩邊系統「<strong>哪邊已沖帳、哪邊未沖帳、未收金額是否一致</strong>」，支援「<strong>✅ 已覆核專區</strong>」與「<strong>⚡ 一鍵同步沖帳/補登</strong>」。
+                                    上傳外部系統產出的 <code>未收款明細.xlsx</code>（<code>未付款-OLD</code> 工作表），系統會<strong>先自動彈出「⚡ 比對無誤一鍵快速沖帳視窗」</strong>供您秒速完成正確資料沖帳，接著再處理待確認差異。
                                 </div>
                             </div>
                             <div class="d-flex flex-wrap gap-2">
@@ -217,6 +221,12 @@ window.initPaymentModule = function() {
                                     📂 上傳外部「未收款明細.xlsx」
                                     <input type="file" accept=".xlsx,.xls,.csv" style="display:none;" onchange="window.handleUnpaidExcelUpload(this, 'RECONCILE_TAB')">
                                 </label>
+                                <button id="btnOpenFastAccurateModal" class="btn btn-warning text-dark fw-bold shadow-sm" style="display:none;" onclick="window.openFastAccurateReconcileModal(false)">
+                                    ⚡ 無誤資料快速沖帳 (<span id="fastAccurateRemainBadge">0</span>)
+                                </button>
+                                <button id="btnUndoFastAccurate" class="btn btn-outline-danger fw-bold shadow-sm" style="display:none;" onclick="window.undoLastFastAccuratePayment()">
+                                    ⏪ 撤銷上次快速沖帳 (返回上一步)
+                                </button>
                                 <button id="btnExportUnpaidRecExcel" class="btn btn-success fw-bold shadow-sm" style="display:none;" onclick="window.exportUnpaidReconcileExcel()">
                                     📥 下載未收比對差異報告 (.xlsx)
                                 </button>
@@ -302,7 +312,7 @@ window.initPaymentModule = function() {
         </div>
     `;
 
-    // 建立「💰 執行收款沖帳」彈跳視窗
+    // 建立「💰 執行收款沖帳」一般彈跳視窗
     if (!document.getElementById('paymentExecuteModal')) {
         const modalHtml = `
         <div class="modal fade" id="paymentExecuteModal" tabindex="-1">
@@ -384,7 +394,103 @@ window.initPaymentModule = function() {
         document.body.insertAdjacentHTML('beforeend', modalHtml);
     }
 
-    // 載入未收比對中心的持久化進度
+    // 【項目 2 全新視窗】上傳外部「未收款明細.xlsx」後自動彈出之「⚡ 比對無誤資料 — 一鍵快速確認沖帳」彈跳視窗
+    if (!document.getElementById('fastAccurateReconcileModal')) {
+        const fastModalHtml = `
+        <div class="modal fade" id="fastAccurateReconcileModal" tabindex="-1" data-bs-backdrop="static">
+            <div class="modal-dialog modal-dialog-centered modal-xl">
+                <div class="modal-content border-0 shadow-lg">
+                    <div class="modal-header text-white" style="background: linear-gradient(135deg, #0ca678, #198754);">
+                        <div>
+                            <h5 class="modal-title fw-bold mb-0">⚡ 步驟 1：比對無誤資料 — 快速一鍵確認沖帳</h5>
+                            <div class="small opacity-75 mt-1">
+                                以下僅列出經 AI 比對後「<strong>資料完全正確無誤</strong>」的項目。完成快速沖帳後，視窗將自動消失並進入步驟 2 處理待確認差異。
+                            </div>
+                        </div>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" title="暫時略過，先看比對主表"></button>
+                    </div>
+
+                    <div class="modal-body bg-light">
+                        <!-- 防呆返回上一步提示列 -->
+                        <div id="fastUndoAlertBanner" class="alert alert-warning border-warning d-flex justify-content-between align-items-center py-2 px-3 mb-3 shadow-sm" style="display:none !important;">
+                            <div class="small fw-bold text-dark">
+                                🛡️ <strong>防呆保護機制已就緒</strong>：<span id="fastUndoAlertText">您剛才已完成一批快速沖帳。</span>
+                            </div>
+                            <button type="button" class="btn btn-sm btn-danger fw-bold shadow-sm" onclick="window.undoLastFastAccuratePayment()">
+                                ⏪ 撤銷剛才的沖帳 (返回上一步)
+                            </button>
+                        </div>
+
+                        <!-- 模式切換與收款參數設定列 -->
+                        <div class="p-3 bg-white border rounded shadow-sm mb-3">
+                            <div class="d-flex flex-wrap justify-content-between align-items-center border-bottom pb-2 mb-3 gap-2">
+                                <div class="btn-group btn-group-sm" role="group">
+                                    <button type="button" id="btnFastMode_ALL_ACCURATE" class="btn btn-outline-success active fw-bold" onclick="window.setFastModalMode('ALL_ACCURATE')">
+                                        ✨ 全部比對無誤待沖項目 (<span id="fastCntAll">0</span>)
+                                    </button>
+                                    <button type="button" id="btnFastMode_SYNC_PAID" class="btn btn-outline-primary fw-bold" onclick="window.setFastModalMode('SYNC_PAID')">
+                                        🟣 外部已銷帳・本系統待同步沖帳 (<span id="fastCntSync">0</span>)
+                                    </button>
+                                    <button type="button" id="btnFastMode_EXACT_MATCH" class="btn btn-outline-success fw-bold" onclick="window.setFastModalMode('EXACT_MATCH')">
+                                        🟢 雙邊金額數量 100% 吻合之發票 (<span id="fastCntMatch">0</span>)
+                                    </button>
+                                </div>
+
+                                <div class="d-flex align-items-center gap-2">
+                                    <select id="fastFilterClient" class="form-select form-select-sm fw-bold text-secondary" style="min-width: 200px;" onchange="window.renderFastAccurateList()">
+                                        <option value="">🏢 所有客戶 (顯示全部)</option>
+                                    </select>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary fw-bold text-nowrap" onclick="window.toggleAllFastCheckboxes(true)">☑️ 全選</button>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary fw-bold text-nowrap" onclick="window.toggleAllFastCheckboxes(false)">⬜ 全不選</button>
+                                </div>
+                            </div>
+
+                            <div class="row g-2 align-items-center">
+                                <div class="col-6 col-md-3">
+                                    <label class="small fw-bold text-muted">實際收款日</label>
+                                    <input type="date" id="fast_payDate" class="form-control form-control-sm fw-bold text-primary">
+                                </div>
+                                <div class="col-6 col-md-3">
+                                    <label class="small fw-bold text-muted">收款方式</label>
+                                    <select id="fast_payMethod" class="form-select form-select-sm fw-bold">
+                                        <option value="外部系統同步沖帳">🔄 外部系統同步沖帳</option>
+                                        <option value="銀行匯款">🏦 銀行匯款 / 電匯</option>
+                                        <option value="支票收款">🎫 支票收款</option>
+                                        <option value="現金收款">💵 現金收款</option>
+                                    </select>
+                                </div>
+                                <div class="col-12 col-md-6">
+                                    <label class="small fw-bold text-muted">批次沖帳備註 (選填)</label>
+                                    <input type="text" id="fast_memo" class="form-control form-control-sm" placeholder="例如：跨系統比對無誤快速批次沖帳">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 比對無誤待沖帳清單表格 -->
+                        <div id="fastAccurateListContainer" class="bg-white border rounded shadow-sm" style="max-height: 400px; overflow-y: auto;"></div>
+                    </div>
+
+                    <div class="modal-footer bg-white border-top d-flex flex-wrap justify-content-between align-items-center">
+                        <div>
+                            <span class="fw-bold text-dark">
+                                目前勾選：<span class="text-success fs-5" id="fastSelectedCount">0</span> 張無誤發票 ｜ 確認沖帳總額：<span class="text-danger fs-4" id="fastSelectedTotalAmt">$0</span>
+                            </span>
+                        </div>
+                        <div class="d-flex gap-2">
+                            <button type="button" class="btn btn-outline-secondary fw-bold px-3" data-bs-dismiss="modal">
+                                稍後處理 (先看比對明細表)
+                            </button>
+                            <button type="button" class="btn btn-success fw-bold px-4 py-2 fs-5 shadow-sm" onclick="window.confirmFastAccuratePayment()">
+                                ⚡ 一鍵確認沖帳勾選項目
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>`;
+        document.body.insertAdjacentHTML('beforeend', fastModalHtml);
+    }
+
     window.loadUnpaidReconcileWorkspace();
 };
 
@@ -415,6 +521,7 @@ window.renderPaymentModule = function() {
     window.renderPendingReceivables();
     window.renderPaymentHistory();
     window.renderLegacyUnpaidManager();
+    window.updateFastUndoButtonsUI();
 };
 
 window.updatePaymentClientDropdowns = function() {
@@ -537,7 +644,6 @@ window.renderPendingReceivables = debounce(function() {
     const mode = window.paymentModuleState.viewMode || 'invoice';
 
     if (mode === 'invoice') {
-        // 依發票號碼 + 客戶歸戶
         const groups = new Map();
         list.forEach(s => {
             const key = `${s.paperNo || '無發票號'}__${s.client || ''}`;
@@ -603,7 +709,6 @@ window.renderPendingReceivables = debounce(function() {
         });
         container.innerHTML = html;
     } else {
-        // 依單一品項明細表格檢視
         const rowsHtml = list.map(s => {
             const d = new Date(s.time);
             const dateStr = isNaN(d.getTime()) ? '' : `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`;
@@ -694,7 +799,6 @@ window.quickPaySingleGroup = function(rowIdxArr) {
     window.openExecutePaymentModal();
 };
 
-// 開啟執行沖帳視窗
 window.openExecutePaymentModal = function() {
     const selSet = window.paymentModuleState.selectedRowIndices;
     const selectedItems = (globalSalesDetails || []).filter(s => selSet.has(s.rowIdx) && window.isValidReceivableItem(s) && s.payStatus !== '已沖帳');
@@ -745,7 +849,6 @@ window.recalcPaymentDiff = function() {
     document.getElementById('pe_diffAmount').value = Math.round((rec - act) * 100) / 100;
 };
 
-// 確認執行沖帳（寫入沖帳記錄表 ＋ 更新銷售明細總表 N~Q 欄）
 window.confirmExecutePayment = function() {
     const btn = event ? event.currentTarget : null;
     const selSet = window.paymentModuleState.selectedRowIndices;
@@ -929,6 +1032,9 @@ window.voidPaymentRecord = function(rowIdx) {
         salesRowIndices: salesRowIndices
     }, () => {
         window.renderPaymentModule();
+        if (window.paymentModuleState.unpaidReconcile.extRows.length > 0) {
+            window.runUnpaidReconciliation(true);
+        }
         showToast(`🗑️ 已作廢沖帳單 ${p.paymentNo}，關聯明細已退回「未收款」`);
     });
 };
@@ -968,10 +1074,6 @@ window.exportPaymentRecordsExcel = function() {
 // 5. 解析外部「未收款明細.xlsx (未付款-OLD)」通用引擎
 // ============================================================================
 window.parseUnpaidExcelRows = function(aoa) {
-    // 欄位結構對應「未收款明細.xlsx」：
-    // A(0):訂單代號, B(1):客戶代號, C(2):出貨日期, D(3):註銷, E(4):是否付款,
-    // F(5):產品代號, G(6):出貨數量, H(7):單價, I(8):總價, J(9):發票號碼,
-    // K(10):傋考, L(11):客戶編號, M(12):沖帳日, N(13)~P(15):核對備註
     let headerIdx = 0;
     for (let r = 0; r < Math.min(10, aoa.length); r++) {
         const rowStr = (aoa[r] || []).map(x => String(x || '').trim()).join(',');
@@ -1001,7 +1103,6 @@ window.parseUnpaidExcelRows = function(aoa) {
         const extPayDate   = String(row[12] || '').trim();
         const auditNote    = [row[13], row[14], row[15]].map(x => String(x || '').trim()).filter(Boolean).join(' | ');
 
-        // 排除最底部的總計列 (無訂單代號、無客戶代號、無產品代號、無發票號碼)
         if (!extOrderCode && !custId && !ispn && !paperNo) continue;
         if (isVoid) continue;
 
@@ -1041,7 +1142,7 @@ window.handleUnpaidExcelUpload = function(input, sourceTab) {
 
     const file = input.files[0];
     const fileName = file.name;
-    showLoading("📂 正在解析外部系統「未收款明細.xlsx」...");
+    showLoading("📂 正在解析外部系統「未收款明細.xlsx」並篩選比對無誤資料...");
 
     const reader = new FileReader();
     reader.onload = function(e) {
@@ -1057,7 +1158,6 @@ window.handleUnpaidExcelUpload = function(input, sourceTab) {
 
             if (rows.length === 0) return alert("未解析到有效的未收款明細資料列！");
 
-            // 同時更新頁籤 3 (5月前歷史帳暫存) 與 頁籤 4 (跨系統未收比對中心)
             window.paymentModuleState.unpaidReconcile.fileName = fileName;
             window.paymentModuleState.unpaidReconcile.extRows = rows;
             window.saveUnpaidReconcileWorkspace();
@@ -1070,7 +1170,8 @@ window.handleUnpaidExcelUpload = function(input, sourceTab) {
                 showToast(`✅ 已掃描完成！共發現 ${window.paymentModuleState.legacyStagedItems.length} 筆尚未匯入的「5月前歷史未收帳」`);
             } else {
                 window.renderUnpaidReconcileCenter();
-                showToast(`✅ 未收款明細比對完成（共載入 ${rows.length} 筆外部未收明細）！`);
+                // 【項目 2 核心流程】上傳分析完成後，自動跳出「⚡ 比對無誤資料 — 一鍵快速確認沖帳」彈跳視窗
+                window.openFastAccurateReconcileModal(true);
             }
         } catch (err) {
             hideLoading();
@@ -1084,14 +1185,406 @@ window.handleUnpaidExcelUpload = function(input, sourceTab) {
 };
 
 // ============================================================================
-// 6. 【頁籤 3】5月前歷史未收帳管理與一鍵安全匯入
+// 6. 【項目 2 核心功能】比對無誤資料快速沖帳彈跳視窗 ＆ 防呆撤銷返回上一步
+// ============================================================================
+window.getAccurateReadyForPayItems = function() {
+    const ur = window.paymentModuleState.unpaidReconcile;
+    const results = ur.results || [];
+    // 比對後完全正確且本系統尚未沖帳的兩類資料：
+    // 1. ONLY_ERP_UNPAID：發票於本系統完整無誤，且外部「未收款明細」中已不在未收名單（代表外部已收款沖帳，僅待本系統同步一鍵沖帳）
+    // 2. MATCH：雙系統發票號碼、客戶、數量、總價 100% 完全吻合無誤之未收發票
+    return results.filter(r =>
+        (r.category === 'ONLY_ERP_UNPAID' || r.category === 'MATCH') &&
+        r.erpRowIndices && r.erpRowIndices.length > 0
+    );
+};
+
+window.updateFastUndoButtonsUI = function() {
+    const accurateAll = window.getAccurateReadyForPayItems();
+    const btnOpen = document.getElementById('btnOpenFastAccurateModal');
+    const badge = document.getElementById('fastAccurateRemainBadge');
+    if (btnOpen && badge) {
+        badge.innerText = accurateAll.length;
+        btnOpen.style.display = (window.paymentModuleState.unpaidReconcile.extRows.length > 0 && accurateAll.length > 0)
+            ? 'inline-block'
+            : 'none';
+    }
+
+    const stack = window.paymentModuleState.fastBatchHistoryStack || [];
+    const btnUndo = document.getElementById('btnUndoFastAccurate');
+    const banner = document.getElementById('fastUndoAlertBanner');
+    const bannerText = document.getElementById('fastUndoAlertText');
+
+    if (stack.length > 0) {
+        const lastBatch = stack[stack.length - 1];
+        if (btnUndo) {
+            btnUndo.style.display = 'inline-block';
+            btnUndo.innerHTML = `⏪ 撤銷上次快速沖帳 (${lastBatch.invoiceCount}張 / $${Number(lastBatch.totalAmount).toLocaleString()})`;
+        }
+        if (banner && bannerText) {
+            banner.style.setProperty('display', 'flex', 'important');
+            bannerText.innerText = `剛才已快速沖銷 ${lastBatch.invoiceCount} 張無誤發票（共 $${Number(lastBatch.totalAmount).toLocaleString()}，產生 ${lastBatch.paymentRecords.length} 筆沖帳單）。若操作有誤可立即撤銷返回！`;
+        }
+    } else {
+        if (btnUndo) btnUndo.style.display = 'none';
+        if (banner) banner.style.setProperty('display', 'none', 'important');
+    }
+};
+
+window.openFastAccurateReconcileModal = function(isAutoTriggered = false) {
+    const accurateAll = window.getAccurateReadyForPayItems();
+    window.updateFastUndoButtonsUI();
+
+    if (accurateAll.length === 0) {
+        if (!isAutoTriggered) {
+            alert("目前所有比對無誤的發票皆已完成沖帳！請直接於主畫面處理待確認差異項目。");
+        } else {
+            showToast("✅ 外部未收款報表已載入，目前無待快速沖帳項目，請直接檢視下方比對清單。");
+        }
+        return;
+    }
+
+    const syncCount = accurateAll.filter(r => r.category === 'ONLY_ERP_UNPAID').length;
+    const matchCount = accurateAll.filter(r => r.category === 'MATCH').length;
+
+    setSafeText('fastCntAll', accurateAll.length);
+    setSafeText('fastCntSync', syncCount);
+    setSafeText('fastCntMatch', matchCount);
+
+    // 預設優先選取「全部比對無誤待沖項目」(若只想先沖外部已銷帳項目亦可一鍵切換)
+    window.paymentModuleState.fastModalMode = 'ALL_ACCURATE';
+    ['ALL_ACCURATE', 'SYNC_PAID', 'EXACT_MATCH'].forEach(m => {
+        const b = document.getElementById('btnFastMode_' + m);
+        if (b) b.classList.toggle('active', m === 'ALL_ACCURATE');
+    });
+
+    // 更新客戶下拉篩選器
+    const clients = [...new Set(accurateAll.map(r => r.client).filter(Boolean))].sort();
+    const clientSel = document.getElementById('fastFilterClient');
+    if (clientSel) {
+        clientSel.innerHTML = '<option value="">🏢 所有客戶 (顯示全部)</option>' +
+            clients.map(c => `<option value="${escapeQuotes(c)}">${escapeQuotes(c)}</option>`).join('');
+    }
+
+    if (document.getElementById('fast_payDate')) document.getElementById('fast_payDate').value = getTodayStr();
+    if (document.getElementById('fast_payMethod')) document.getElementById('fast_payMethod').value = '外部系統同步沖帳';
+    if (document.getElementById('fast_memo')) document.getElementById('fast_memo').value = `跨系統比對無誤快速確認沖帳 (${window.paymentModuleState.unpaidReconcile.fileName || ''})`;
+
+    window.renderFastAccurateList();
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('fastAccurateReconcileModal')).show();
+};
+
+window.setFastModalMode = function(mode) {
+    window.paymentModuleState.fastModalMode = mode;
+    ['ALL_ACCURATE', 'SYNC_PAID', 'EXACT_MATCH'].forEach(m => {
+        const b = document.getElementById('btnFastMode_' + m);
+        if (b) b.classList.toggle('active', m === mode);
+    });
+    window.renderFastAccurateList();
+};
+
+window.getFilteredFastAccurateItems = function() {
+    const mode = window.paymentModuleState.fastModalMode || 'ALL_ACCURATE';
+    const fClient = document.getElementById('fastFilterClient')?.value || '';
+    let list = window.getAccurateReadyForPayItems();
+
+    if (mode === 'SYNC_PAID') list = list.filter(r => r.category === 'ONLY_ERP_UNPAID');
+    else if (mode === 'EXACT_MATCH') list = list.filter(r => r.category === 'MATCH');
+
+    if (fClient) list = list.filter(r => r.client === fClient);
+    return list;
+};
+
+window.renderFastAccurateList = function() {
+    const container = document.getElementById('fastAccurateListContainer');
+    if (!container) return;
+
+    const list = window.getFilteredFastAccurateItems();
+    const accurateAll = window.getAccurateReadyForPayItems();
+    setSafeText('fastCntAll', accurateAll.length);
+    setSafeText('fastCntSync', accurateAll.filter(r => r.category === 'ONLY_ERP_UNPAID').length);
+    setSafeText('fastCntMatch', accurateAll.filter(r => r.category === 'MATCH').length);
+
+    if (list.length === 0) {
+        container.innerHTML = `<div class="text-center text-muted py-4">🎉 此分類下所有比對無誤的資料皆已完成沖帳！</div>`;
+        window.updateFastSelectedSummary();
+        return;
+    }
+
+    const rowsHtml = list.map((r, idx) => {
+        const typeBadge = r.category === 'ONLY_ERP_UNPAID'
+            ? `<span class="badge" style="background-color:#862e9c;">🟣 外部已銷帳・待本系統同步</span>`
+            : `<span class="badge bg-success">🟢 雙邊6大欄位 100% 吻合</span>`;
+
+        return `
+        <tr>
+            <td class="text-center">
+                <input type="checkbox" class="form-check-input cb-fast-acc" value="${escapeQuotes(r.recKey)}" data-amt="${r.erpTotal || 0}" style="transform:scale(1.25); cursor:pointer;" checked onchange="window.updateFastSelectedSummary()">
+            </td>
+            <td class="text-center text-muted fw-bold">${idx + 1}</td>
+            <td class="fw-bold text-primary">${escapeQuotes(r.invNo)}</td>
+            <td>${escapeQuotes(r.date || '')}</td>
+            <td class="fw-bold text-dark">${escapeQuotes(r.client)}</td>
+            <td>${typeBadge}</td>
+            <td class="text-center fw-bold">${r.erpQty}</td>
+            <td class="text-end fw-bold text-danger fs-6">$${Number(r.erpTotal || 0).toLocaleString()}</td>
+        </tr>`;
+    }).join('');
+
+    container.innerHTML = `
+    <table class="table table-hover table-bordered align-middle mb-0" style="font-size: 0.88rem;">
+        <thead class="table-light position-sticky top-0" style="z-index: 5;">
+            <tr>
+                <th class="text-center" style="width: 45px;">
+                    <input type="checkbox" class="form-check-input" style="transform:scale(1.25);" checked onchange="window.toggleAllFastCheckboxes(this.checked)">
+                </th>
+                <th class="text-center" style="width: 45px;">#</th>
+                <th>發票號碼</th>
+                <th>開立日期</th>
+                <th>客戶名稱</th>
+                <th>AI 智慧比對無誤類型</th>
+                <th class="text-center">總數量</th>
+                <th class="text-end">確認沖帳金額</th>
+            </tr>
+        </thead>
+        <tbody>${rowsHtml}</tbody>
+    </table>`;
+
+    window.updateFastSelectedSummary();
+};
+
+window.toggleAllFastCheckboxes = function(checked) {
+    document.querySelectorAll('.cb-fast-acc').forEach(cb => {
+        cb.checked = checked;
+    });
+    window.updateFastSelectedSummary();
+};
+
+window.updateFastSelectedSummary = function() {
+    const cbs = document.querySelectorAll('.cb-fast-acc:checked');
+    let total = 0;
+    cbs.forEach(cb => {
+        total += (parseFloat(cb.getAttribute('data-amt')) || 0);
+    });
+    setSafeText('fastSelectedCount', cbs.length);
+    setSafeText('fastSelectedTotalAmt', '$' + Math.round(total).toLocaleString());
+};
+
+// 執行快速一鍵確認沖帳（完成後若無剩餘無誤項目，彈跳視窗自動關閉消失！）
+window.confirmFastAccuratePayment = async function() {
+    const btn = event ? event.currentTarget : null;
+    const cbs = document.querySelectorAll('.cb-fast-acc:checked');
+    if (cbs.length === 0) return alert("請至少勾選一筆要確認沖帳的無誤發票！");
+
+    const payDate = document.getElementById('fast_payDate')?.value || getTodayStr();
+    const payMethod = document.getElementById('fast_payMethod')?.value || '外部系統同步沖帳';
+    const memo = document.getElementById('fast_memo')?.value.trim() || '跨系統比對無誤快速確認沖帳';
+
+    const selectedKeys = new Set(Array.from(cbs).map(cb => cb.value));
+    const accurateAll = window.getAccurateReadyForPayItems();
+    const targetResults = accurateAll.filter(r => selectedKeys.has(r.recKey));
+    if (targetResults.length === 0) return;
+
+    if (window.lockButton(btn)) return;
+    showLoading(`⚡ 正在為 ${targetResults.length} 張比對無誤發票執行一鍵快速沖帳...`);
+
+    try {
+        // 依「客戶名稱」自動分組建立沖帳單，確保沖帳記錄表每筆客戶帳務清晰
+        const byClient = new Map();
+        targetResults.forEach(r => {
+            const cName = r.client || '未知客戶';
+            if (!byClient.has(cName)) byClient.set(cName, []);
+            byClient.get(cName).push(...(r.erpRowIndices || []));
+        });
+
+        const todayCompact = getTodayStr().replace(/-/g, '');
+        let baseSeq = (globalPayments || []).filter(p => String(p.paymentNo || '').includes(todayCompact)).length;
+
+        const createdPayRecords = [];
+        const affectedSalesRowIndices = [];
+        let batchTotalAmount = 0;
+
+        let idxOffset = 0;
+        for (const [clientName, rowIndices] of byClient.entries()) {
+            const uniqueRowIds = [...new Set(rowIndices)];
+            const salesItems = (globalSalesDetails || []).filter(s => uniqueRowIds.includes(s.rowIdx) && s.payStatus !== '已沖帳');
+            if (salesItems.length === 0) continue;
+
+            baseSeq++;
+            idxOffset++;
+            const paymentNo = `PAY-${todayCompact}-${String(baseSeq).padStart(3, '0')}`;
+            const paperNos = [...new Set(salesItems.map(s => s.paperNo).filter(Boolean))].join(', ');
+
+            let recTotal = 0;
+            const itemsSnap = salesItems.map(s => {
+                const sub = Math.round((Number(s.subtotal) || ((Number(s.qty)||0) * (Number(s.price)||0))));
+                recTotal += sub;
+                return {
+                    rowIdx: s.rowIdx,
+                    paperNo: s.paperNo,
+                    orderNo: s.orderNo,
+                    name: s.name,
+                    qty: s.qty,
+                    price: s.price,
+                    subtotal: sub
+                };
+            });
+
+            const payRec = {
+                rowIdx: Date.now() + Math.floor(Math.random() * 1000) + idxOffset,
+                paymentNo: paymentNo,
+                time: Date.now() + idxOffset,
+                payDate: payDate,
+                client: clientName,
+                payMethod: payMethod,
+                paperNos: paperNos,
+                receivableTotal: recTotal,
+                receivedAmount: recTotal,
+                diffAmount: 0,
+                status: '已沖帳結清',
+                itemsJson: JSON.stringify(itemsSnap),
+                sourceType: '跨系統比對快速沖帳',
+                staff: myName || '管理員',
+                memo: memo
+            };
+
+            const salesUpdates = [];
+            salesItems.forEach(s => {
+                const sub = Math.round((Number(s.subtotal) || ((Number(s.qty)||0) * (Number(s.price)||0))));
+                s.payStatus = '已沖帳';
+                s.paidAmount = sub;
+                s.payDate = payDate;
+                s.paymentNo = paymentNo;
+                affectedSalesRowIndices.push(s.rowIdx);
+                salesUpdates.push({
+                    rowIdx: s.rowIdx,
+                    payStatus: '已沖帳',
+                    paidAmount: sub,
+                    payDate: payDate,
+                    paymentNo: paymentNo
+                });
+            });
+
+            globalPayments.unshift(payRec);
+            createdPayRecords.push({
+                rowIdx: payRec.rowIdx,
+                paymentNo: payRec.paymentNo,
+                salesRowIndices: salesUpdates.map(u => u.rowIdx)
+            });
+            batchTotalAmount += recTotal;
+
+            await executeSupabaseAction('executePaymentReconcile', {
+                paymentRecord: payRec,
+                salesUpdates: salesUpdates
+            });
+        }
+
+        // 將本次快速沖帳存入防呆返回堆疊 (支援隨時撤銷返回上一步)
+        if (createdPayRecords.length > 0) {
+            window.paymentModuleState.fastBatchHistoryStack.push({
+                batchId: `FB_${Date.now()}`,
+                time: Date.now(),
+                invoiceCount: targetResults.length,
+                totalAmount: batchTotalAmount,
+                paymentRecords: createdPayRecords,
+                allSalesRowIndices: affectedSalesRowIndices
+            });
+        }
+
+        // 重新執行未收勾稽與畫面更新
+        window.runUnpaidReconciliation(true);
+        window.renderPaymentModule();
+        window.saveUnpaidReconcileWorkspace();
+        hideLoading();
+
+        const remainingAccurate = window.getAccurateReadyForPayItems();
+        const modalEl = document.getElementById('fastAccurateReconcileModal');
+
+        // 【項目 2 關鍵體驗】待所有正確無誤資料沖帳完畢（或該分類已清空）後，彈跳視窗自動消失，切換至步驟 2 處理待確認差異！
+        if (remainingAccurate.length === 0 || window.getFilteredFastAccurateItems().length === 0) {
+            if (modalEl) {
+                const modalInst = bootstrap.Modal.getInstance(modalEl);
+                if (modalInst) modalInst.hide();
+            }
+            window.setUnpaidReconcileFilter('ALL_DIFF');
+            showToast(`🎉 已完成 ${targetResults.length} 張無誤發票快速沖帳（共 $${batchTotalAmount.toLocaleString()}）！視窗已自動關閉，請接著檢視待確認差異。`);
+        } else {
+            window.renderFastAccurateList();
+            window.updateFastUndoButtonsUI();
+            showToast(`✅ 已成功沖銷 ${targetResults.length} 張發票（共 $${batchTotalAmount.toLocaleString()}）！尚有 ${remainingAccurate.length} 筆無誤資料可繼續沖帳。`);
+        }
+    } catch (err) {
+        hideLoading();
+        console.error("快速沖帳失敗:", err);
+        alert("快速沖帳執行失敗：" + err.message);
+    }
+};
+
+// 【項目 2 防呆核心】撤銷上次快速沖帳（返回上一步）
+window.undoLastFastAccuratePayment = async function() {
+    const stack = window.paymentModuleState.fastBatchHistoryStack || [];
+    if (stack.length === 0) return alert("目前沒有可撤銷的快速沖帳批次紀錄！");
+
+    const lastBatch = stack[stack.length - 1];
+    if (!confirm(`⏪ 防呆返回確認：\n確定要撤銷剛才執行的快速沖帳批次嗎？\n\n▪ 沖銷發票數：${lastBatch.invoiceCount} 張\n▪ 沖銷總金額：$${Number(lastBatch.totalAmount).toLocaleString()}\n▪ 產生沖帳單：${lastBatch.paymentRecords.map(p => p.paymentNo).join(', ')}\n\n確認後系統將自動作廢上述沖帳單，並將所有關聯明細完整退回「未收款」狀態！`)) {
+        return;
+    }
+
+    showLoading("⏪ 正在撤銷上次快速沖帳並還原明細狀態...");
+    try {
+        stack.pop();
+
+        // 1. 還原前端記憶體狀態
+        const payRowSet = new Set(lastBatch.paymentRecords.map(p => p.rowIdx));
+        const payNoSet = new Set(lastBatch.paymentRecords.map(p => p.paymentNo));
+        const salesRowSet = new Set(lastBatch.allSalesRowIndices || []);
+
+        (globalPayments || []).forEach(p => {
+            if (payRowSet.has(p.rowIdx) || payNoSet.has(p.paymentNo)) {
+                p.status = '已作廢';
+            }
+        });
+
+        (globalSalesDetails || []).forEach(s => {
+            if (salesRowSet.has(s.rowIdx) || payNoSet.has(s.paymentNo)) {
+                s.payStatus = '未收款';
+                s.paidAmount = 0;
+                s.payDate = '';
+                s.paymentNo = '';
+            }
+        });
+
+        // 2. 同步還原 Supabase 資料庫
+        for (const pRec of lastBatch.paymentRecords) {
+            await executeSupabaseAction('voidPaymentRecord', {
+                rowIdx: pRec.rowIdx,
+                paymentNo: pRec.paymentNo,
+                salesRowIndices: pRec.salesRowIndices
+            });
+        }
+
+        // 3. 重新計算比對並重新打開快速沖帳彈跳視窗，讓操作員重新勾選
+        window.runUnpaidReconciliation(true);
+        window.renderPaymentModule();
+        window.saveUnpaidReconcileWorkspace();
+        hideLoading();
+
+        window.openFastAccurateReconcileModal(false);
+        showToast(`⏪ 已成功撤銷上次快速沖帳！${lastBatch.invoiceCount} 張發票已完整退回未收狀態。`);
+    } catch (err) {
+        hideLoading();
+        alert("撤銷失敗：" + err.message);
+    }
+};
+
+// ============================================================================
+// 7. 【頁籤 3】5月前歷史未收帳管理與一鍵安全匯入
 // ============================================================================
 window.prepareLegacyStagedItems = function(extRows) {
     const preMayRows = (extRows || []).filter(r => r.isPreMay && !r.isPaid);
     const staged = [];
 
     preMayRows.forEach((r, idx) => {
-        // 檢查是否已經匯入過 globalSalesDetails
         const alreadyInErp = (globalSalesDetails || []).some(s =>
             String(s.paperNo || '').trim().toUpperCase() === r.paperNo &&
             Math.abs((Number(s.qty) || 0) - r.qty) < 0.001 &&
@@ -1166,7 +1659,6 @@ window.renderLegacyUnpaidManager = function() {
         if (btnImport) btnImport.style.display = 'none';
     }
 
-    // 顯示已存在於 globalSalesDetails 的 5月前歷史帳款
     const existingLegacy = (globalSalesDetails || []).filter(s => window.isValidReceivableItem(s) && window.isLegacySalesItem(s));
     if (existingLegacy.length === 0) {
         existingBox.innerHTML = `<div class="text-center text-muted py-4 border rounded bg-white">目前系統內尚無已匯入的 5月前歷史未收帳款（請點擊上方「📂 上傳未收款明細.xlsx」進行掃描匯入）</div>`;
@@ -1267,7 +1759,7 @@ window.confirmImportLegacyUnpaid = function() {
 };
 
 // ============================================================================
-// 7. 【頁籤 4】跨系統未收款/沖帳報表智慧勾稽中心
+// 8. 【頁籤 4】跨系統未收款/沖帳報表智慧勾稽中心
 // ============================================================================
 window.saveUnpaidReconcileWorkspace = function() {
     try {
@@ -1280,7 +1772,8 @@ window.saveUnpaidReconcileWorkspace = function() {
             fileName: ur.fileName,
             uploadedAt: tStr,
             extRows: ur.extRows,
-            reviewedMap: ur.reviewedMap || {}
+            reviewedMap: ur.reviewedMap || {},
+            fastBatchHistoryStack: window.paymentModuleState.fastBatchHistoryStack || []
         }));
 
         const badge = document.getElementById('unpaidRecSaveBadge');
@@ -1305,6 +1798,7 @@ window.loadUnpaidReconcileWorkspace = function() {
         ur.uploadedAt = parsed.uploadedAt || '';
         ur.extRows = parsed.extRows;
         ur.reviewedMap = parsed.reviewedMap || {};
+        window.paymentModuleState.fastBatchHistoryStack = parsed.fastBatchHistoryStack || [];
 
         window.prepareLegacyStagedItems(ur.extRows);
         window.runUnpaidReconciliation(true);
@@ -1327,8 +1821,10 @@ window.clearUnpaidReconcileWorkspace = function() {
         searchTerm: ''
     };
     window.paymentModuleState.legacyStagedItems = [];
+    window.paymentModuleState.fastBatchHistoryStack = [];
     window.renderUnpaidReconcileCenter();
     window.renderLegacyUnpaidManager();
+    window.updateFastUndoButtonsUI();
     showToast("🗑️ 已清除未收款比對暫存記憶");
 };
 
@@ -1340,7 +1836,6 @@ window.runUnpaidReconciliation = function(silent = false) {
         return;
     }
 
-    // 將外部未收明細依「發票號碼 (J欄)」分組
     const extByInv = new Map();
     extRows.forEach(r => {
         const key = r.paperNo || `__NOINV_${r.extOrderCode}`;
@@ -1348,12 +1843,10 @@ window.runUnpaidReconciliation = function(silent = false) {
         extByInv.get(key).push(r);
     });
 
-    // 找出外部檔案涵蓋的最晚日期，避免把外部報表匯出日期之後的新發票誤判為外部已沖帳
     const validExtDates = extRows.map(r => r.date).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
     const maxExtDate = validExtDates.length > 0 ? validExtDates[validExtDates.length - 1] : '2099-12-31';
     const maxExtTimestamp = new Date(maxExtDate + 'T23:59:59').getTime();
 
-    // 將本系統銷售明細 (含未收與已沖帳) 依「發票號碼」分組
     const erpByInv = new Map();
     (globalSalesDetails || []).forEach(s => {
         if (!window.isValidReceivableItem(s)) return;
@@ -1449,7 +1942,6 @@ window.runUnpaidReconciliation = function(silent = false) {
             };
             results.push(item);
         } else if (eList.length > 0 && xList.length === 0) {
-            // 僅檢查本系統「未收款」但外部「未收款明細.xlsx」裡面沒有的項目 (代表外部可能已經收款沖帳了，本系統還沒沖)
             const unpaidErpList = eList.filter(e => e.payStatus !== '已沖帳');
             if (unpaidErpList.length === 0) return;
 
@@ -1471,8 +1963,8 @@ window.runUnpaidReconciliation = function(silent = false) {
                 erpTotal: uTotal,
                 extTotal: null,
                 erpPayStatus: '未收款 (本系統尚未沖帳)',
-                extPayStatus: '外部不在未收表 (外部可能已沖帳)',
-                diag: `🟣 本系統仍列為「未收款 ($${uTotal.toLocaleString()})」，但外部未收款明細無此發票（若外部系統已收款銷帳，請點擊右側「⚡ 一鍵同步沖帳」將本系統同步標記為已沖帳）`,
+                extPayStatus: '外部不在未收表 (外部已銷帳)',
+                diag: `🟣 本系統仍列為「未收款 ($${uTotal.toLocaleString()})」，但外部未收款明細無此發票（代表外部已收款銷帳，可一鍵同步標記為已沖帳）`,
                 erpRowIndices: unpaidErpList.map(e => e.rowIdx)
             };
             results.push(item);
@@ -1480,6 +1972,7 @@ window.runUnpaidReconciliation = function(silent = false) {
     });
 
     ur.results = results;
+    window.updateFastUndoButtonsUI();
     window.renderUnpaidReconcileCenter();
 };
 
@@ -1487,6 +1980,8 @@ window.renderUnpaidReconcileCenter = function() {
     const ur = window.paymentModuleState.unpaidReconcile;
     const results = ur.results || [];
     const revMap = ur.reviewedMap || {};
+
+    window.updateFastUndoButtonsUI();
 
     if (!ur.extRows || ur.extRows.length === 0) {
         if (document.getElementById('unpaidRecKpiRow')) document.getElementById('unpaidRecKpiRow').style.display = 'none';
@@ -1620,10 +2115,14 @@ window.renderUnpaidReconcileTable = function() {
             }
 
             if (r.category === 'ONLY_ERP_UNPAID' && r.erpRowIndices && r.erpRowIndices.length > 0) {
-                actionHtml += `<button class="btn btn-sm btn-primary fw-bold w-100" onclick='window.quickPaySingleGroup(${JSON.stringify(r.erpRowIndices)})'>⚡ 一鍵同步沖帳</button>`;
+                actionHtml += `<button class="btn btn-sm btn-primary fw-bold w-100" onclick='window.quickPaySingleGroup(${JSON.stringify(r.erpRowIndices)})'>⚡ 單張同步沖帳</button>`;
             }
         } else {
-            actionHtml = `<span class="badge bg-light text-success border">帳務一致</span>`;
+            if (r.erpRowIndices && r.erpRowIndices.length > 0) {
+                actionHtml = `<button class="btn btn-sm btn-outline-success fw-bold w-100" onclick='window.quickPaySingleGroup(${JSON.stringify(r.erpRowIndices)})'>💰 執行沖帳</button>`;
+            } else {
+                actionHtml = `<span class="badge bg-light text-success border">帳務一致</span>`;
+            }
         }
 
         return `
