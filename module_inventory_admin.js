@@ -1,7 +1,7 @@
 /**
  * ============================================================================
  * 模組 4：庫存、訂貨與管理員後台 (module_inventory_admin.js) 
- * 【防連點保護與新版搜尋綁定】確保雙引號品名不破圖，並阻絕重複扣庫
+ * 【防連點保護、進貨品項後台管理 ＆ A5 橫式訂貨單單頁防裁切升級版】
  * ============================================================================
  */
 
@@ -17,11 +17,9 @@ window.parseBatchesSafely = function(rawStr, defaultQty) {
         parsed = rawStr; 
     }
     
-    // 如果確實是標準陣列，直接回傳
     if (Array.isArray(parsed)) {
         return parsed;
     } else {
-        // 如果是純數字 (如 12345) 或純文字，強制包裝成標準的單一物件陣列
         return [{ lot: String(parsed), exp: '', qty: defaultQty || 0 }];
     }
 };
@@ -61,17 +59,18 @@ window.renderInventory = debounce(function() {
         arr = arr.filter(v => 
             (v.name || '').toLowerCase().includes(term) || 
             (v.supplier || '').toLowerCase().includes(term) || 
-            String(v.internalCode || '').toLowerCase().includes(term)
+            String(v.internalCode || '').toLowerCase().includes(term) ||
+            String(v.assetCodeCombined || '').toLowerCase().includes(term)
         );
     }
     
     let totalVal = 0; let alertCount = 0; 
     globalInventory.forEach(v => { 
-        totalVal += (v.qty * v.cost); 
+        totalVal += ((Number(v.qty) || 0) * (Number(v.cost) || 0)); 
         if(v.qty <= v.alertQty) alertCount++; 
     });
     
-    document.getElementById('stkTotalValue').innerText = `$${totalVal.toLocaleString()}`; 
+    document.getElementById('stkTotalValue').innerText = `$${Math.round(totalVal).toLocaleString()}`; 
     document.getElementById('stkAlertCount').innerText = `${alertCount} 項`;
     
     const c = document.getElementById('stkListContainer'); 
@@ -98,7 +97,7 @@ window.renderInventory = debounce(function() {
             <div class="d-flex justify-content-between align-items-start mb-2">
                 <div>
                     <div class="fw-bold fs-6 text-dark"><span class="stock-dot ${dot}"></span>${v.name} <span class="badge bg-secondary ms-1">${v.internalCode||''}</span></div>
-                    <div class="small text-primary mt-1 fw-bold">對應資材碼: ${v.assetCodeCombined||'無'}</div>
+                    <div class="small text-primary mt-1 fw-bold">對應資材碼: ${v.assetCodeCombined||'無'} | 進貨價: $${Number(v.cost||0).toLocaleString()}</div>
                     <div class="small text-muted mt-1">${batchDisplay}</div>
                     ${alertHTML}
                 </div>
@@ -282,14 +281,14 @@ window.openAdjustModal = function(nameStr) {
     
     if(nameStr) { 
         const v = globalInventory.find(x => x.name === nameStr); 
-        document.getElementById('adjRowIdx').value = v.rowIdx; 
-        document.getElementById('adjName').value = v.name; 
+        document.getElementById('adjRowIdx').value = v ? v.rowIdx : ''; 
+        document.getElementById('adjName').value = v ? v.name : nameStr; 
         document.getElementById('adjName').onclick = null; 
         document.getElementById('adjName').classList.remove('fake-input-btn'); 
-        document.getElementById('adjInternalCode').value = v.internalCode || ''; 
-        document.getElementById('adjAlert').value = v.alertQty; 
-        document.getElementById('adjCost').value = v.cost; 
-        document.getElementById('adjSup').value = v.supplier || ''; 
+        document.getElementById('adjInternalCode').value = v ? (v.internalCode || '') : ''; 
+        document.getElementById('adjAlert').value = v ? v.alertQty : 10; 
+        document.getElementById('adjCost').value = v ? v.cost : 0; 
+        document.getElementById('adjSup').value = v ? (v.supplier || '') : ''; 
     } else { 
         document.getElementById('adjRowIdx').value = ''; 
         document.getElementById('adjName').value = ''; 
@@ -308,7 +307,6 @@ window.openAdjustModal = function(nameStr) {
 };
 
 window.selectProductForAdj = function(val) { 
-    // val 現在可以直接從記憶體中安全取得，不被雙引號破壞
     document.getElementById('adjName').value = val; 
     const p = globalCatalog.find(x => x.productName === val); 
     if(p) {
@@ -363,22 +361,20 @@ window.saveInventoryAdjust = function() {
 
     let currentNewQty = changeQty;
 
-    if(idx) { 
-        const v = globalInventory.find(x => x.rowIdx === parseInt(idx)); 
-        if(v) { 
-            v.qty += changeQty; 
-            currentNewQty = v.qty; 
-            v.alertQty = alertQty; v.cost = cost; v.supplier = sup; 
-            if(internalCode) v.internalCode = internalCode; 
-            
-            let batches = window.parseBatchesSafely(v.batchesStr, v.qty);
-            if (lot || exp) {
-                let bIdx = batches.findIndex(b => b.lot === lot && b.exp === exp);
-                if (bIdx >= 0) batches[bIdx].qty += changeQty;
-                else batches.push({ lot: lot, exp: exp, qty: changeQty });
-            }
-            v.batchesStr = JSON.stringify(batches);
-        } 
+    const v = globalInventory.find(x => x.name === name || (idx && x.rowIdx === parseInt(idx))); 
+    if(v) { 
+        v.qty += changeQty; 
+        currentNewQty = v.qty; 
+        v.alertQty = alertQty; v.cost = cost; v.supplier = sup; 
+        if(internalCode) v.internalCode = internalCode; 
+        
+        let batches = window.parseBatchesSafely(v.batchesStr, v.qty);
+        if (lot || exp) {
+            let bIdx = batches.findIndex(b => b.lot === lot && b.exp === exp);
+            if (bIdx >= 0) batches[bIdx].qty += changeQty;
+            else batches.push({ lot: lot, exp: exp, qty: changeQty });
+        }
+        v.batchesStr = JSON.stringify(batches);
     } else { 
         let newBatches = [];
         if (lot || exp) newBatches.push({ lot: lot, exp: exp, qty: changeQty });
@@ -396,6 +392,7 @@ window.saveInventoryAdjust = function() {
     
     if(typeof window.populateLogDropdowns === 'function') window.populateLogDropdowns(); 
     window.renderInventory(); 
+    if(typeof window.renderAdminPurchaseItems === 'function') window.renderAdminPurchaseItems();
     window.renderInvLogs(); 
     bootstrap.Modal.getOrCreateInstance(document.getElementById('adjInvModal')).hide(); 
     pushToSyncQueue('adjustInventory', payload, null);
@@ -427,7 +424,7 @@ window.updateShipmentDropdowns = function(pendingArr) {
 
 window.renderShipments = debounce(function() {
     const c = document.getElementById('stkShipContainer'); 
-    const pendingAll = globalSalesDetails.filter(s => s.shipStatus !== '已結案' && s.shipStatus !== '作廢');
+    const pendingAll = globalSalesDetails.filter(s => s.shipStatus !== '已結案' && s.shipStatus !== '歷史已結案' && s.shipStatus !== '作廢');
     
     if (pendingAll.length !== lastPendingShipmentCount) {
         window.updateShipmentDropdowns(pendingAll);
@@ -542,7 +539,7 @@ window.confirmShipment = function() {
             inv.batchesStr = JSON.stringify(batches.filter(b => b.qty > 0));
         }
     } else {
-        globalInventory.push({rowIdx:0, name: s.name, qty: -qty, alertQty: 0, cost: 0, supplier: '', internalCode: '', batchesStr: '[]'});
+        globalInventory.push({rowIdx: Date.now(), name: s.name, qty: -qty, alertQty: 0, cost: 0, supplier: '', internalCode: '', batchesStr: '[]'});
     }
     
     let currentInvQty = inv ? inv.qty : -qty; 
@@ -607,7 +604,7 @@ window.confirmShipment = function() {
 };
 
 // ============================================================================
-// 向廠商訂貨 (PO)
+// 向廠商訂貨 (PO) 與 A5 橫式單頁防裁切列印引擎
 // ============================================================================
 window.triggerPoClientChange = function(clientName) {
     const cObj = globalClients.find(x => x.name === clientName);
@@ -641,25 +638,37 @@ window.openPurchaseOrderModal = function(salesRowIdx) {
     const remainQty = s.qty - s.shippedQty;
     document.getElementById('poQty').value = remainQty;
 
-    const p = globalCatalog.find(x => x.clientName === s.client && x.productName === s.name);
-    let intCode = '';
-    if (p) {
-        intCode = p.internalCode || p.assetCode || '';
-        document.getElementById('poInternalCode').value = intCode;
-        
-        let inv = globalInventory.find(x => x.name === s.name);
-        document.getElementById('poUnitPrice').value = inv ? (inv.cost || 0) : 0;
+    // 強健搜尋合約目錄與「進貨品項 (globalInventory)」取得長固代號與最新進貨成本
+    const p = (typeof window.findProductRobust === 'function')
+        ? window.findProductRobust(s.client, null, s.name)
+        : globalCatalog.find(x => x.clientName === s.client && x.productName === s.name);
+    let inv = globalInventory.find(x => x.name === s.name);
+    if (!inv && p && p.internalCode) {
+        inv = globalInventory.find(x => x.internalCode === p.internalCode);
+    }
 
-        if (intCode) {
-            const parts = intCode.split('-');
-            if (parts.length > 1) {
-                const supCodeMatch = parts[1];
-                const supplier = globalSuppliers.find(x => x.code === supCodeMatch);
-                if (supplier) {
-                    document.getElementById('poSupplier').value = supplier.name || '';
-                    document.getElementById('poSupPhone').value = supplier.phone || '';
-                    document.getElementById('poSupFax').value = supplier.fax || '';
-                }
+    let intCode = (p && (p.internalCode || p.assetCode)) || (inv && inv.internalCode) || '';
+    document.getElementById('poInternalCode').value = intCode;
+    document.getElementById('poUnitPrice').value = inv ? (inv.cost || 0) : 0;
+
+    if (inv && inv.supplier) {
+        document.getElementById('poSupplier').value = inv.supplier;
+        const supObj = globalSuppliers.find(x => x.name === inv.supplier);
+        if (supObj) {
+            document.getElementById('poSupPhone').value = supObj.phone || '';
+            document.getElementById('poSupFax').value = supObj.fax || '';
+        }
+    }
+
+    if (intCode && !document.getElementById('poSupplier').value) {
+        const parts = intCode.split('-');
+        if (parts.length > 1) {
+            const supCodeMatch = parts[1];
+            const supplier = globalSuppliers.find(x => x.code === supCodeMatch);
+            if (supplier) {
+                document.getElementById('poSupplier').value = supplier.name || '';
+                document.getElementById('poSupPhone').value = supplier.phone || '';
+                document.getElementById('poSupFax').value = supplier.fax || '';
             }
         }
     }
@@ -732,7 +741,6 @@ window.confirmPurchaseOrder = function() {
 
     pushToSyncQueue('submitPurchaseOrder', payload, null);
     window.renderInvLogs();
-    bootstrap.Modal.getOrCreateInstance(document.getElementById('purchaseOrderModal')).show(); // 修改：保持或關閉視窗，原版隱藏
     bootstrap.Modal.getOrCreateInstance(document.getElementById('purchaseOrderModal')).hide();
     
     showToast("🛒 訂貨單已記錄！即將列印...");
@@ -750,26 +758,26 @@ window.reprintPurchaseOrderFast = function(idx) {
     }
 };
 
+// 【項目 6 關鍵修復】優化 A5 橫式 (210mm x 148mm) 訂貨單高度與間距，鎖定單頁絕不裁切成兩張
 window.printPurchaseOrder = function(data) {
     const totalAmount = parseFloat(data.poQty) * parseFloat(data.poUnitPrice || 0);
     const dateStr = data.poDate ? data.poDate.replace(/-/g, '/') : getTodayStr().replace(/-/g, '/');
 
     const html = `
-        <div style="max-width: 800px; margin: 0 auto; background: #fff; padding: 15mm 20mm; box-sizing: border-box; font-family: 'MingLiU', '微軟正黑體', sans-serif; color: #000;">
-            <div style="text-align: center; font-size: 26px; font-weight: 900; letter-spacing: 5px; margin-bottom: 10px; color: #000;">長固實業有限公司 - 訂貨單</div>
+        <div style="width: 100%; max-width: 200mm; max-height: 138mm; margin: 0 auto; background: #fff; padding: 6mm 12mm; box-sizing: border-box; font-family: 'MingLiU', '微軟正黑體', sans-serif; color: #000; page-break-inside: avoid; break-inside: avoid; page-break-after: avoid; overflow: hidden;">
+            <div style="text-align: center; font-size: 22px; font-weight: 900; letter-spacing: 4px; margin-bottom: 6px; color: #000; border-bottom: 2px double #000; padding-bottom: 4px;">長固實業有限公司 - 訂貨單</div>
             
-            <table style="width: 100%; border: none; margin-bottom: 15px; font-size: 14px; color: #000;">
+            <table style="width: 100%; border: none; margin-bottom: 8px; font-size: 13px; color: #000; line-height: 1.45;">
                 <tr>
-                    <td style="width: 50%; vertical-align: top;">
-                        <div style="font-weight: bold; font-size: 16px;">TO: ${escapeQuotes(data.poSupplier)}</div>
-                        <div style="margin-top: 5px;">電話: ${escapeQuotes(data.poSupPhone)}</div>
-                        <div>傳真: ${escapeQuotes(data.poSupFax)}</div>
-                        <div style="margin-top: 15px; color: #000; font-size: 18px; font-weight: bold;">客戶: ${escapeQuotes(data.poClientName)}</div>
-                        <div style="margin-top: 5px; font-weight: bold; font-size: 15px; color: #d32f2f;">訂單號碼: ${escapeQuotes(data.poOrderNo || '無')}</div>
+                    <td style="width: 52%; vertical-align: top;">
+                        <div style="font-weight: bold; font-size: 15px;">TO: ${escapeQuotes(data.poSupplier)}</div>
+                        <div style="margin-top: 2px;">電話: ${escapeQuotes(data.poSupPhone)} &nbsp;|&nbsp; 傳真: ${escapeQuotes(data.poSupFax)}</div>
+                        <div style="margin-top: 6px; color: #000; font-size: 16px; font-weight: bold;">客戶: ${escapeQuotes(data.poClientName)}</div>
+                        <div style="margin-top: 2px; font-weight: bold; font-size: 14px; color: #d32f2f;">訂單號碼: ${escapeQuotes(data.poOrderNo || '無')}</div>
                     </td>
-                    <td style="width: 50%; vertical-align: top; text-align: right; line-height: 1.6;">
-                        <div style="font-weight: bold;">訂貨日期: ${dateStr}</div>
-                        <div style="margin-top: 5px;">統一編號: 86477073</div>
+                    <td style="width: 48%; vertical-align: top; text-align: right;">
+                        <div style="font-weight: bold; font-size: 14px;">訂貨日期: ${dateStr}</div>
+                        <div style="margin-top: 2px;">統一編號: 86477073</div>
                         <div>公司地址: 台中市西區中美街639號</div>
                         <div>發票地址: 新北市三重區重新路5段609巷6號4樓</div>
                         <div>電話: (04)23269591 &nbsp; FAX: (04)23268576</div>
@@ -777,31 +785,31 @@ window.printPurchaseOrder = function(data) {
                 </tr>
             </table>
 
-            <table style="width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 15px; color: #000;">
+            <table style="width: 100%; border-collapse: collapse; margin-top: 4px; font-size: 14px; color: #000;">
                 <thead>
                     <tr style="background-color: #f8f9fa;">
-                        <th style="border: 2px solid #000; padding: 10px; text-align: left;">長固代號 / 品名</th>
-                        <th style="border: 2px solid #000; padding: 10px; width: 80px; text-align: center;">數量</th>
-                        <th style="border: 2px solid #000; padding: 10px; width: 100px; text-align: right;">單價</th>
-                        <th style="border: 2px solid #000; padding: 10px; width: 120px; text-align: right;">總計</th>
+                        <th style="border: 2px solid #000; padding: 6px 8px; text-align: left;">長固代號 / 品名</th>
+                        <th style="border: 2px solid #000; padding: 6px 8px; width: 75px; text-align: center;">數量</th>
+                        <th style="border: 2px solid #000; padding: 6px 8px; width: 95px; text-align: right;">單價</th>
+                        <th style="border: 2px solid #000; padding: 6px 8px; width: 110px; text-align: right;">總計</th>
                     </tr>
                 </thead>
                 <tbody>
                     <tr>
-                        <td style="border: 1px solid #000; padding: 15px 10px; text-align: left;">
-                            <div style="font-weight: bold; margin-bottom: 5px;">${escapeQuotes(data.poInternalCode)}</div>
-                            <div>${escapeQuotes(data.poItemName)}</div>
+                        <td style="border: 1px solid #000; padding: 8px 10px; text-align: left;">
+                            <div style="font-weight: bold; margin-bottom: 3px;">${escapeQuotes(data.poInternalCode)}</div>
+                            <div style="font-size: 15px;">${escapeQuotes(data.poItemName)}</div>
                         </td>
-                        <td style="border: 1px solid #000; padding: 15px 10px; text-align: center; font-size: 18px; font-weight: bold;">${data.poQty}</td>
-                        <td style="border: 1px solid #000; padding: 15px 10px; text-align: right;">${Number(data.poUnitPrice).toLocaleString()}</td>
-                        <td style="border: 1px solid #000; padding: 15px 10px; text-align: right; font-weight: bold;">${totalAmount.toLocaleString()}</td>
+                        <td style="border: 1px solid #000; padding: 8px 10px; text-align: center; font-size: 17px; font-weight: bold;">${data.poQty}</td>
+                        <td style="border: 1px solid #000; padding: 8px 10px; text-align: right;">${Number(data.poUnitPrice).toLocaleString()}</td>
+                        <td style="border: 1px solid #000; padding: 8px 10px; text-align: right; font-weight: bold;">${totalAmount.toLocaleString()}</td>
                     </tr>
                 </tbody>
             </table>
             
-            <div style="margin-top: 15px; font-size: 14px; border: 1px solid #000; padding: 10px; background-color: #fcfcfc; color: #000;">
-                <div style="margin-bottom: 5px;"><strong>📍 送貨地點：</strong>${escapeQuotes(data.poAddress)}</div>
-                <div style="margin-bottom: 5px;"><strong>📦 收貨單位：</strong>${escapeQuotes(data.poReceiveDept)}</div>
+            <div style="margin-top: 8px; font-size: 13px; border: 1px solid #000; padding: 7px 10px; background-color: #fcfcfc; color: #000; line-height: 1.45;">
+                <div style="margin-bottom: 3px;"><strong>📍 送貨地點：</strong>${escapeQuotes(data.poAddress)}</div>
+                <div style="margin-bottom: 3px;"><strong>📦 收貨單位：</strong>${escapeQuotes(data.poReceiveDept)}</div>
                 <div><strong>📝 備註事項：</strong>${escapeQuotes(data.poMemo)}</div>
             </div>
         </div>
@@ -816,7 +824,7 @@ window.printPurchaseOrder = function(data) {
 };
 
 // ============================================================================
-// 管理員後台 (Admin) 模組
+// 管理員後台 (Admin) 模組：1. 報價品項 ｜ 2. 進貨品項 ｜ 3. 客戶
 // ============================================================================
 window.populateAdminClientFilter = function() { 
     if(document.getElementById('admItemFilterSelect')) {
@@ -828,15 +836,27 @@ window.renderAdminClients = debounce(function() {
     const term = (document.getElementById('admClientSearch').value || '').toLowerCase(); 
     let arr = globalClients;
     if(term) {
-        arr = arr.filter(c => (c.name||'').toLowerCase().includes(term) || String(c.taxId||'').includes(term));
+        arr = arr.filter(c =>
+            (c.name||'').toLowerCase().includes(term) ||
+            String(c.taxId||'').includes(term) ||
+            String(c.custId||'').toLowerCase().includes(term)
+        );
     }
     
-    document.getElementById('admClientList').innerHTML = arr.map(c => `<div class="item-row bg-white d-flex justify-content-between align-items-center shadow-sm"><div><div class="fw-bold text-dark fs-6">${c.name}</div><div class="small text-muted mt-1">統編: ${c.taxId||'無'}</div></div><button class="btn btn-outline-danger btn-sm fw-bold px-3" onclick="openEditClientModal('${escapeQuotes(c.name)}', '${escapeQuotes(c.taxId)}')">📝 編輯</button></div>`).join(''); 
+    document.getElementById('admClientList').innerHTML = arr.map(c => `
+        <div class="item-row bg-white d-flex justify-content-between align-items-center shadow-sm">
+            <div>
+                <div class="fw-bold text-dark fs-6">${c.name} ${c.custId ? `<span class="badge bg-info text-dark ms-1">外部代號: ${escapeQuotes(c.custId)}</span>` : ''}</div>
+                <div class="small text-muted mt-1">統編: ${c.taxId||'無'} ${c.address ? `| 地址: ${escapeQuotes(c.address)}` : ''}</div>
+            </div>
+            <button class="btn btn-outline-danger btn-sm fw-bold px-3" onclick="openEditClientModal('${escapeQuotes(c.name)}', '${escapeQuotes(c.taxId)}')">📝 編輯</button>
+        </div>`).join(''); 
 }, 300);
 
 window.openNewClientModal = function() { 
     document.getElementById('addClientName').value = ''; 
     document.getElementById('addClientTaxId').value = ''; 
+    if (document.getElementById('addClientCustId')) document.getElementById('addClientCustId').value = '';
     document.getElementById('addClientAddress').value = ''; 
     document.getElementById('addClientReceiveDept').value = ''; 
     bootstrap.Modal.getOrCreateInstance(document.getElementById('addClientModal')).show(); 
@@ -847,16 +867,18 @@ window.submitNewClientOptimistic = function() {
 
     const name = document.getElementById('addClientName').value.trim(); 
     const taxId = document.getElementById('addClientTaxId').value.trim(); 
+    const custId = document.getElementById('addClientCustId') ? document.getElementById('addClientCustId').value.trim() : '';
     const address = document.getElementById('addClientAddress').value.trim(); 
     const receiveDept = document.getElementById('addClientReceiveDept').value.trim(); 
     if(!name) return alert('名稱必填'); 
     if(window.lockButton(btn)) return; // 防連點保護
     
-    globalClients.push({ name, taxId, address, receiveDept }); 
+    const resolvedCustId = window.resolveClientCustIds ? window.resolveClientCustIds(name, taxId, custId) : custId;
+    globalClients.push({ name, taxId, address, receiveDept, custId: resolvedCustId }); 
     if(typeof window.populateAdminClientFilter === 'function') window.populateAdminClientFilter(); 
     window.renderAdminClients(); 
     bootstrap.Modal.getOrCreateInstance(document.getElementById('addClientModal')).hide(); 
-    pushToSyncQueue('addClientData', {clientName: name, taxId, address, receiveDept}, null); 
+    pushToSyncQueue('addClientData', {clientName: name, taxId, custId: resolvedCustId, address, receiveDept}, null); 
 };
 
 window.openEditClientModal = function(name, taxId) { 
@@ -864,6 +886,7 @@ window.openEditClientModal = function(name, taxId) {
     document.getElementById('editClientOldName').value = name; 
     document.getElementById('editClientName').value = name; 
     document.getElementById('editClientTaxId').value = taxId; 
+    if (document.getElementById('editClientCustId')) document.getElementById('editClientCustId').value = c ? (c.custId || '') : '';
     document.getElementById('editClientAddress').value = c ? (c.address || '') : '';
     document.getElementById('editClientReceiveDept').value = c ? (c.receiveDept || '') : '';
     bootstrap.Modal.getOrCreateInstance(document.getElementById('editClientModal')).show(); 
@@ -875,19 +898,20 @@ window.submitEditClientOptimistic = function() {
     const old = document.getElementById('editClientOldName').value; 
     const name = document.getElementById('editClientName').value.trim(); 
     const tax = document.getElementById('editClientTaxId').value.trim(); 
+    const custId = document.getElementById('editClientCustId') ? document.getElementById('editClientCustId').value.trim() : '';
     const address = document.getElementById('editClientAddress').value.trim(); 
     const receiveDept = document.getElementById('editClientReceiveDept').value.trim(); 
     if(!name) return; 
     if(window.lockButton(btn)) return; // 防連點保護
     
     const c = globalClients.find(x => x.name === old); 
-    if(c) { c.name = name; c.taxId = tax; c.address = address; c.receiveDept = receiveDept; } 
+    if(c) { c.name = name; c.taxId = tax; c.custId = custId; c.address = address; c.receiveDept = receiveDept; } 
     globalCatalog.forEach(p => { if(p.clientName === old) p.clientName = name; }); 
     
     if(typeof window.populateAdminClientFilter === 'function') window.populateAdminClientFilter(); 
     window.renderAdminClients(); window.renderAdminItems(); 
     bootstrap.Modal.getOrCreateInstance(document.getElementById('editClientModal')).hide(); 
-    pushToSyncQueue('updateClientData', {oldName: old, newName: name, newTaxId: tax, address, receiveDept}, null); 
+    pushToSyncQueue('updateClientData', {oldName: old, newName: name, newTaxId: tax, custId: custId, address, receiveDept}, null); 
 };
 
 window.renderAdminItems = debounce(function() { 
@@ -896,7 +920,12 @@ window.renderAdminItems = debounce(function() {
     let arr = globalCatalog; 
     
     if(f) arr = arr.filter(p => p.clientName === f); 
-    if(t) arr = arr.filter(p => (p.productName||'').toLowerCase().includes(t) || (p.clientName||'').toLowerCase().includes(t)); 
+    if(t) arr = arr.filter(p =>
+        (p.productName||'').toLowerCase().includes(t) ||
+        (p.clientName||'').toLowerCase().includes(t) ||
+        String(p.internalCode||'').toLowerCase().includes(t) ||
+        String(p.assetCode||'').toLowerCase().includes(t)
+    ); 
     
     document.getElementById('admItemList').innerHTML = arr.length ? arr.map(p => `<div class="item-row bg-white d-flex justify-content-between align-items-center shadow-sm"><div><div class="fw-bold text-dark fs-6 mb-2">${p.productName} <span class="badge bg-secondary ms-1">${p.internalCode||''}</span></div><div class="d-flex align-items-center"><span class="badge bg-light text-dark border me-2 align-self-center">${p.clientName}</span><div class="bg-success text-white px-2 py-1 rounded shadow-sm d-inline-block"><span class="fw-bold">NT$ ${p.price}</span></div><span class="text-muted small fw-bold ms-1">/ ${p.unit}</span></div></div><button class="btn btn-outline-primary btn-sm fw-bold px-3 ms-2" onclick="openAdminItemModal(${p.rowIndex})">📝</button></div>`).join('') : '<div class="text-center text-muted py-4">查無對應品項</div>'; 
 }, 300);
@@ -950,7 +979,6 @@ window.submitEditItemOptimistic = function() {
     if(!client || !name || priceStr === '' || isNaN(Number(priceStr))) return alert('客戶名稱、品名與單價皆為必填！'); 
     if(window.lockButton(btn)) return; // 防連點保護
 
-    // 【問題 4 修復】計算安全的遞增整數 row_index，避免 Date.now() 超過資料庫 int4 上限導致寫入失敗
     const isEdit = !!idx;
     const targetRowIndex = isEdit 
         ? parseInt(idx, 10) 
@@ -990,4 +1018,234 @@ window.submitEditItemOptimistic = function() {
     pushToSyncQueue('saveAdminItem', payload, () => {
         showToast("✅ 合約報價品項已成功儲存至資料庫");
     }); 
+};
+
+// ============================================================================
+// 【項目 1 全新子模組】管理員後台 ＞ 🏭 進貨品項 (直接管理「庫存管理」工作表與 Supabase inventory)
+// ============================================================================
+window.populateAdminPurchaseSupplierFilter = function() {
+    const supSet = new Set();
+    (globalSuppliers || []).forEach(s => { if (s.name) supSet.add(s.name.trim()); });
+    (globalInventory || []).forEach(v => { if (v.supplier) supSet.add(v.supplier.trim()); });
+    const sortedSups = Array.from(supSet).sort();
+
+    const filterSelect = document.getElementById('admPurFilterSupplier');
+    if (filterSelect) {
+        const cur = filterSelect.value;
+        filterSelect.innerHTML = '<option value="">🏭 所有供應商 (顯示全部)</option>' +
+            sortedSups.map(s => `<option value="${escapeQuotes(s)}">${escapeQuotes(s)}</option>`).join('');
+        if (sortedSups.includes(cur)) filterSelect.value = cur;
+    }
+
+    const dataList = document.getElementById('purSupplierDatalist');
+    if (dataList) {
+        dataList.innerHTML = sortedSups.map(s => `<option value="${escapeQuotes(s)}">`).join('');
+    }
+};
+
+window.renderAdminPurchaseItems = debounce(function() {
+    window.populateAdminPurchaseSupplierFilter();
+
+    const listEl = document.getElementById('admPurList');
+    if (!listEl) return;
+
+    const fSup = document.getElementById('admPurFilterSupplier')?.value || '';
+    const term = (document.getElementById('admPurSearch')?.value || '').trim().toLowerCase();
+
+    let arr = globalInventory || [];
+    if (fSup) {
+        arr = arr.filter(v => (v.supplier || '') === fSup);
+    }
+    if (term) {
+        arr = arr.filter(v =>
+            (v.name || '').toLowerCase().includes(term) ||
+            String(v.internalCode || '').toLowerCase().includes(term) ||
+            (v.supplier || '').toLowerCase().includes(term) ||
+            String(v.assetCodeCombined || '').toLowerCase().includes(term)
+        );
+    }
+
+    if (arr.length === 0) {
+        listEl.innerHTML = '<div class="text-center text-muted py-4">查無對應的進貨品項資料</div>';
+        return;
+    }
+
+    listEl.innerHTML = arr.map(v => {
+        const supBadge = v.supplier
+            ? `<span class="badge bg-light text-dark border me-2">🏭 ${escapeQuotes(v.supplier)}</span>`
+            : `<span class="badge bg-light text-muted border me-2">未設定供應商</span>`;
+        const codeBadge = v.internalCode
+            ? `<span class="badge bg-secondary ms-1">${escapeQuotes(v.internalCode)}</span>`
+            : '';
+        const assetInfo = v.assetCodeCombined
+            ? `<div class="small text-primary mt-1">醫院資材碼: ${escapeQuotes(v.assetCodeCombined)}</div>`
+            : '';
+
+        return `
+        <div class="item-row bg-white d-flex justify-content-between align-items-center shadow-sm mb-2">
+            <div>
+                <div class="fw-bold text-dark fs-6 mb-1">${escapeQuotes(v.name)} ${codeBadge}</div>
+                <div class="d-flex flex-wrap align-items-center gap-1 mt-1">
+                    ${supBadge}
+                    <div class="bg-info text-white px-2 py-1 rounded shadow-sm d-inline-block">
+                        <span class="fw-bold">進貨價(訂貨): NT$ ${Number(v.cost || 0).toLocaleString()}</span>
+                    </div>
+                    <span class="badge bg-light text-success border ms-1">庫存: ${v.qty} (安全量: ${v.alertQty || 0})</span>
+                </div>
+                ${assetInfo}
+            </div>
+            <button class="btn btn-outline-info text-dark btn-sm fw-bold px-3 ms-2" onclick="openAdminPurchaseModal('${escapeQuotes(v.name)}')">📝 編輯</button>
+        </div>`;
+    }).join('');
+}, 250);
+
+window.autoMatchSupplierForPurchaseModal = function(internalCodeVal) {
+    const code = String(internalCodeVal || '').trim();
+    if (!code) return;
+    const parts = code.split('-');
+    if (parts.length > 1) {
+        const supCode = parts[1];
+        const s = (globalSuppliers || []).find(x => x.code === supCode);
+        if (s && s.name && !document.getElementById('editPurSupplier').value) {
+            document.getElementById('editPurSupplier').value = s.name;
+        }
+    }
+};
+
+window.openAdminPurchaseModal = function(itemName) {
+    window.populateAdminPurchaseSupplierFilter();
+    const modalEl = document.getElementById('editPurchaseItemModal');
+    if (!modalEl) return;
+
+    const btnDel = document.getElementById('btnDeletePurItem');
+    const btnSave = document.getElementById('btnSavePurItem');
+
+    if (itemName) {
+        const v = (globalInventory || []).find(x => x.name === itemName);
+        if (!v) return;
+        document.getElementById('editPurchaseModalTitle').innerText = '📝 編輯進貨品項 (庫存與訂貨價)';
+        document.getElementById('editPurOldName').value = v.name;
+        document.getElementById('editPurName').value = v.name;
+        document.getElementById('editPurInternalCode').value = v.internalCode || '';
+        document.getElementById('editPurSupplier').value = v.supplier || '';
+        document.getElementById('editPurCost').value = v.cost || 0;
+        document.getElementById('editPurQty').value = v.qty || 0;
+        document.getElementById('editPurAlertQty').value = v.alertQty || 0;
+        document.getElementById('editPurAssetCodes').value = v.assetCodeCombined || '';
+
+        if (btnDel) btnDel.style.display = 'block';
+        if (btnSave) btnSave.classList.replace('w-100', 'w-50');
+    } else {
+        document.getElementById('editPurchaseModalTitle').innerText = '➕ 新增進貨品項 (庫存管理建檔)';
+        document.getElementById('editPurOldName').value = '';
+        document.getElementById('editPurName').value = '';
+        document.getElementById('editPurInternalCode').value = '';
+        document.getElementById('editPurSupplier').value = '';
+        document.getElementById('editPurCost').value = '';
+        document.getElementById('editPurQty').value = '0';
+        document.getElementById('editPurAlertQty').value = '10';
+        document.getElementById('editPurAssetCodes').value = '';
+
+        if (btnDel) btnDel.style.display = 'none';
+        if (btnSave) btnSave.classList.replace('w-50', 'w-100');
+    }
+
+    bootstrap.Modal.getOrCreateInstance(modalEl).show();
+};
+
+window.submitAdminPurchaseItemOptimistic = function() {
+    const btn = document.getElementById('btnSavePurItem');
+    const oldName = document.getElementById('editPurOldName').value.trim();
+    const name = document.getElementById('editPurName').value.trim();
+    const internalCode = document.getElementById('editPurInternalCode').value.trim();
+    const supplier = document.getElementById('editPurSupplier').value.trim();
+    const costStr = String(document.getElementById('editPurCost').value || '').replace(/[^0-9.-]/g, '');
+    const qty = parseFloat(document.getElementById('editPurQty').value) || 0;
+    const alertQty = parseFloat(document.getElementById('editPurAlertQty').value) || 0;
+    let assetCodeCombined = document.getElementById('editPurAssetCodes').value.trim();
+
+    if (!name) return alert("品名為必填！");
+    const cost = costStr === '' ? 0 : Number(costStr);
+    if (isNaN(cost)) return alert("進貨成本格式不正確！");
+
+    // 若新增時名稱已存在於庫存表，提醒使用者
+    if (!oldName && (globalInventory || []).some(x => x.name === name)) {
+        if (!confirm(`品名「${name}」已存在於進貨品項清單中，確定要直接覆蓋更新其資料嗎？`)) return;
+    }
+
+    if (window.lockButton(btn)) return;
+
+    // 若未手填資材碼，自動從報價品項 (globalCatalog) 收集同名商品的資材碼
+    if (!assetCodeCombined) {
+        const matchedAssets = [...new Set(
+            (globalCatalog || [])
+                .filter(c => c.productName === name && c.assetCode)
+                .map(c => c.assetCode.trim())
+                .filter(Boolean)
+        )];
+        if (matchedAssets.length > 0) assetCodeCombined = matchedAssets.join(', ');
+    }
+
+    let existing = (globalInventory || []).find(x => x.name === (oldName || name));
+    const batchesStr = existing ? (existing.batchesStr || '[]') : '[]';
+
+    const payload = {
+        oldName: oldName || null,
+        name: name,
+        internalCode: internalCode,
+        supplier: supplier,
+        cost: cost,
+        qty: qty,
+        alertQty: alertQty,
+        assetCodeCombined: assetCodeCombined,
+        batchesStr: batchesStr
+    };
+
+    if (existing) {
+        existing.name = name;
+        existing.internalCode = internalCode;
+        existing.supplier = supplier;
+        existing.cost = cost;
+        existing.qty = qty;
+        existing.alertQty = alertQty;
+        existing.assetCodeCombined = assetCodeCombined;
+    } else {
+        globalInventory.unshift({
+            rowIdx: Date.now(),
+            name: name,
+            internalCode: internalCode,
+            supplier: supplier,
+            cost: cost,
+            qty: qty,
+            alertQty: alertQty,
+            assetCodeCombined: assetCodeCombined,
+            batchesStr: '[]'
+        });
+    }
+
+    window.renderAdminPurchaseItems();
+    window.renderInventory();
+    bootstrap.Modal.getInstance(document.getElementById('editPurchaseItemModal')).hide();
+
+    pushToSyncQueue('saveAdminPurchaseItem', payload, () => {
+        showToast("✅ 進貨品項已成功儲存並同步至 Supabase 庫存管理表！");
+    });
+};
+
+window.deleteAdminPurchaseItem = function() {
+    const btn = document.getElementById('btnDeletePurItem');
+    const oldName = document.getElementById('editPurOldName').value.trim();
+    if (!oldName) return;
+
+    if (!confirm(`確定要從進貨品項（庫存管理表）中刪除「${oldName}」嗎？`)) return;
+    if (window.lockButton(btn)) return;
+
+    globalInventory = (globalInventory || []).filter(x => x.name !== oldName);
+    window.renderAdminPurchaseItems();
+    window.renderInventory();
+    bootstrap.Modal.getInstance(document.getElementById('editPurchaseItemModal')).hide();
+
+    pushToSyncQueue('deleteAdminPurchaseItem', { name: oldName }, () => {
+        showToast(`🗑️ 已刪除進貨品項「${oldName}」`);
+    });
 };
