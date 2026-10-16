@@ -1,11 +1,11 @@
 /**
  * ============================================================================
  * 模組 1：API 核心、全域狀態與雙軌並行架構 (api_core.js) 
- * 【極速登入 ＆ 報表直出 ＆ 外部系統客戶代號對照 ＆ 沖帳中樞升級版】
+ * 【極速登入 ＆ 報表直出 ＆ 外部系統客戶代號對照 ＆ 沖帳中樞 ＆ 進貨品項管理升級版】
  * 1. 直連 Supabase 實現 0.1 秒極速登入
  * 2. 整合 SheetJS 於前端瞬間生成 Excel 報表，交由 GAS 遙控器寄信
  * 3. 內建 customer1.xlsx 客戶代號 (CUSTID) 智慧雙向對照引擎
- * 4. 支援跨系統明細補登、5月前歷史帳移轉、收款沖帳與雙向狀態連動
+ * 4. 支援跨系統明細補登、5月前歷史帳移轉、收款沖帳、進貨品項管理與三聯式發票明細表列印
  * ============================================================================
  */
 
@@ -195,14 +195,12 @@ window.getErpClientNameByCustId = function(extCustId) {
     const cleanExtId = String(extCustId || '').trim();
     if (!cleanExtId) return '';
 
-    // 1. 優先從本系統 globalClients 查找
     const matchedClient = (globalClients || []).find(c => {
         const cIds = String(c.custId || '').split(',').map(s => s.trim()).filter(Boolean);
         return cIds.includes(cleanExtId);
     });
     if (matchedClient) return matchedClient.name;
 
-    // 2. 從內建字典查找，並優先對應回 globalClients 內存在的名稱
     const dictMatches = (window.EXTERNAL_CUSTID_DICT || []).filter(d => d.custId === cleanExtId);
     if (dictMatches.length > 0) {
         for (const dm of dictMatches) {
@@ -223,7 +221,6 @@ window.matchClientWithCustId = function(erpClientName, extCustId) {
 
     const normErp = window.normalizeClientName(cleanErpName);
 
-    // 1. 優先從 globalClients 查找
     const matchedClientsInDb = (globalClients || []).filter(c => {
         const cIds = String(c.custId || '').split(',').map(s => s.trim()).filter(Boolean);
         return cIds.includes(cleanExtId);
@@ -235,7 +232,6 @@ window.matchClientWithCustId = function(erpClientName, extCustId) {
         }
     }
 
-    // 2. 從內建 customer1.xlsx 字典查找
     const dictMatches = (window.EXTERNAL_CUSTID_DICT || []).filter(d => d.custId === cleanExtId);
     for (const d of dictMatches) {
         if (d.name === cleanErpName || window.normalizeClientName(d.name) === normErp) {
@@ -243,7 +239,6 @@ window.matchClientWithCustId = function(erpClientName, extCustId) {
         }
     }
 
-    // 3. 特殊通用分類代號容錯：200104 (臺中其他同行)、200105 (臺中個人)、200116 (臺中其他醫院)
     if (cleanExtId === '200104' && /生技|醫技|儀器|器材|實業|企業|有限公司|股份|行$/.test(cleanErpName)) {
         return { isMatch: true, extClientName: `臺中其他同行 (${cleanErpName})` };
     }
@@ -263,7 +258,6 @@ window.findProductNameByCode = function(ispnCode, clientName) {
     const cleanCode = String(ispnCode || '').trim().toUpperCase();
     if (!cleanCode) return { name: '', unit: '式', price: 0 };
 
-    // 1. 優先找同客戶且同長固代號/資材碼的合約品項
     if (clientName) {
         const normClient = window.normalizeClientName(clientName);
         const exactCat = (globalCatalog || []).find(c =>
@@ -273,14 +267,12 @@ window.findProductNameByCode = function(ispnCode, clientName) {
         if (exactCat) return { name: exactCat.productName, unit: exactCat.unit || '式', price: exactCat.price || 0 };
     }
 
-    // 2. 找全產品價格表中相同長固代號的品項
     const anyCat = (globalCatalog || []).find(c =>
         String(c.internalCode || '').trim().toUpperCase() === cleanCode ||
         String(c.assetCode || '').trim().toUpperCase() === cleanCode
     );
     if (anyCat) return { name: anyCat.productName, unit: anyCat.unit || '式', price: anyCat.price || 0 };
 
-    // 3. 找庫存管理表中的品名
     const invItem = (globalInventory || []).find(i =>
         String(i.internalCode || '').trim().toUpperCase() === cleanCode
     );
@@ -520,7 +512,6 @@ async function executeSupabaseAction(action, payload) {
             }));
             const { error: sdErr } = await supabaseClient.from('sales_details').insert(sdArr);
             if (sdErr) {
-                // 若 sales_details 尚未擴充 pay_status 欄位則自動降級寫入
                 const fallbackArr = payload.items.map((i, idx) => ({
                     row_idx: Date.now() + Math.floor(Math.random() * 1000) + idx,
                     time: payload.invDate, paper_no: payload.paperNo, client: payload.clientName,
@@ -534,7 +525,6 @@ async function executeSupabaseAction(action, payload) {
         }
     } 
     else if (action === 'supplementSalesDetail') {
-        // 【比對中心專用】一鍵補登本系統缺漏的「出貨明細 (sales_details)」與選填補登「發票總表 (invoices)」
         const record = {
             row_idx: payload.rowIdx || (Date.now() + Math.floor(Math.random() * 1000)),
             time: payload.time || Date.now(),
@@ -585,7 +575,6 @@ async function executeSupabaseAction(action, payload) {
         }
     }
     else if (action === 'executePaymentReconcile') {
-        // 【收款與沖帳模組】寫入沖帳記錄表 (payment_records) 並連動更新銷售明細總表 (sales_details)
         const pRec = payload.paymentRecord;
         const { error: payErr } = await supabaseClient.from('payment_records').upsert({
             row_idx: pRec.rowIdx,
@@ -617,7 +606,6 @@ async function executeSupabaseAction(action, payload) {
         }
     }
     else if (action === 'voidPaymentRecord') {
-        // 作廢沖帳單並將關聯銷售明細退回「未收款」
         const { error: vErr } = await supabaseClient.from('payment_records').update({
             status: '已作廢'
         }).eq('row_idx', payload.rowIdx);
@@ -641,7 +629,6 @@ async function executeSupabaseAction(action, payload) {
         }
     }
     else if (action === 'importHistoricalUnpaid') {
-        // 批次匯入 5 月以前的歷史未收帳款至 sales_details（狀態設為「歷史已結案」，不扣減現有庫存）
         const rows = (payload.items || []).map(x => ({
             row_idx: x.rowIdx,
             time: x.time,
@@ -721,6 +708,51 @@ async function executeSupabaseAction(action, payload) {
             arrival_date: payload.arrivalDate, memo: payload.memo, internal_code: payload.internalCode
         });
     } 
+    else if (action === 'saveAdminPurchaseItem') {
+        // 【項目 1 核心】管理員後台「🏭 進貨品項」直接管理 Supabase inventory 資料表
+        const record = {
+            name: payload.name,
+            qty: Number(payload.qty) || 0,
+            alert_qty: Number(payload.alertQty) || 0,
+            cost: Number(payload.cost) || 0,
+            supplier: payload.supplier || '',
+            internal_code: payload.internalCode || '',
+            asset_code_combined: payload.assetCodeCombined || '',
+            batches_str: payload.batchesStr || '[]'
+        };
+
+        if (payload.oldName) {
+            const { data: updated, error: updErr } = await supabaseClient
+                .from('inventory')
+                .update(record)
+                .eq('name', payload.oldName)
+                .select();
+
+            if (updErr || !updated || updated.length === 0) {
+                if (payload.oldName !== payload.name) {
+                    await supabaseClient.from('inventory').delete().eq('name', payload.oldName);
+                }
+                const { error: upsErr } = await supabaseClient.from('inventory').upsert(record);
+                if (upsErr) throw upsErr;
+            }
+        } else {
+            const { data: exist } = await supabaseClient.from('inventory').select('name').eq('name', payload.name).maybeSingle();
+            if (exist) {
+                const { error: updErr } = await supabaseClient.from('inventory').update(record).eq('name', payload.name);
+                if (updErr) throw updErr;
+            } else {
+                const { error: insErr } = await supabaseClient.from('inventory').insert(record);
+                if (insErr) {
+                    const { error: upsErr } = await supabaseClient.from('inventory').upsert(record);
+                    if (upsErr) throw upsErr;
+                }
+            }
+        }
+    }
+    else if (action === 'deleteAdminPurchaseItem') {
+        const { error } = await supabaseClient.from('inventory').delete().eq('name', payload.name);
+        if (error) throw error;
+    }
     else if (action === 'updateShipment') {
         for (let u of (payload.updates || [])) {
             const { data: sd } = await supabaseClient.from('sales_details').select('*').eq('row_idx', u.rowIdx).maybeSingle();
@@ -1032,7 +1064,17 @@ async function loadDataFromSupabase() {
     }));
     globalSuppliers = (s || []).map(x => ({name: x.name, code: x.code, phone: x.phone, fax: x.fax}));
     globalCatalog = deduplicateCatalogRows(cat);
-    globalInventory = (inv || []).map(x => ({rowIdx: 0, name: x.name, qty: Number(x.qty), alertQty: Number(x.alert_qty), cost: Number(x.cost), supplier: x.supplier, internalCode: x.internal_code, assetCodeCombined: x.asset_code_combined, batchesStr: x.batches_str}));
+    globalInventory = (inv || []).map((x, idx) => ({
+        rowIdx: idx + 1,
+        name: x.name,
+        qty: Number(x.qty),
+        alertQty: Number(x.alert_qty),
+        cost: Number(x.cost),
+        supplier: x.supplier,
+        internalCode: x.internal_code,
+        assetCodeCombined: x.asset_code_combined,
+        batchesStr: x.batches_str
+    }));
     globalOrders = (ord || []).map(x => ({rowIdx: x.row_idx, time: Number(x.time), client: x.client, orderNo: x.order_no, dept: x.dept, status: x.status, jsonStr: x.json_str, deadline: x.deadline, source: x.source, mailUrl: x.mail_url}));
     globalHistory = (invc || []).map(x => ({rowIdx: x.row_idx, time: Number(x.time), staff: x.staff, client: x.client, taxId: x.tax_id, net: Number(x.net), tax: Number(x.tax), total: Number(x.total), details: x.details, paperNo: x.paper_no, orderNo: x.order_no, status: x.status, historyLog: x.history_log}));
     globalSalesDetails = (sd || []).map(mapSalesDetailRow);
@@ -1073,7 +1115,17 @@ async function silentRefreshTable(table) {
         }));
         else if (table === 'suppliers') globalSuppliers = allData.map(x => ({name: x.name, code: x.code, phone: x.phone, fax: x.fax}));
         else if (table === 'catalog') globalCatalog = deduplicateCatalogRows(allData);
-        else if (table === 'inventory') globalInventory = allData.map(x => ({rowIdx: 0, name: x.name, qty: Number(x.qty), alertQty: Number(x.alert_qty), cost: Number(x.cost), supplier: x.supplier, internalCode: x.internal_code, assetCodeCombined: x.asset_code_combined, batchesStr: x.batches_str}));
+        else if (table === 'inventory') globalInventory = allData.map((x, idx) => ({
+            rowIdx: idx + 1,
+            name: x.name,
+            qty: Number(x.qty),
+            alertQty: Number(x.alert_qty),
+            cost: Number(x.cost),
+            supplier: x.supplier,
+            internalCode: x.internal_code,
+            assetCodeCombined: x.asset_code_combined,
+            batchesStr: x.batches_str
+        }));
         else if (table === 'orders') globalOrders = allData.map(x => ({rowIdx: x.row_idx, time: Number(x.time), client: x.client, orderNo: x.order_no, dept: x.dept, status: x.status, jsonStr: x.json_str, deadline: x.deadline, source: x.source, mailUrl: x.mail_url}));
         else if (table === 'invoices') globalHistory = allData.map(x => ({rowIdx: x.row_idx, time: Number(x.time), staff: x.staff, client: x.client, taxId: x.tax_id, net: Number(x.net), tax: Number(x.tax), total: Number(x.total), details: x.details, paperNo: x.paper_no, orderNo: x.order_no, status: x.status, historyLog: x.history_log}));
         else if (table === 'sales_details') globalSalesDetails = allData.map(mapSalesDetailRow);
@@ -1111,6 +1163,7 @@ function setupSupabaseRealtime() {
 // ============================================================================
 function refreshAllUI() {
     if (typeof window.populateAdminClientFilter === "function") window.populateAdminClientFilter();
+    if (typeof window.populateAdminPurchaseSupplierFilter === "function") window.populateAdminPurchaseSupplierFilter();
     if (typeof window.updateHistoryDropdowns === "function") window.updateHistoryDropdowns();
     if (typeof window.populateLogDropdowns === "function") window.populateLogDropdowns();
     if (typeof window.updateOrderClientDropdown === "function") window.updateOrderClientDropdown();
@@ -1120,9 +1173,11 @@ function refreshAllUI() {
         if (typeof window.renderHistory === "function") window.renderHistory(); 
         if (typeof window.generateReport === "function") window.generateReport(); 
         if (typeof window.initReconcileCenterUI === "function") window.initReconcileCenterUI();
+        if (typeof window.initTaxDetailTab === "function") window.initTaxDetailTab();
     }
     if(document.getElementById('sys-admin') && document.getElementById('sys-admin').style.display === 'block') { 
         if (typeof window.renderAdminItems === "function") window.renderAdminItems(); 
+        if (typeof window.renderAdminPurchaseItems === "function") window.renderAdminPurchaseItems(); 
         if (typeof window.renderAdminClients === "function") window.renderAdminClients(); 
     }
     if(document.getElementById('sys-order') && document.getElementById('sys-order').style.display === 'block') {
@@ -1183,8 +1238,10 @@ window.lockButton = function(btn) {
 };
 
 // ============================================================================
-// 列印與 PDF 分享引擎
+// 列印與 PDF 分享引擎 (含 A5 橫式防跨頁裁切保護 ＆ A4 直式三聯明細表支援)
 // ============================================================================
+const ALL_PRINT_AREA_IDS = ['printArea', 'printPoArea', 'printQuoteArea', 'printDeliveryArea', 'printTaxDetailArea'];
+
 window.applyPrintStyle = function(size, layout) {
     let styleNode = document.getElementById('dynamicPrintStyle');
     if (!styleNode) {
@@ -1193,22 +1250,48 @@ window.applyPrintStyle = function(size, layout) {
         document.head.appendChild(styleNode);
     }
     
+    const isA5Landscape = (String(size).toUpperCase() === 'A5' && String(layout).toLowerCase() === 'landscape');
+    
     styleNode.innerHTML = `
     @page { size: ${size} ${layout}; margin: 0mm !important; }
 
     @media screen {
         .print-active > div {
-            min-width: 800px !important;
+            min-width: 780px !important;
             margin: 0 auto !important;
             background: #fff;
             box-shadow: 0 0 15px rgba(0,0,0,0.3);
         }
     }
     @media print { 
-        html, body { height: auto !important; overflow: visible !important; background: #fff !important; padding-top: 0 !important; margin: 0 !important; } 
+        html, body {
+            width: 100% !important;
+            height: auto !important;
+            overflow: visible !important;
+            background: #fff !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+        } 
         #printControlBar { display: none !important; }
-        .print-active { padding: 0 !important; overflow: visible !important; }
-        .print-active > div { min-width: 100% !important; margin: 0 !important; box-shadow: none !important; }
+        .print-active { padding: 0 !important; margin: 0 !important; overflow: visible !important; }
+        .print-active > div {
+            min-width: 100% !important;
+            width: 100% !important;
+            margin: 0 !important;
+            box-shadow: none !important;
+        }
+        ${isA5Landscape ? `
+        #printPoArea.print-active > div {
+            max-height: 144mm !important;
+            height: 144mm !important;
+            overflow: hidden !important;
+            page-break-inside: avoid !important;
+            break-inside: avoid !important;
+            page-break-after: avoid !important;
+        }
+        ` : ''}
     }`;
 };
 
@@ -1216,7 +1299,7 @@ window.showPrintPreview = function(areaId) {
     document.getElementById('mainApp').style.display = 'none';
     document.getElementById('homeMenu').style.display = 'none';
     
-    ['printArea', 'printPoArea', 'printQuoteArea', 'printDeliveryArea'].forEach(id => {
+    ALL_PRINT_AREA_IDS.forEach(id => {
         const el = document.getElementById(id);
         if(el) {
             el.style.display = 'none';
@@ -1225,6 +1308,7 @@ window.showPrintPreview = function(areaId) {
     });
     
     const targetArea = document.getElementById(areaId);
+    if (!targetArea) return;
     targetArea.style.display = 'block';
     targetArea.classList.add('print-active');
     
@@ -1267,7 +1351,7 @@ window.closePrintPreview = function() {
     document.body.style.paddingTop = '0px';
     document.body.style.backgroundColor = ''; 
     
-    ['printArea', 'printPoArea', 'printQuoteArea', 'printDeliveryArea'].forEach(id => {
+    ALL_PRINT_AREA_IDS.forEach(id => {
         const el = document.getElementById(id);
         if(el) {
             el.style.display = 'none';
@@ -1306,7 +1390,7 @@ window.sharePdf = async function(areaId) {
         jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
     };
     
-    if(areaId === 'printDeliveryArea' || areaId === 'printPoArea') {
+    if(areaId === 'printDeliveryArea' || areaId === 'printPoArea' || areaId === 'printArea') {
         opt.jsPDF.format = 'a5';
         opt.jsPDF.orientation = 'landscape';
     }
@@ -1581,9 +1665,13 @@ window.enterSystem = function(modId) {
         if (typeof window.renderHistory === "function") window.renderHistory(); 
         if (typeof window.generateReport === "function") window.generateReport(); 
         if (typeof window.initReconcileCenterUI === "function") window.initReconcileCenterUI();
+        if (typeof window.initTaxDetailTab === "function") window.initTaxDetailTab();
     }
     if(modId === 'admin') { 
+        if (typeof window.populateAdminClientFilter === "function") window.populateAdminClientFilter();
+        if (typeof window.populateAdminPurchaseSupplierFilter === "function") window.populateAdminPurchaseSupplierFilter();
         if (typeof window.renderAdminItems === "function") window.renderAdminItems(); 
+        if (typeof window.renderAdminPurchaseItems === "function") window.renderAdminPurchaseItems(); 
         if (typeof window.renderAdminClients === "function") window.renderAdminClients(); 
     }
     if(modId === 'order') {
