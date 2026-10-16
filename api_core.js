@@ -1,11 +1,11 @@
 /**
  * ============================================================================
  * 模組 1：API 核心、全域狀態與雙軌並行架構 (api_core.js) 
- * 【極速登入 ＆ 報表直出 ＆ 外部系統客戶代號對照 ＆ 沖帳中樞 ＆ 進貨品項管理升級版】
+ * 【極速登入 ＆ 報表直出 ＆ 外部系統客戶代號對照 ＆ 沖帳中樞 ＆ PDF/AI雙核解析升級版】
  * 1. 直連 Supabase 實現 0.1 秒極速登入
- * 2. 整合 SheetJS 於前端瞬間生成 Excel 報表，交由 GAS 遙控器寄信
+ * 2. 整合 SheetJS 與 PDF.js 於前端瞬間生成/解析 Excel 與 PDF 報表，交由 GAS 遙控器寄信
  * 3. 內建 customer1.xlsx 客戶代號 (CUSTID) 智慧雙向對照引擎
- * 4. 支援跨系統明細補登、5月前歷史帳移轉、收款沖帳、進貨品項管理與三聯式發票明細表列印
+ * 4. 支援跨系統明細補登、5月前歷史帳移轉、批次快速沖帳、撤銷還原(Undo)與進貨品項管理
  * ============================================================================
  */
 
@@ -18,7 +18,7 @@ const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// 動態載入 PDF 與 Excel(SheetJS) 生成引擎
+// 動態載入 PDF 生成 (html2pdf)、Excel (SheetJS) 與 PDF 讀取解析 (PDF.js) 引擎
 (function() {
     const scriptPdf = document.createElement('script');
     scriptPdf.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js";
@@ -27,6 +27,15 @@ const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
     const scriptXlsx = document.createElement('script');
     scriptXlsx.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
     document.head.appendChild(scriptXlsx);
+
+    const scriptPdfJs = document.createElement('script');
+    scriptPdfJs.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+    scriptPdfJs.onload = function() {
+        if (window.pdfjsLib) {
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+        }
+    };
+    document.head.appendChild(scriptPdfJs);
 })();
 
 // ============================================================================
@@ -166,6 +175,47 @@ window.normalizeClientName = function(name) {
         .replace(/[\(（\-]委託.*$/g, "")
         .replace(/醫療財團法人|醫療社團法人|財團法人/g, "")
         .toLowerCase();
+};
+
+// 發票號碼正規化工具 (忽略空白與連字號，例如 AB-12345678 -> AB12345678)
+window.normalizeInvoiceNo = function(invNo) {
+    if (!invNo) return "";
+    return String(invNo).trim().toUpperCase().replace(/[\s\-—_]/g, "");
+};
+
+// 外部日期字串或 Excel 序列號轉 YYYY-MM-DD 工具
+window.parseExternalDateStr = function(rawVal) {
+    if (rawVal === undefined || rawVal === null || rawVal === '') return '';
+    if (typeof rawVal === 'number' && rawVal > 20000 && rawVal < 90000) {
+        const utcDays = Math.floor(rawVal - 25569);
+        const d = new Date(utcDays * 86400 * 1000);
+        if (!isNaN(d.getTime())) {
+            return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+        }
+    }
+    let s = String(rawVal).trim();
+    if (!s) return '';
+    // 處理民國年 (如 115/05/12 或 115-05-12 或 115.05.12)
+    const rocMatch = s.match(/^(\d{2,3})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})/);
+    if (rocMatch && parseInt(rocMatch[1], 10) < 1900) {
+        const yr = parseInt(rocMatch[1], 10) + 1911;
+        return `${yr}-${String(rocMatch[2]).padStart(2, '0')}-${String(rocMatch[3]).padStart(2, '0')}`;
+    }
+    // 處理西元年 (如 2026/05/12 或 2026-05-12)
+    const westMatch = s.match(/^(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})/);
+    if (westMatch) {
+        return `${westMatch[1]}-${String(westMatch[2]).padStart(2, '0')}-${String(westMatch[3]).padStart(2, '0')}`;
+    }
+    // 處理 8 碼數字 (如 20260512)
+    const compactMatch = s.match(/^(\d{4})(\d{2})(\d{2})$/);
+    if (compactMatch) {
+        return `${compactMatch[1]}-${compactMatch[2]}-${compactMatch[3]}`;
+    }
+    const parsedDate = new Date(s);
+    if (!isNaN(parsedDate.getTime()) && parsedDate.getFullYear() > 1990) {
+        return `${parsedDate.getFullYear()}-${String(parsedDate.getMonth() + 1).padStart(2, '0')}-${String(parsedDate.getDate()).padStart(2, '0')}`;
+    }
+    return s;
 };
 
 // 根據客戶名稱與統編自動取得對應的外部 CUSTID 字串
@@ -603,6 +653,73 @@ async function executeSupabaseAction(action, payload) {
                 payment_no: upd.paymentNo
             }).eq('row_idx', upd.rowIdx);
             if (uErr) console.error("更新 sales_details 沖帳狀態失敗:", uErr);
+        }
+    }
+    else if (action === 'batchExecutePaymentReconcile') {
+        // 支援「⚡ 比對無誤一鍵快速確認沖帳」批次寫入多筆沖帳單與銷售明細狀態
+        const pRecords = (payload.paymentRecords || []).map(pRec => ({
+            row_idx: pRec.rowIdx,
+            payment_no: pRec.paymentNo,
+            time: pRec.time,
+            pay_date: pRec.payDate,
+            client: pRec.client,
+            pay_method: pRec.payMethod,
+            paper_nos: pRec.paperNos,
+            receivable_total: pRec.receivableTotal,
+            received_amount: pRec.receivedAmount,
+            diff_amount: pRec.diffAmount,
+            status: pRec.status,
+            items_json: pRec.itemsJson,
+            source_type: pRec.sourceType,
+            staff: pRec.staff,
+            memo: pRec.memo
+        }));
+
+        if (pRecords.length > 0) {
+            const { error: payErr } = await supabaseClient.from('payment_records').upsert(pRecords);
+            if (payErr) throw payErr;
+        }
+
+        for (const upd of (payload.salesUpdates || [])) {
+            const { error: uErr } = await supabaseClient.from('sales_details').update({
+                pay_status: upd.payStatus,
+                paid_amount: upd.paidAmount,
+                pay_date: upd.payDate,
+                payment_no: upd.paymentNo
+            }).eq('row_idx', upd.rowIdx);
+            if (uErr) console.error("批次更新 sales_details 沖帳狀態失敗:", uErr);
+        }
+    }
+    else if (action === 'undoPaymentReconcile') {
+        // 支援「⏪ 撤銷返回上一步」防呆還原機制：移除剛建立之沖帳單，並將銷售明細恢復為沖帳前原始狀態
+        if (payload.paymentRowIndices && payload.paymentRowIndices.length > 0) {
+            const { error: delPayErr } = await supabaseClient
+                .from('payment_records')
+                .delete()
+                .in('row_idx', payload.paymentRowIndices);
+            if (delPayErr) console.error("撤銷刪除 payment_records 失敗:", delPayErr);
+        }
+        if (payload.paymentNos && payload.paymentNos.length > 0) {
+            await supabaseClient
+                .from('payment_records')
+                .delete()
+                .in('payment_no', payload.paymentNos);
+        }
+
+        for (const prev of (payload.previousSalesStates || [])) {
+            await supabaseClient.from('sales_details').update({
+                pay_status: prev.payStatus || '未收款',
+                paid_amount: Number(prev.paidAmount) || 0,
+                pay_date: prev.payDate || '',
+                payment_no: prev.paymentNo || ''
+            }).eq('row_idx', prev.rowIdx);
+        }
+
+        if (payload.createdSalesRowIndices && payload.createdSalesRowIndices.length > 0) {
+            await supabaseClient
+                .from('sales_details')
+                .delete()
+                .in('row_idx', payload.createdSalesRowIndices);
         }
     }
     else if (action === 'voidPaymentRecord') {
