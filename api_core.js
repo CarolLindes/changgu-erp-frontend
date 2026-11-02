@@ -1,11 +1,11 @@
 /**
  * ============================================================================
  * 模組 1：API 核心、全域狀態與雙軌並行架構 (api_core.js) 
- * 【極速登入 ＆ 報表直出 ＆ 外部系統客戶代號對照 ＆ 沖帳中樞 ＆ PDF/AI雙核解析升級版】
+ * 【極速登入 ＆ 報表直出 ＆ 外部系統客戶代號對照 ＆ 沖帳中樞 ＆ 未收款三表分析列印升級版】
  * 1. 直連 Supabase 實現 0.1 秒極速登入
  * 2. 整合 SheetJS 與 PDF.js 於前端瞬間生成/解析 Excel 與 PDF 報表，交由 GAS 遙控器寄信
- * 3. 內建 customer1.xlsx 客戶代號 (CUSTID) 智慧雙向對照引擎
- * 4. 支援跨系統明細補登、5月前歷史帳移轉、批次快速沖帳、撤銷還原(Undo)與品項與客戶編輯
+ * 3. 內建 customer1.xlsx 客戶代號 (CUSTID) 智慧雙向對照引擎 (含正向與反向查表)
+ * 4. 支援跨系統明細補登、5月前歷史帳移轉、批次快速沖帳、撤銷還原(Undo)與未收款三表多選列印
  * ============================================================================
  */
 
@@ -206,6 +206,11 @@ window.parseExternalDateStr = function(rawVal) {
     if (westMatch) {
         return `${westMatch[1]}-${String(westMatch[2]).padStart(2, '0')}-${String(westMatch[3]).padStart(2, '0')}`;
     }
+    // 處理美式月/日/年 (如 9/5/2025 或 10/28/2026)
+    const usMatch = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})/);
+    if (usMatch) {
+        return `${usMatch[3]}-${String(usMatch[1]).padStart(2, '0')}-${String(usMatch[2]).padStart(2, '0')}`;
+    }
     // 處理 8 碼數字 (如 20260512)
     const compactMatch = s.match(/^(\d{4})(\d{2})(\d{2})$/);
     if (compactMatch) {
@@ -238,6 +243,65 @@ window.resolveClientCustIds = function(clientName, taxId, existingCustId) {
         }
     });
     return ids.join(', ');
+};
+
+// 根據本系統客戶名稱，反查主要的外部 6 碼客戶代號 (如 "中國醫藥大學附設醫院" -> "200001")
+window.getPrimaryCustIdByClientName = function(clientName) {
+    if (!clientName) return "未設代號";
+    const cleanName = String(clientName).trim();
+    // 若本身已經是 6 碼數字代號則直接回傳
+    if (/^\d{6}$/.test(cleanName)) return cleanName;
+
+    const normTarget = window.normalizeClientName(cleanName);
+
+    // 1. 優先從 globalClients 尋找
+    const matchedClient = (globalClients || []).find(c =>
+        c.name === cleanName || window.normalizeClientName(c.name) === normTarget
+    );
+    if (matchedClient && matchedClient.custId) {
+        const tokens = String(matchedClient.custId).split(',').map(s => s.trim()).filter(Boolean);
+        const numCode = tokens.find(t => /^2\d{5}$/.test(t)) || tokens.find(t => /^\d+$/.test(t)) || tokens[0];
+        if (numCode) return numCode;
+    }
+
+    // 2. 從內建字典 EXTERNAL_CUSTID_DICT 尋找 (優先挑選 200xxx 開頭的主代號)
+    const dictHits = (window.EXTERNAL_CUSTID_DICT || []).filter(d =>
+        d.name === cleanName || window.normalizeClientName(d.name) === normTarget
+    );
+    if (dictHits.length > 0) {
+        const primaryHit = dictHits.find(d => /^2\d{5}$/.test(d.custId)) || dictHits[0];
+        return primaryHit.custId;
+    }
+
+    // 3. 若為同行或一般醫院歸類
+    if (/生技|醫技|儀器|器材|實業|企業|有限公司|股份|行$/.test(cleanName)) return "200104";
+    if (/醫院|診所|分院|衛生|醫務/.test(cleanName)) return "200116";
+
+    return cleanName;
+};
+
+// 根據品名與客戶名稱，反查長固產品代號 (ISPN，如 "86-22-01441-5")
+window.getProductCodeByName = function(productName, clientName) {
+    if (!productName) return "";
+    const cleanProd = String(productName).trim();
+    const normClient = window.normalizeClientName(clientName);
+
+    if (clientName) {
+        const exactCat = (globalCatalog || []).find(c =>
+            (c.clientName === clientName || window.normalizeClientName(c.clientName) === normClient) &&
+            c.productName === cleanProd &&
+            (c.internalCode || c.assetCode)
+        );
+        if (exactCat) return exactCat.internalCode || exactCat.assetCode || "";
+    }
+
+    const anyCat = (globalCatalog || []).find(c => c.productName === cleanProd && (c.internalCode || c.assetCode));
+    if (anyCat) return anyCat.internalCode || anyCat.assetCode || "";
+
+    const inv = (globalInventory || []).find(i => i.name === cleanProd && i.internalCode);
+    if (inv) return inv.internalCode;
+
+    return cleanProd;
 };
 
 // 根據外部系統的 CUSTID 反查本系統標準客戶名稱
@@ -826,7 +890,7 @@ async function executeSupabaseAction(action, payload) {
         });
     } 
     else if (action === 'saveAdminPurchaseItem') {
-        // 管理員後台「🏭 進貨品項」直接管理 Supabase inventory 資料表
+        // 品項與客戶編輯「🏭 進貨品項」直接管理 Supabase inventory 資料表
         const record = {
             name: payload.name,
             qty: Number(payload.qty) || 0,
@@ -1355,9 +1419,9 @@ window.lockButton = function(btn) {
 };
 
 // ============================================================================
-// 列印與 PDF 分享引擎 (含 A5 橫式防跨頁裁切保護 ＆ A4 直式三聯明細表支援)
+// 列印與 PDF 分享引擎 (含 A5 橫式防跨頁裁切保護 ＆ A4 橫向未收款三表分頁列印支援)
 // ============================================================================
-const ALL_PRINT_AREA_IDS = ['printArea', 'printPoArea', 'printQuoteArea', 'printDeliveryArea', 'printTaxDetailArea'];
+const ALL_PRINT_AREA_IDS = ['printArea', 'printPoArea', 'printQuoteArea', 'printDeliveryArea', 'printTaxDetailArea', 'printUnpaidWorkbookArea'];
 
 window.applyPrintStyle = function(size, layout) {
     let styleNode = document.getElementById('dynamicPrintStyle');
@@ -1370,12 +1434,12 @@ window.applyPrintStyle = function(size, layout) {
     const isA5Landscape = (String(size).toUpperCase() === 'A5' && String(layout).toLowerCase() === 'landscape');
     
     styleNode.innerHTML = `
-    @page { size: ${size} ${layout}; margin: 0mm !important; }
+    @page { size: ${size} ${layout}; margin: 6mm !important; }
 
     @media screen {
         .print-active > div {
             min-width: 780px !important;
-            margin: 0 auto !important;
+            margin: 0 auto 20px auto !important;
             background: #fff;
             box-shadow: 0 0 15px rgba(0,0,0,0.3);
         }
@@ -1399,6 +1463,10 @@ window.applyPrintStyle = function(size, layout) {
             margin: 0 !important;
             box-shadow: none !important;
         }
+        .print-sheet-page-break {
+            page-break-after: always !important;
+            break-after: page !important;
+        }
         ${isA5Landscape ? `
         #printPoArea.print-active > div {
             max-height: 144mm !important;
@@ -1413,6 +1481,13 @@ window.applyPrintStyle = function(size, layout) {
 };
 
 window.showPrintPreview = function(areaId) {
+    if (!document.getElementById(areaId)) {
+        const dynDiv = document.createElement('div');
+        dynDiv.id = areaId;
+        dynDiv.style.display = 'none';
+        document.body.appendChild(dynDiv);
+    }
+
     document.getElementById('mainApp').style.display = 'none';
     document.getElementById('homeMenu').style.display = 'none';
     
@@ -1500,15 +1575,21 @@ window.sharePdf = async function(areaId) {
     });
     
     const opt = {
-        margin:       0,
-        filename:     `長固ERP_單據_${Date.now()}.pdf`,
+        margin:       5,
+        filename:     `長固ERP_報表單據_${Date.now()}.pdf`,
         image:        { type: 'jpeg', quality: 0.98 },
         html2canvas:  { scale: 2, useCORS: true, allowTaint: false, letterRendering: true },
         jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
     };
     
     if(areaId === 'printDeliveryArea' || areaId === 'printPoArea' || areaId === 'printArea') {
+        opt.margin = 0;
         opt.jsPDF.format = 'a5';
+        opt.jsPDF.orientation = 'landscape';
+    } else if (areaId === 'printUnpaidWorkbookArea') {
+        opt.margin = 6;
+        opt.filename = `長固ERP_未收款三表分析_${getTodayStr()}.pdf`;
+        opt.jsPDF.format = 'a4';
         opt.jsPDF.orientation = 'landscape';
     }
 
