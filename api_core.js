@@ -5,7 +5,7 @@
  * 1. 直連 Supabase 實現 0.1 秒極速登入
  * 2. 整合 SheetJS 與 PDF.js 於前端瞬間生成/解析 Excel 與 PDF 報表，交由 GAS 遙控器寄信
  * 3. 內建 customer1.xlsx 客戶代號 (CUSTID) 智慧雙向對照引擎
- * 4. 支援跨系統明細補登、5月前歷史帳移轉、批次快速沖帳、撤銷還原(Undo)與進貨品項管理
+ * 4. 支援跨系統明細補登、5月前歷史帳移轉、批次快速沖帳、撤銷還原(Undo)與品項與客戶編輯
  * ============================================================================
  */
 
@@ -826,7 +826,7 @@ async function executeSupabaseAction(action, payload) {
         });
     } 
     else if (action === 'saveAdminPurchaseItem') {
-        // 【項目 1 核心】管理員後台「🏭 進貨品項」直接管理 Supabase inventory 資料表
+        // 管理員後台「🏭 進貨品項」直接管理 Supabase inventory 資料表
         const record = {
             name: payload.name,
             qty: Number(payload.qty) || 0,
@@ -1769,7 +1769,7 @@ window.enterSystem = function(modId) {
         'invoice':'📝 開立發票',
         'inventory': '🏭 產品庫存管理',
         'history':'📊 紀錄與報表',
-        'admin':'⚙️ 管理員後台',
+        'admin':'⚙️ 品項與客戶編輯',
         'quotation': '📑 開立估價單',
         'delivery': '🚚 送貨與電子簽收',
         'payment': '💰 收款明細與沖帳'
