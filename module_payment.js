@@ -1,15 +1,15 @@
 /**
  * ============================================================================
- * 模組 7：收款明細與沖帳 + 跨系統未收款智慧勾稽中心 + 未收款三表樞紐分析中心 (module_payment.js)
- * 【PDF/Excel 智慧上傳 ＆ ⚡無誤快沖彈窗 ＆ ⏪防呆撤銷 ＆ ⚠️三階段覆核 ＆ 📊未收款三表復刻列印升級版】
+ * 模組 7：收款明細與沖帳 + 跨系統未收款智慧勾稽中心 + 未收/已沖帳三表樞紐分析中心 (module_payment.js)
+ * 【PDF/Excel 智慧上傳 ＆ ⚡無誤快沖彈窗 ＆ ⏪防呆撤銷 ＆ ⚠️三階段覆核 ＆ 📊未收/已沖帳雙樞紐列印升級版】
  * 1. 待收款管理與收款沖帳 (雙向連動「沖帳記錄表」與「銷售明細總表」N~Q欄)
  * 2. 點擊頂部「🔴 總待收款金額 (含稅)」彈出完美復刻「未收款-11511.xlsx」三工作表連動分析視窗
- *    - 完整復刻：【收款總表】、【未付款-OLD (14欄明細)】、【分析表1 (客戶×年月雙層跨欄樞紐表)】
- *    - 支援列印前單選或多選工作表列印、下鑽查明細(Drill-Down)、代號/名稱切換、帳齡色標、匯出三表Excel
- * 3. 支援上傳 PDF / Excel 付款單對帳，內建 Gemini AI / PDF.js 轉 Excel 檔案下載功能
- * 4. 第一階段：自動彈出「⚡ 比對無誤一鍵快速確認沖帳」視窗，完成後自動消失
- * 5. 第二階段：內建「⏪ 撤銷返回上一步」防呆快照還原機制 (同步還原 Supabase 與前端狀態)
- * 6. 第三階段：自動展開「⚠️ 付款單據待確認 / 金額相異人工覆核區」(差額帶入沖帳 / 已沖忽略 / 補建舊帳沖帳)
+ * 3. 點擊頂部「🟢 累計已完成沖帳」彈出「已完成沖帳區間查詢與三表匯出/多選列印中心」
+ *    - 支援時間區間搜尋、快捷期間按鈕、客戶/收款方式篩選、僅顯示差額快篩、下鑽查明細、單張傳票憑證列印
+ * 4. 支援上傳 PDF / Excel 付款單對帳，內建 Gemini AI / PDF.js 轉 Excel 檔案下載功能
+ * 5. 第一階段：自動彈出「⚡ 比對無誤一鍵快速確認沖帳」視窗，完成後自動消失
+ * 6. 第二階段：內建「⏪ 撤銷返回上一步」防呆快照還原機制 (同步還原 Supabase 與前端狀態)
+ * 7. 第三階段：自動展開「⚠️ 付款單據待確認 / 金額相異人工覆核區」(差額帶入沖帳 / 已沖忽略 / 補建舊帳沖帳)
  * ============================================================================
  */
 
@@ -46,12 +46,25 @@ window.paymentModuleState = {
     },
     // 📊 復刻「未收款-11511.xlsx」三工作表分析視窗狀態
     workbookView: {
-        dataSource: 'ERP_LIVE',        // 'ERP_LIVE' (本系統即時未收) | 'EXT_EXCEL' (外部上傳之未收款Excel)
+        dataSource: 'ERP_LIVE',             // 'ERP_LIVE' (本系統即時未收) | 'EXT_EXCEL' (外部上傳之未收款Excel)
         clientDisplayMode: 'CODE_AND_NAME', // 'CODE_ONLY' (純代號如200001) | 'CODE_AND_NAME' (代號+醫院名稱)
-        agingHighlight: true,          // 是否啟用 2026/05 前舊帳帳齡粉紅警戒色標
-        activeSheet: 'SHEET_3',        // 'SHEET_1' (收款總表) | 'SHEET_2' (未付款-OLD) | 'SHEET_3' (分析表1)
-        drillFilter: null,             // { title: '', custId: '', year: '', yearMonth: '', reconcileDate: '' }
-        sheet2Search: ''               // 未付款-OLD 關鍵字搜尋
+        agingHighlight: true,               // 是否啟用 2026/05 前舊帳帳齡粉紅警戒色標
+        activeSheet: 'SHEET_3',             // 'SHEET_1' (收款總表) | 'SHEET_2' (未付款-OLD) | 'SHEET_3' (分析表1)
+        drillFilter: null,                  // { title: '', custId: '', year: '', yearMonth: '', reconcileDate: '' }
+        sheet2Search: ''                    // 未付款-OLD 關鍵字搜尋
+    },
+    // 🟢 「累計已完成沖帳」時間區間查詢與三表匯出列印視窗狀態
+    paidReportView: {
+        dateBasis: 'PAY_DATE',              // 'PAY_DATE' (依實際收款日) | 'CREATE_TIME' (依系統建立日)
+        startDate: '',                      // YYYY-MM-DD
+        endDate: '',                        // YYYY-MM-DD
+        clientFilter: '',                   // 篩選特定客戶
+        methodFilter: '',                   // 篩選收款方式
+        sourceFilter: '',                   // 篩選帳款來源
+        searchTerm: '',                     // 關鍵字模糊搜尋
+        onlyDiff: false,                    // 進階優化 1：僅顯示有匯費/折讓差額之沖帳單
+        activeSheet: 'PAID_S1',             // 'PAID_S1' (已沖帳收款總表) | 'PAID_S2' (發票品項展開明細表) | 'PAID_S3' (客戶別收款統計表)
+        drillClient: null                   // 進階優化 2：從客戶別統計表點擊下鑽之客戶名稱
     }
 };
 
@@ -64,7 +77,7 @@ window.initPaymentModule = function() {
     if (root.innerHTML.trim() !== '' && document.getElementById('payMainTabs')) return;
 
     root.innerHTML = `
-        <!-- 頂部應收與沖帳總覽 KPI (第一張「🔴 總待收款金額」支援點擊開啟未收款三表分析中心) -->
+        <!-- 頂部應收與沖帳總覽 KPI (第1張「🔴 總待收款金額」與第4張「🟢 累計已完成沖帳」皆支援點擊互動分析與列印) -->
         <div class="row g-2 mb-3">
             <div class="col-6 col-md-3">
                 <div class="p-3 rounded border bg-white shadow-sm text-center h-100 position-relative"
@@ -98,10 +111,20 @@ window.initPaymentModule = function() {
                 </div>
             </div>
             <div class="col-6 col-md-3">
-                <div class="p-3 rounded border bg-white shadow-sm text-center h-100" style="border-left: 4px solid #198754 !important;">
+                <div class="p-3 rounded border bg-white shadow-sm text-center h-100 position-relative"
+                     style="border-left: 5px solid #198754 !important; cursor: pointer; transition: transform 0.15s ease, box-shadow 0.15s ease;"
+                     onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 6px 16px rgba(25,135,84,0.22)';"
+                     onmouseout="this.style.transform=''; this.style.boxShadow='';"
+                     onclick="window.openPaidReportModal()"
+                     title="點擊開啟「已完成沖帳區間查詢、Excel 下載與多選列印中心」">
                     <div class="small fw-bold text-muted">🟢 累計已完成沖帳</div>
                     <div class="fs-4 fw-bold text-success mt-1" id="payKpiTotalPaid">$0</div>
                     <div class="small text-secondary" id="payKpiTotalPaidCount">共 0 筆沖帳單</div>
+                    <div class="mt-1">
+                        <span class="badge bg-success bg-opacity-10 text-success border border-success" style="font-size: 0.72rem;">
+                            🔎 點擊依區間查詢與匯出列印
+                        </span>
+                    </div>
                 </div>
             </div>
         </div>
@@ -516,7 +539,6 @@ window.initPaymentModule = function() {
                         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                     </div>
                     <div class="modal-body bg-light">
-                        <!-- 頂部批次收款資訊設定與視窗內撤銷按鈕 -->
                         <div class="p-3 bg-white border rounded shadow-sm mb-3">
                             <div class="row g-2 align-items-end">
                                 <div class="col-12 col-md-3">
@@ -544,7 +566,6 @@ window.initPaymentModule = function() {
                             </div>
                         </div>
 
-                        <!-- 比對無誤清單表格 -->
                         <div class="card border-0 shadow-sm">
                             <div class="card-header bg-white d-flex justify-content-between align-items-center py-2">
                                 <div class="fw-bold text-success">
@@ -639,13 +660,10 @@ window.initPaymentModule = function() {
                         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                     </div>
                     <div class="modal-body bg-light p-3">
-                        <!-- 頂部 5 大進階控制列 ＆ 列印前勾選工作表專區 -->
                         <div class="row g-2 mb-3">
-                            <!-- 左側：資料源、代號顯示模式、帳齡色標、Excel 下載 -->
                             <div class="col-12 col-lg-7">
                                 <div class="p-2 bg-white border rounded shadow-sm h-100 d-flex flex-wrap align-items-center justify-content-between gap-2">
                                     <div class="d-flex flex-wrap align-items-center gap-2">
-                                        <!-- 進階優化 5：雙資料源切換 -->
                                         <div class="input-group input-group-sm" style="width: auto;">
                                             <span class="input-group-text fw-bold bg-light">資料來源</span>
                                             <select id="wbDataSourceSelect" class="form-select fw-bold text-primary" onchange="window.onChangeWorkbookOptions()">
@@ -659,7 +677,6 @@ window.initPaymentModule = function() {
                                             <input type="file" accept=".xlsx,.xls,.csv" style="display:none;" onchange="window.handleWorkbookDirectExcelUpload(this)">
                                         </label>
 
-                                        <!-- 進階優化 1：客戶代號 vs 代號+醫院名稱 切換 -->
                                         <div class="btn-group btn-group-sm" role="group">
                                             <button type="button" id="btnWbModeCodeOnly" class="btn btn-outline-dark fw-bold" onclick="window.setWorkbookClientDisplayMode('CODE_ONLY')">
                                                 🔢 純代號 (200001)
@@ -669,21 +686,18 @@ window.initPaymentModule = function() {
                                             </button>
                                         </div>
 
-                                        <!-- 進階優化 4：跨期舊帳帳齡警戒色標開關 -->
                                         <div class="form-check form-switch ms-1 mb-0">
                                             <input class="form-check-input" type="checkbox" id="wbAgingHighlightSwitch" checked onchange="window.onChangeWorkbookOptions()" style="cursor:pointer;">
                                             <label class="form-check-label small fw-bold text-danger" for="wbAgingHighlightSwitch" style="cursor:pointer;">🕰️ 5月前舊帳警戒色標</label>
                                         </div>
                                     </div>
 
-                                    <!-- 進階優化 3：一鍵下載復刻版三工作表 Excel -->
                                     <button type="button" class="btn btn-sm btn-success fw-bold shadow-sm px-3" onclick="window.exportUnpaidWorkbookExcel()">
                                         📥 下載三表 Excel (.xlsx)
                                     </button>
                                 </div>
                             </div>
 
-                            <!-- 右側：列印前選擇要列印的工作表 (支援單選或多選) -->
                             <div class="col-12 col-lg-5">
                                 <div class="p-2 bg-white border border-primary rounded shadow-sm h-100 d-flex flex-wrap align-items-center justify-content-between gap-2">
                                     <div>
@@ -711,7 +725,6 @@ window.initPaymentModule = function() {
                             </div>
                         </div>
 
-                        <!-- Excel 風格工作表切換標籤列 + 總金額勾稽徽章 -->
                         <div class="d-flex flex-wrap justify-content-between align-items-center bg-white border rounded-top px-3 pt-2 border-bottom-0">
                             <ul class="nav nav-tabs border-bottom-0" id="wbSheetTabs">
                                 <li class="nav-item">
@@ -738,7 +751,6 @@ window.initPaymentModule = function() {
                             </div>
                         </div>
 
-                        <!-- 工作表內容渲染容器 -->
                         <div class="bg-white border rounded-bottom shadow-sm p-3" id="wbSheetContentContainer" style="min-height: 480px; max-height: 68vh; overflow: auto;">
                         </div>
                     </div>
@@ -752,6 +764,186 @@ window.initPaymentModule = function() {
             </div>
         </div>`;
         document.body.insertAdjacentHTML('beforeend', wbModalHtml);
+    }
+
+    // 建立「🟢 已完成沖帳區間查詢、三工作表 Excel 下載與多選列印中心」全螢幕彈跳視窗
+    if (!document.getElementById('paidReportModal')) {
+        const paidModalHtml = `
+        <div class="modal fade" id="paidReportModal" tabindex="-1">
+            <div class="modal-dialog modal-fullscreen-lg-down modal-xl" style="max-width: 96vw;">
+                <div class="modal-content border-0 shadow-lg">
+                    <div class="modal-header text-white py-2" style="background: linear-gradient(90deg, #0ca678 0%, #198754 100%);">
+                        <div>
+                            <h5 class="modal-title fw-bold mb-0">🟢 已完成沖帳區間查詢與報表匯出列印中心</h5>
+                            <div class="small opacity-75">依所選時間區間查詢已完成沖帳之收款總表、發票品項展開明細與客戶別統計，支援三工作表 Excel 下載與自由勾選列印！</div>
+                        </div>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body bg-light p-3">
+                        <!-- 頂部：時間區間搜尋框 ＋ 快捷期間按鈕 ＋ 複合篩選與列印控制 -->
+                        <div class="row g-2 mb-3">
+                            <div class="col-12 col-lg-8">
+                                <div class="p-3 bg-white border rounded shadow-sm h-100">
+                                    <!-- 第一排：日期基準 ＋ 起訖日期區間 ＋ 月份快選 ＋ 快捷期間按鈕 -->
+                                    <div class="d-flex flex-wrap align-items-center gap-2 mb-2 pb-2 border-bottom">
+                                        <select id="prDateBasis" class="form-select form-select-sm fw-bold text-success border-success" style="width: auto;" onchange="window.onChangePaidReportFilter()">
+                                            <option value="PAY_DATE">📅 依實際收款日查詢</option>
+                                            <option value="CREATE_TIME">🕒 依系統沖帳建立日查詢</option>
+                                        </select>
+
+                                        <div class="d-flex align-items-center gap-1">
+                                            <input type="date" id="prStartDate" class="form-control form-control-sm fw-bold border-success" onchange="window.onChangePaidReportFilter()" title="區間開始日期">
+                                            <span class="fw-bold text-muted">～</span>
+                                            <input type="date" id="prEndDate" class="form-control form-control-sm fw-bold border-success" onchange="window.onChangePaidReportFilter()" title="區間結束日期">
+                                        </div>
+
+                                        <input type="month" id="prMonthPicker" class="form-control form-control-sm fw-bold text-primary" style="width: 145px;" onchange="window.setPaidReportMonthPicker(this.value)" title="快速指定特定月份">
+
+                                        <div class="btn-group btn-group-sm flex-wrap" role="group">
+                                            <button type="button" class="btn btn-outline-success fw-bold" onclick="window.setPaidReportQuickDate('TODAY')">今日</button>
+                                            <button type="button" class="btn btn-outline-success fw-bold" onclick="window.setPaidReportQuickDate('THIS_WEEK')">本週</button>
+                                            <button type="button" class="btn btn-outline-success fw-bold" onclick="window.setPaidReportQuickDate('THIS_MONTH')">本月</button>
+                                            <button type="button" class="btn btn-outline-success fw-bold" onclick="window.setPaidReportQuickDate('LAST_MONTH')">上月</button>
+                                            <button type="button" class="btn btn-outline-success fw-bold" onclick="window.setPaidReportQuickDate('LAST_3_MONTHS')">近3月</button>
+                                            <button type="button" class="btn btn-outline-success fw-bold" onclick="window.setPaidReportQuickDate('THIS_YEAR')">今年</button>
+                                            <button type="button" class="btn btn-outline-secondary fw-bold" onclick="window.setPaidReportQuickDate('ALL')">全部期間</button>
+                                        </div>
+                                    </div>
+
+                                    <!-- 第二排：客戶、收款方式、帳款來源、關鍵字、僅顯示有差額快篩、Excel下載 -->
+                                    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+                                        <div class="d-flex flex-wrap align-items-center gap-2 flex-grow-1">
+                                            <select id="prClientFilter" class="form-select form-select-sm fw-bold text-dark" style="max-width: 190px;" onchange="window.onChangePaidReportFilter()">
+                                                <option value="">🏢 所有客戶 (全部)</option>
+                                            </select>
+
+                                            <select id="prMethodFilter" class="form-select form-select-sm fw-bold text-secondary" style="max-width: 155px;" onchange="window.onChangePaidReportFilter()">
+                                                <option value="">💳 所有收款方式</option>
+                                                <option value="銀行匯款">🏦 銀行匯款</option>
+                                                <option value="支票收款">🎫 支票收款</option>
+                                                <option value="現金收款">💵 現金收款</option>
+                                                <option value="折讓/抵扣">📉 折讓/抵扣</option>
+                                                <option value="外部系統同步沖帳">🔄 外部/對帳單快沖</option>
+                                            </select>
+
+                                            <select id="prSourceFilter" class="form-select form-select-sm fw-bold text-secondary" style="max-width: 155px;" onchange="window.onChangePaidReportFilter()">
+                                                <option value="">🏷️ 所有帳款來源</option>
+                                                <option value="ERP原生帳款">📅 ERP原生帳款</option>
+                                                <option value="5月前歷史帳款">🕰️ 5月前歷史帳款</option>
+                                                <option value="跨期混合沖帳(含5月前)">🔗 跨期混合沖帳</option>
+                                            </select>
+
+                                            <input type="search" id="prSearchInput" class="form-control form-control-sm fw-bold" style="max-width: 210px;" placeholder="🔍 搜單號、發票、品名、備註..." oninput="window.onChangePaidReportFilter()">
+
+                                            <!-- 進階優化 1：僅顯示有匯費/折讓差額開關 -->
+                                            <div class="form-check form-switch mb-0 ms-1">
+                                                <input class="form-check-input" type="checkbox" id="prOnlyDiffSwitch" onchange="window.onChangePaidReportFilter()" style="cursor:pointer;">
+                                                <label class="form-check-label small fw-bold text-danger" for="prOnlyDiffSwitch" style="cursor:pointer;">⚡ 僅顯示有匯費/折讓差額</label>
+                                            </div>
+                                        </div>
+
+                                        <button type="button" class="btn btn-sm btn-success fw-bold shadow-sm px-3 py-1" onclick="window.exportPaidReportExcel()">
+                                            📥 下載區間三表 Excel (.xlsx)
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 右側：列印前勾選要列印的工作表 (支援單選或多選) -->
+                            <div class="col-12 col-lg-4">
+                                <div class="p-3 bg-white border border-success rounded shadow-sm h-100 d-flex flex-column justify-content-between">
+                                    <div>
+                                        <div class="small fw-bold text-success mb-1">
+                                            🖨️ 列印前選擇要列印的已沖帳工作表（可單選或多選）：
+                                            <a href="javascript:void(0)" class="ms-1 text-decoration-none" onclick="window.quickSelectPaidPrintSheets('ALL')">[全選三表]</a>
+                                            <a href="javascript:void(0)" class="ms-1 text-decoration-none" onclick="window.quickSelectPaidPrintSheets('SUMMARY')">[印表1+表3]</a>
+                                        </div>
+                                        <div class="d-flex flex-wrap gap-3 mt-1">
+                                            <label class="form-check-label small fw-bold" style="cursor:pointer;">
+                                                <input type="checkbox" class="form-check-input me-1" id="cbPrintPaid_s1" checked>1. 收款沖帳總表
+                                            </label>
+                                            <label class="form-check-label small fw-bold" style="cursor:pointer;">
+                                                <input type="checkbox" class="form-check-input me-1" id="cbPrintPaid_s2">2. 發票品項展開明細
+                                            </label>
+                                            <label class="form-check-label small fw-bold" style="cursor:pointer;">
+                                                <input type="checkbox" class="form-check-input me-1" id="cbPrintPaid_s3" checked>3. 客戶別收款統計
+                                            </label>
+                                        </div>
+                                    </div>
+                                    <button type="button" class="btn btn-success fw-bold shadow-sm w-100 mt-2 py-2" onclick="window.printSelectedPaidReportSheets()">
+                                        🖨️ 預覽並執行區間報表列印
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 區間即時統計總覽橫幅 -->
+                        <div class="row g-2 mb-3 text-center">
+                            <div class="col-6 col-md-3">
+                                <div class="p-2 bg-white border rounded shadow-sm">
+                                    <div class="small text-muted fw-bold">🧾 區間沖帳總單數 / 品項數</div>
+                                    <div class="fs-5 fw-bold text-dark mt-1" id="prStatCount">0 單 (0 筆品項)</div>
+                                </div>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <div class="p-2 bg-white border rounded shadow-sm">
+                                    <div class="small text-muted fw-bold">📘 區間帳面應收總額 (G欄)</div>
+                                    <div class="fs-5 fw-bold text-primary mt-1" id="prStatReceivable">$0</div>
+                                </div>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <div class="p-2 bg-white border rounded shadow-sm" style="border-bottom: 3px solid #198754 !important;">
+                                    <div class="small text-success fw-bold">🟢 區間實際收款總額 (H欄)</div>
+                                    <div class="fs-4 fw-bold text-success mt-1" id="prStatReceived">$0</div>
+                                </div>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <div class="p-2 bg-white border rounded shadow-sm">
+                                    <div class="small text-muted fw-bold">📉 匯費 / 折讓 / 差額總計 (I欄)</div>
+                                    <div class="fs-5 fw-bold text-danger mt-1" id="prStatDiff">$0</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 三大工作表分頁切換列 -->
+                        <div class="d-flex flex-wrap justify-content-between align-items-center bg-white border rounded-top px-3 pt-2 border-bottom-0">
+                            <ul class="nav nav-tabs border-bottom-0" id="prSheetTabs">
+                                <li class="nav-item">
+                                    <button type="button" class="nav-link active fw-bold" id="prTabBtn_PAID_S1" onclick="window.switchPaidReportSheet('PAID_S1')">
+                                        📑 工作表 1：已沖帳收款總表 (依沖帳單) <span class="badge bg-success ms-1" id="prBadge_s1">0 單</span>
+                                    </button>
+                                </li>
+                                <li class="nav-item">
+                                    <button type="button" class="nav-link fw-bold" id="prTabBtn_PAID_S2" onclick="window.switchPaidReportSheet('PAID_S2')">
+                                        📑 工作表 2：已沖帳發票與品項明細表 <span class="badge bg-primary ms-1" id="prBadge_s2">0 筆</span>
+                                    </button>
+                                </li>
+                                <li class="nav-item">
+                                    <button type="button" class="nav-link fw-bold" id="prTabBtn_PAID_S3" onclick="window.switchPaidReportSheet('PAID_S3')">
+                                        📑 工作表 3：客戶別已收款與方式統計表 <span class="badge bg-dark ms-1" id="prBadge_s3">0 客戶</span>
+                                    </button>
+                                </li>
+                            </ul>
+                            <div class="pb-2 d-flex align-items-center gap-2">
+                                <span id="prDrillBanner" style="display:none;"></span>
+                                <span class="small fw-bold text-secondary" id="prPeriodRangeLabel">查詢期間：全部期間</span>
+                            </div>
+                        </div>
+
+                        <!-- 工作表內容渲染容器 -->
+                        <div class="bg-white border rounded-bottom shadow-sm p-3" id="prSheetContentContainer" style="min-height: 420px; max-height: 60vh; overflow: auto;">
+                        </div>
+                    </div>
+                    <div class="modal-footer bg-white py-2 d-flex justify-content-between">
+                        <div class="small text-secondary">
+                            💡 <strong>提示</strong>：點擊「<strong>工作表 1</strong>」每列右側的「<strong>🖨️ 憑證</strong>」可單獨印出該筆收款沖帳核銷傳票；點擊「<strong>工作表 3</strong>」客戶金額可下鑽檢視明細！
+                        </div>
+                        <button type="button" class="btn btn-secondary fw-bold px-4" data-bs-dismiss="modal">關閉視窗</button>
+                    </div>
+                </div>
+            </div>
+        </div>`;
+        document.body.insertAdjacentHTML('beforeend', paidModalHtml);
     }
 
     // 載入未收比對中心、上傳單據與撤銷堆疊的持久化進度
@@ -778,14 +970,13 @@ window.isValidReceivableItem = function(s) {
 };
 
 // ============================================================================
-// 1.5 【核心新增】復刻「未收款-11511.xlsx」三工作表連動分析、下鑽與多選列印引擎
+// 1.5 復刻「未收款-11511.xlsx」三工作表連動分析、下鑽與多選列印引擎
 // ============================================================================
 window.openUnpaidWorkbookModal = function() {
     window.initPaymentModule();
     const wv = window.paymentModuleState.workbookView;
     wv.drillFilter = null;
 
-    // 若外部已載入未收款 Excel 且本系統尚無未收明細，自動貼心切換至外部資料源
     const hasErpUnpaid = (globalSalesDetails || []).some(s => window.isValidReceivableItem(s) && s.payStatus !== '已沖帳');
     const hasExtUnpaid = (window.paymentModuleState.unpaidReconcile.extRows || []).length > 0;
     if (!hasErpUnpaid && hasExtUnpaid) {
@@ -830,7 +1021,6 @@ window.handleWorkbookDirectExcelUpload = function(input) {
             window.prepareLegacyStagedItems(rows);
             window.runUnpaidReconciliation(true);
 
-            // 自動切換為檢視剛上傳的外部 Excel 資料源
             window.paymentModuleState.workbookView.dataSource = 'EXT_EXCEL';
             window.paymentModuleState.workbookView.drillFilter = null;
             const srcSel = document.getElementById('wbDataSourceSelect');
@@ -902,14 +1092,12 @@ window.quickSelectWorkbookPrintSheets = function(type) {
     }
 };
 
-// 動態建構三工作表模型 (將 ERP 即時未收資料 或 外部 Excel 資料 轉換為統一的 14 欄與兩張樞紐表結構)
 window.buildUnpaidWorkbookDataModel = function() {
     const wv = window.paymentModuleState.workbookView;
     const isExt = wv.dataSource === 'EXT_EXCEL' && (window.paymentModuleState.unpaidReconcile.extRows || []).length > 0;
     const rawItems = [];
 
     if (isExt) {
-        // 使用外部上傳之「未收款明細.xlsx」(如 未收款-11511.xlsx)
         (window.paymentModuleState.unpaidReconcile.extRows || []).forEach((r, idx) => {
             if (r.isPaid) return;
             const dStr = window.parseExternalDateStr ? window.parseExternalDateStr(r.date) : String(r.date || '');
@@ -945,7 +1133,6 @@ window.buildUnpaidWorkbookDataModel = function() {
             });
         });
     } else {
-        // 使用本系統 globalSalesDetails 即時待收款資料
         let seqCounter = 0;
         (globalSalesDetails || []).forEach(s => {
             if (!window.isValidReceivableItem(s)) return;
@@ -964,14 +1151,12 @@ window.buildUnpaidWorkbookDataModel = function() {
             const prodCode = window.getProductCodeByName ? window.getProductCodeByName(s.name, s.client) : s.name;
             const remainTotal = Math.round(((Number(s.subtotal) || ((Number(s.qty)||0) * (Number(s.price)||0))) - (Number(s.paidAmount) || 0)) * 100) / 100;
 
-            // 從 lot 或歷史紀錄提取外部單號與核對備註
             let extOrd = '';
             const lotStr = String(s.lot || '');
             const extMatch = lotStr.match(/外部單號:(\d+)/);
             if (extMatch) extOrd = extMatch[1];
             else extOrd = String(s.rowIdx || (1060000 + seqCounter)).slice(-7);
 
-            // 若有設定收款日預排則顯示於沖帳日欄
             const recDateStr = String(s.payDate || '').trim();
 
             rawItems.push({
@@ -1003,9 +1188,6 @@ window.buildUnpaidWorkbookDataModel = function() {
 
     const grandTotal = Math.round(rawItems.reduce((sum, x) => sum + x.total, 0) * 100) / 100;
 
-    // ========================================================================
-    // 建構【工作表 1：收款總表】(依 沖帳日 分組 vs (空白))
-    // ========================================================================
     const recDateMap = new Map();
     let blankRecDateSum = 0;
     rawItems.forEach(item => {
@@ -1018,11 +1200,8 @@ window.buildUnpaidWorkbookDataModel = function() {
     });
     const recDateCols = Array.from(recDateMap.keys()).sort();
 
-    // ========================================================================
-    // 建構【工作表 3：分析表1】(客戶代號 × 年度/月份 交叉矩陣)
-    // ========================================================================
-    const yearsMap = new Map(); // year -> Set of months
-    const clientMatrix = new Map(); // custId -> { custId, clientName, byYm: {}, byYear: {}, total: 0 }
+    const yearsMap = new Map();
+    const clientMatrix = new Map();
 
     rawItems.forEach(item => {
         if (!yearsMap.has(item.year)) yearsMap.set(item.year, new Set());
@@ -1055,7 +1234,6 @@ window.buildUnpaidWorkbookDataModel = function() {
         String(a.custId).localeCompare(String(b.custId), undefined, { numeric: true })
     );
 
-    // 計算「分析表1」底部縱向總計列
     const colTotalsByYm = {};
     const colTotalsByYear = {};
     sortedClientRows.forEach(cRow => {
@@ -1088,7 +1266,6 @@ window.buildUnpaidWorkbookDataModel = function() {
     };
 };
 
-// 格式化數值 (若為整數顯示千分位，若有小數如 .3 則保留小數，完全貼合未收款-11511.xlsx)
 window.formatWbNumber = function(val) {
     if (val === undefined || val === null || val === '' || val === 0) return '';
     const n = Math.round(Number(val) * 100) / 100;
@@ -1096,12 +1273,10 @@ window.formatWbNumber = function(val) {
     return n.toLocaleString('zh-TW', { maximumFractionDigits: 2 });
 };
 
-// 格式化客戶標籤 (支援「純代號」與「代號+名稱」雙模式)
 window.formatWbClientLabel = function(custId, clientName, forceMode = null) {
     const mode = forceMode || window.paymentModuleState.workbookView.clientDisplayMode || 'CODE_AND_NAME';
     if (mode === 'CODE_ONLY') return custId;
     if (!clientName || clientName === custId || clientName.startsWith('未知客戶')) return custId;
-    // 簡化長醫院頭銜讓表格更美觀
     const shortName = clientName
         .replace(/醫療財團法人|醫療社團法人|財團法人/g, '')
         .replace(/\(委託.*$/g, '')
@@ -1109,7 +1284,6 @@ window.formatWbClientLabel = function(custId, clientName, forceMode = null) {
     return `${custId} ${shortName}`;
 };
 
-// 渲染彈跳視窗內的當前工作表
 window.renderUnpaidWorkbookModalContent = function() {
     const container = document.getElementById('wbSheetContentContainer');
     if (!container) return;
@@ -1136,7 +1310,6 @@ window.renderUnpaidWorkbookModalContent = function() {
     }
 };
 
-// 產生【工作表 1：收款總表】HTML
 window.generateSheet1Html = function(model, forPrint = false) {
     const s1 = model.sheet1;
     const cols = s1.recDateCols || [];
@@ -1197,7 +1370,6 @@ window.generateSheet1Html = function(model, forPrint = false) {
     </div>`;
 };
 
-// 產生【工作表 3：分析表1 (客戶代號 × 年度/月份 帳齡交叉矩陣)】HTML
 window.generateSheet3Html = function(model, forPrint = false) {
     const s3 = model.sheet3;
     const wv = window.paymentModuleState.workbookView;
@@ -1207,9 +1379,7 @@ window.generateSheet3Html = function(model, forPrint = false) {
         return `<div class="text-center text-muted py-5">🎉 目前沒有任何未收款資料可供分析</div>`;
     }
 
-    // 第一層表頭：年份 + 該年合計
     let topHeaderHtml = `<th rowspan="2" class="align-middle" style="min-width: ${wv.clientDisplayMode === 'CODE_AND_NAME' ? '210px' : '105px'}; position: sticky; left: 0; z-index: 2; background-color: #dce6f1;">客戶代號</th>`;
-    // 第二層表頭：各月份
     let subHeaderHtml = '';
 
     yrStruct.forEach(ys => {
@@ -1224,7 +1394,6 @@ window.generateSheet3Html = function(model, forPrint = false) {
     });
     topHeaderHtml += `<th rowspan="2" class="align-middle text-end" style="background-color: #fce4d6; min-width: 115px;">總計</th>`;
 
-    // 客戶資料列
     const bodyRowsHtml = s3.clientRows.map(cRow => {
         const label = window.formatWbClientLabel(cRow.custId, cRow.clientName);
         const clientClick = !forPrint
@@ -1260,7 +1429,6 @@ window.generateSheet3Html = function(model, forPrint = false) {
         return `<tr>${cellsHtml}</tr>`;
     }).join('');
 
-    // 底部總計列
     let footCellsHtml = `<td class="fw-bold" style="position: sticky; left: 0; background-color: #dce6f1; z-index: 1;">總計</td>`;
     yrStruct.forEach(ys => {
         ys.months.forEach(m => {
@@ -1306,7 +1474,6 @@ window.generateSheet3Html = function(model, forPrint = false) {
     </div>`;
 };
 
-// 產生【工作表 2：未付款-OLD (14 欄完整未收款明細表)】HTML
 window.generateSheet2Html = function(model, forPrint = false) {
     const wv = window.paymentModuleState.workbookView;
     const drill = wv.drillFilter;
@@ -1435,7 +1602,6 @@ window.generateSheet2Html = function(model, forPrint = false) {
     </div>`;
 };
 
-// 進階優化 2：點擊「分析表1」或「收款總表」金額格，自動下鑽 (Drill-Down) 跳轉至「未付款-OLD」顯示該批明細
 window.drillDownWorkbook = function(filterObj) {
     const wv = window.paymentModuleState.workbookView;
     wv.drillFilter = filterObj;
@@ -1455,7 +1621,6 @@ window.onWorkbookSheet2Search = debounce(function(val) {
     window.renderUnpaidWorkbookModalContent();
 }, 200);
 
-// 從「未付款-OLD」直接點擊單筆「⚡ 沖帳」
 window.paySingleItemFromWorkbook = function(erpRowIdx) {
     if (!erpRowIdx) return;
     window.paymentModuleState.selectedRowIndices.clear();
@@ -1464,7 +1629,6 @@ window.paySingleItemFromWorkbook = function(erpRowIdx) {
     window.openExecutePaymentModal();
 };
 
-// 🖨️ 列印前依勾選的工作表（可單選或多選）組合產生 A4 橫向分頁列印預覽與 PDF
 window.printSelectedUnpaidWorkbookSheets = function() {
     const pS1 = document.getElementById('cbPrintWb_s1')?.checked;
     const pS2 = document.getElementById('cbPrintWb_s2')?.checked;
@@ -1514,13 +1678,11 @@ window.printSelectedUnpaidWorkbookSheets = function() {
         `);
     }
 
-    // 多張工作表之間自動插入強制換頁符號 (page-break-after: always)
     const combinedHtml = selectedBlocks.map((blockHtml, idx) => {
         const isLast = idx === selectedBlocks.length - 1;
         return `<div class="${!isLast ? 'print-sheet-page-break' : ''}" style="margin-bottom: 18px;">${blockHtml}</div>`;
     }).join('');
 
-    // 先隱藏 Modal 以免遮擋列印預覽控制列
     bootstrap.Modal.getInstance(document.getElementById('unpaidWorkbookModal'))?.hide();
 
     let printEl = document.getElementById('printUnpaidWorkbookArea');
@@ -1536,16 +1698,12 @@ window.printSelectedUnpaidWorkbookSheets = function() {
     window.showPrintPreview('printUnpaidWorkbookArea');
 };
 
-// 📥 進階優化 3：一鍵下載完美復刻版 `.xlsx`（內含「收款總表」、「未付款-OLD」、「分析表1」三個工作表）
 window.exportUnpaidWorkbookExcel = function() {
     if (typeof XLSX === 'undefined') return alert("Excel 引擎載入中，請稍候！");
     const model = window.buildUnpaidWorkbookDataModel();
     const wv = window.paymentModuleState.workbookView;
     const wb = XLSX.utils.book_new();
 
-    // ------------------------------------------------------------------------
-    // 1. 建立「收款總表」工作表
-    // ------------------------------------------------------------------------
     const s1 = model.sheet1;
     const s1Cols = s1.recDateCols || [];
     const s1Row1 = ["加總 - 總價", "欄標籤", ...s1Cols.map(() => ""), ""];
@@ -1556,9 +1714,6 @@ window.exportUnpaidWorkbookExcel = function() {
     const ws1 = XLSX.utils.aoa_to_sheet([s1Row1, s1Row2, s1Row3, s1Row4]);
     XLSX.utils.book_append_sheet(wb, ws1, "收款總表");
 
-    // ------------------------------------------------------------------------
-    // 2. 建立「未付款-OLD」工作表
-    // ------------------------------------------------------------------------
     const s2Aoa = [[
         "訂單代號", "客戶代號", "出貨日期", "註銷", "是否付款",
         "產品代號", "出貨數量", "單價", "總價", "發票號碼",
@@ -1572,7 +1727,6 @@ window.exportUnpaidWorkbookExcel = function() {
             item.noteK, item.clientPoL, item.reconcileDate, item.auditNote
         ]);
     });
-    // 底部總計列 (對齊第 9 欄 I欄 總價)
     s2Aoa.push(["", "", "", "", "", "", "", "總計", model.grandTotal, "", "", "", "", ""]);
 
     const ws2 = XLSX.utils.aoa_to_sheet(s2Aoa);
@@ -1583,9 +1737,6 @@ window.exportUnpaidWorkbookExcel = function() {
     ];
     XLSX.utils.book_append_sheet(wb, ws2, "未付款-OLD");
 
-    // ------------------------------------------------------------------------
-    // 3. 建立「分析表1」工作表 (雙層表頭：年度 + 月份 + 年度合計 + 總計)
-    // ------------------------------------------------------------------------
     const s3 = model.sheet3;
     const yrStruct = s3.yearStructure || [];
 
@@ -1621,7 +1772,6 @@ window.exportUnpaidWorkbookExcel = function() {
         s3Aoa.push(line);
     });
 
-    // 底部總計列
     const totalLine = ["總計"];
     yrStruct.forEach(ys => {
         ys.months.forEach(m => {
@@ -1640,6 +1790,867 @@ window.exportUnpaidWorkbookExcel = function() {
     showToast("📥 已成功匯出包含「收款總表、未付款-OLD、分析表1」之 Excel 檔案！");
 };
 
+// ============================================================================
+// 1.8 【新增核心】點擊「🟢 累計已完成沖帳」：時間區間查詢、三表 Excel 下載、多選列印與單張憑證列印
+// ============================================================================
+window.openPaidReportModal = function() {
+    window.initPaymentModule();
+    const pv = window.paymentModuleState.paidReportView;
+    pv.drillClient = null;
+
+    // 填充客戶下拉選單
+    const clientSel = document.getElementById('prClientFilter');
+    if (clientSel) {
+        const clientsSet = new Set();
+        (globalPayments || []).forEach(p => {
+            if (p.status !== '已作廢' && p.client) clientsSet.add(p.client);
+        });
+        const sortedClients = Array.from(clientsSet).sort();
+        const curVal = pv.clientFilter || '';
+        clientSel.innerHTML = '<option value="">🏢 所有客戶 (全部)</option>' +
+            sortedClients.map(c => `<option value="${escapeQuotes(c)}">${escapeQuotes(c)}</option>`).join('');
+        if (sortedClients.includes(curVal)) clientSel.value = curVal;
+    }
+
+    // 同步介面控制項狀態
+    if (document.getElementById('prDateBasis')) document.getElementById('prDateBasis').value = pv.dateBasis || 'PAY_DATE';
+    if (document.getElementById('prStartDate')) document.getElementById('prStartDate').value = pv.startDate || '';
+    if (document.getElementById('prEndDate')) document.getElementById('prEndDate').value = pv.endDate || '';
+    if (document.getElementById('prMethodFilter')) document.getElementById('prMethodFilter').value = pv.methodFilter || '';
+    if (document.getElementById('prSourceFilter')) document.getElementById('prSourceFilter').value = pv.sourceFilter || '';
+    if (document.getElementById('prSearchInput')) document.getElementById('prSearchInput').value = pv.searchTerm || '';
+    if (document.getElementById('prOnlyDiffSwitch')) document.getElementById('prOnlyDiffSwitch').checked = !!pv.onlyDiff;
+
+    window.renderPaidReportModalContent();
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('paidReportModal')).show();
+};
+
+// 一鍵設定時間區間快捷按鈕
+window.setPaidReportQuickDate = function(preset) {
+    const now = new Date();
+    const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    let sDate = '';
+    let eDate = '';
+
+    if (preset === 'TODAY') {
+        sDate = fmt(now);
+        eDate = fmt(now);
+    } else if (preset === 'THIS_WEEK') {
+        const day = now.getDay() || 7;
+        const mon = new Date(now);
+        mon.setDate(now.getDate() - day + 1);
+        sDate = fmt(mon);
+        eDate = fmt(now);
+    } else if (preset === 'THIS_MONTH') {
+        const first = new Date(now.getFullYear(), now.getMonth(), 1);
+        const last = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+        sDate = fmt(first);
+        eDate = fmt(last);
+    } else if (preset === 'LAST_MONTH') {
+        const first = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        const last = new Date(now.getFullYear(), now.getMonth(), 0);
+        sDate = fmt(first);
+        eDate = fmt(last);
+    } else if (preset === 'LAST_3_MONTHS') {
+        const first = new Date(now.getFullYear(), now.getMonth() - 2, 1);
+        sDate = fmt(first);
+        eDate = fmt(now);
+    } else if (preset === 'THIS_YEAR') {
+        sDate = `${now.getFullYear()}-01-01`;
+        eDate = `${now.getFullYear()}-12-31`;
+    } else if (preset === 'ALL') {
+        sDate = '';
+        eDate = '';
+    }
+
+    const sInput = document.getElementById('prStartDate');
+    const eInput = document.getElementById('prEndDate');
+    const mPicker = document.getElementById('prMonthPicker');
+    if (sInput) sInput.value = sDate;
+    if (eInput) eInput.value = eDate;
+    if (mPicker) mPicker.value = '';
+
+    window.onChangePaidReportFilter();
+};
+
+window.setPaidReportMonthPicker = function(ymVal) {
+    if (!ymVal) return;
+    const parts = ymVal.split('-');
+    if (parts.length !== 2) return;
+    const yr = parseInt(parts[0], 10);
+    const mo = parseInt(parts[1], 10);
+    const lastDay = new Date(yr, mo, 0).getDate();
+    const sDate = `${yr}-${String(mo).padStart(2, '0')}-01`;
+    const eDate = `${yr}-${String(mo).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+
+    const sInput = document.getElementById('prStartDate');
+    const eInput = document.getElementById('prEndDate');
+    if (sInput) sInput.value = sDate;
+    if (eInput) eInput.value = eDate;
+
+    window.onChangePaidReportFilter();
+};
+
+window.onChangePaidReportFilter = debounce(function() {
+    const pv = window.paymentModuleState.paidReportView;
+    pv.dateBasis = document.getElementById('prDateBasis')?.value || 'PAY_DATE';
+    pv.startDate = document.getElementById('prStartDate')?.value || '';
+    pv.endDate = document.getElementById('prEndDate')?.value || '';
+    pv.clientFilter = document.getElementById('prClientFilter')?.value || '';
+    pv.methodFilter = document.getElementById('prMethodFilter')?.value || '';
+    pv.sourceFilter = document.getElementById('prSourceFilter')?.value || '';
+    pv.searchTerm = (document.getElementById('prSearchInput')?.value || '').trim();
+    pv.onlyDiff = !!document.getElementById('prOnlyDiffSwitch')?.checked;
+
+    window.renderPaidReportModalContent();
+}, 150);
+
+window.switchPaidReportSheet = function(sheetId, keepDrill = false) {
+    const pv = window.paymentModuleState.paidReportView;
+    pv.activeSheet = sheetId;
+    if (!keepDrill && sheetId === 'PAID_S3') {
+        pv.drillClient = null;
+    }
+    ['PAID_S1', 'PAID_S2', 'PAID_S3'].forEach(s => {
+        const btn = document.getElementById(`prTabBtn_${s}`);
+        if (btn) btn.classList.toggle('active', s === sheetId);
+    });
+    window.renderPaidReportModalContent();
+};
+
+window.quickSelectPaidPrintSheets = function(mode) {
+    const c1 = document.getElementById('cbPrintPaid_s1');
+    const c2 = document.getElementById('cbPrintPaid_s2');
+    const c3 = document.getElementById('cbPrintPaid_s3');
+    if (mode === 'ALL') {
+        if (c1) c1.checked = true;
+        if (c2) c2.checked = true;
+        if (c3) c3.checked = true;
+    } else if (mode === 'SUMMARY') {
+        if (c1) c1.checked = true;
+        if (c2) c2.checked = false;
+        if (c3) c3.checked = true;
+    }
+};
+
+// 動態建構「已完成沖帳」三工作表資料模型
+window.buildPaidReportDataModel = function() {
+    const pv = window.paymentModuleState.paidReportView;
+    const term = (pv.searchTerm || '').toLowerCase();
+
+    const filteredRecords = (globalPayments || []).filter(p => {
+        if (!p || p.status === '已作廢') return false;
+
+        // 取出該筆紀錄的比較日期 (YYYY-MM-DD)
+        let recordDateStr = '';
+        if (pv.dateBasis === 'CREATE_TIME') {
+            const d = new Date(Number(p.time) || Date.now());
+            if (!isNaN(d.getTime())) {
+                recordDateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+            }
+        } else {
+            recordDateStr = window.parseExternalDateStr ? window.parseExternalDateStr(p.payDate) : String(p.payDate || '').trim();
+        }
+
+        if (pv.startDate && recordDateStr && recordDateStr < pv.startDate) return false;
+        if (pv.endDate && recordDateStr && recordDateStr > pv.endDate) return false;
+
+        if (pv.clientFilter && !String(p.client || '').includes(pv.clientFilter)) return false;
+        if (pv.drillClient && p.client !== pv.drillClient) return false;
+        if (pv.methodFilter && p.payMethod !== pv.methodFilter) return false;
+        if (pv.sourceFilter && p.sourceType !== pv.sourceFilter) return false;
+
+        // 進階優化 1：僅顯示有匯費/折讓差額之沖帳單
+        if (pv.onlyDiff && Math.abs(Number(p.diffAmount) || 0) < 0.01) return false;
+
+        if (term) {
+            const match =
+                String(p.paymentNo || '').toLowerCase().includes(term) ||
+                String(p.paperNos || '').toLowerCase().includes(term) ||
+                String(p.client || '').toLowerCase().includes(term) ||
+                String(p.memo || '').toLowerCase().includes(term) ||
+                String(p.staff || '').toLowerCase().includes(term) ||
+                String(p.itemsJson || '').toLowerCase().includes(term);
+            if (!match) return false;
+        }
+        return true;
+    });
+
+    // 依收款日與建立時間由新到舊排序
+    filteredRecords.sort((a, b) => {
+        const dA = String(a.payDate || '');
+        const dB = String(b.payDate || '');
+        if (dA !== dB) return dB.localeCompare(dA);
+        return (Number(b.time) || 0) - (Number(a.time) || 0);
+    });
+
+    let totalReceivable = 0;
+    let totalReceived = 0;
+    let totalDiff = 0;
+    const expandedLineItems = [];
+    const clientSummaryMap = new Map();
+
+    filteredRecords.forEach(p => {
+        const recAmt = Math.round((Number(p.receivableTotal) || 0) * 100) / 100;
+        const actAmt = Math.round((Number(p.receivedAmount) || 0) * 100) / 100;
+        const difAmt = Math.round((Number(p.diffAmount) || 0) * 100) / 100;
+
+        totalReceivable = Math.round((totalReceivable + recAmt) * 100) / 100;
+        totalReceived = Math.round((totalReceived + actAmt) * 100) / 100;
+        totalDiff = Math.round((totalDiff + difAmt) * 100) / 100;
+
+        const custId = window.getPrimaryCustIdByClientName ? window.getPrimaryCustIdByClientName(p.client) : '';
+
+        // 展開 itemsJson 至工作表 2
+        let itemsArr = [];
+        try { itemsArr = JSON.parse(p.itemsJson || '[]'); } catch (e) { itemsArr = []; }
+
+        if (itemsArr.length > 0) {
+            itemsArr.forEach(itm => {
+                expandedLineItems.push({
+                    paymentNo: p.paymentNo,
+                    payDate: p.payDate,
+                    payMethod: p.payMethod,
+                    custId: custId,
+                    client: p.client,
+                    paperNo: itm.paperNo || p.paperNos || '--',
+                    orderNo: itm.orderNo || '--',
+                    productCode: window.getProductCodeByName ? window.getProductCodeByName(itm.name, p.client) : '',
+                    name: itm.name || '沖帳品項',
+                    qty: Number(itm.qty) || 1,
+                    price: Number(itm.price) || Number(itm.subtotal) || 0,
+                    subtotal: Math.round((Number(itm.subtotal) || ((Number(itm.qty)||1)*(Number(itm.price)||0))) * 100) / 100,
+                    staff: p.staff || '',
+                    memo: p.memo || ''
+                });
+            });
+        } else {
+            expandedLineItems.push({
+                paymentNo: p.paymentNo,
+                payDate: p.payDate,
+                payMethod: p.payMethod,
+                custId: custId,
+                client: p.client,
+                paperNo: p.paperNos || '--',
+                orderNo: '--',
+                productCode: '',
+                name: '(整筆發票匯總沖銷)',
+                qty: 1,
+                price: actAmt,
+                subtotal: actAmt,
+                staff: p.staff || '',
+                memo: p.memo || ''
+            });
+        }
+
+        // 累計工作表 3：客戶別統計
+        const cKey = p.client || '未命名客戶';
+        if (!clientSummaryMap.has(cKey)) {
+            clientSummaryMap.set(cKey, {
+                custId: custId,
+                client: cKey,
+                recordCount: 0,
+                invoiceSet: new Set(),
+                receivableSum: 0,
+                receivedSum: 0,
+                diffSum: 0,
+                wireSum: 0,
+                checkSum: 0,
+                otherSum: 0
+            });
+        }
+        const cs = clientSummaryMap.get(cKey);
+        cs.recordCount++;
+        String(p.paperNos || '').split(',').map(s => s.trim()).filter(Boolean).forEach(inv => cs.invoiceSet.add(inv));
+        cs.receivableSum = Math.round((cs.receivableSum + recAmt) * 100) / 100;
+        cs.receivedSum = Math.round((cs.receivedSum + actAmt) * 100) / 100;
+        cs.diffSum = Math.round((cs.diffSum + difAmt) * 100) / 100;
+
+        if (String(p.payMethod).includes('匯款')) {
+            cs.wireSum = Math.round((cs.wireSum + actAmt) * 100) / 100;
+        } else if (String(p.payMethod).includes('支票')) {
+            cs.checkSum = Math.round((cs.checkSum + actAmt) * 100) / 100;
+        } else {
+            cs.otherSum = Math.round((cs.otherSum + actAmt) * 100) / 100;
+        }
+    });
+
+    const clientSummaryRows = Array.from(clientSummaryMap.values()).sort((a, b) => b.receivedSum - a.receivedSum);
+
+    const periodText = (pv.startDate || pv.endDate)
+        ? `${pv.startDate || '最早'} ～ ${pv.endDate || '最新'}`
+        : '全部歷史期間';
+
+    return {
+        periodText: periodText,
+        dateBasisText: pv.dateBasis === 'CREATE_TIME' ? '依系統建立日' : '依實際收款日',
+        records: filteredRecords,
+        lineItems: expandedLineItems,
+        clientSummaries: clientSummaryRows,
+        totalReceivable: totalReceivable,
+        totalReceived: totalReceived,
+        totalDiff: totalDiff
+    };
+};
+
+// 渲染「🟢 已完成沖帳區間查詢中心」視窗內容
+window.renderPaidReportModalContent = function() {
+    const container = document.getElementById('prSheetContentContainer');
+    if (!container) return;
+
+    const model = window.buildPaidReportDataModel();
+    const pv = window.paymentModuleState.paidReportView;
+
+    setSafeText('prStatCount', `${model.records.length} 單 (${model.lineItems.length} 筆品項)`);
+    setSafeText('prStatReceivable', '$' + (window.formatWbNumber(model.totalReceivable) || '0'));
+    setSafeText('prStatReceived', '$' + (window.formatWbNumber(model.totalReceived) || '0'));
+    setSafeText('prStatDiff', '$' + (window.formatWbNumber(model.totalDiff) || '0'));
+
+    setSafeText('prBadge_s1', `${model.records.length} 單`);
+    setSafeText('prBadge_s2', `${model.lineItems.length} 筆`);
+    setSafeText('prBadge_s3', `${model.clientSummaries.length} 客戶`);
+    setSafeText('prPeriodRangeLabel', `${model.dateBasisText}：${model.periodText}`);
+
+    const drillEl = document.getElementById('prDrillBanner');
+    if (drillEl) {
+        if (pv.drillClient) {
+            drillEl.style.display = 'inline-block';
+            drillEl.innerHTML = `
+                <span class="badge bg-warning text-dark">
+                    🔎 下鑽客戶：${escapeQuotes(pv.drillClient)}
+                    <a href="javascript:void(0)" class="text-danger fw-bold ms-1 text-decoration-none" onclick="window.clearPaidReportDrill()">[✕ 清除]</a>
+                </span>`;
+        } else {
+            drillEl.style.display = 'none';
+            drillEl.innerHTML = '';
+        }
+    }
+
+    ['PAID_S1', 'PAID_S2', 'PAID_S3'].forEach(s => {
+        const btn = document.getElementById(`prTabBtn_${s}`);
+        if (btn) btn.classList.toggle('active', s === pv.activeSheet);
+    });
+
+    if (pv.activeSheet === 'PAID_S1') {
+        container.innerHTML = window.generatePaidSheet1Html(model, false);
+    } else if (pv.activeSheet === 'PAID_S2') {
+        container.innerHTML = window.generatePaidSheet2Html(model, false);
+    } else {
+        container.innerHTML = window.generatePaidSheet3Html(model, false);
+    }
+};
+
+// 產生已沖帳【工作表 1：已沖帳收款總表 (依沖帳單歸戶)】HTML
+window.generatePaidSheet1Html = function(model, forPrint = false) {
+    const list = model.records || [];
+    if (list.length === 0) {
+        return `<div class="text-center text-muted py-5">📭 所選時間區間與篩選條件下沒有已完成沖帳的紀錄</div>`;
+    }
+
+    const rowsHtml = list.map((p, idx) => {
+        const d = new Date(Number(p.time) || Date.now());
+        const createStr = isNaN(d.getTime()) ? '' : `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+        const cId = window.getPrimaryCustIdByClientName ? window.getPrimaryCustIdByClientName(p.client) : '';
+        const hasDiff = Math.abs(Number(p.diffAmount) || 0) >= 0.01;
+
+        const actionCols = !forPrint ? `
+            <td class="text-center text-nowrap">
+                <button type="button" class="btn btn-sm btn-outline-primary fw-bold py-0 px-2 me-1" onclick="window.printSinglePaymentVoucher(${p.rowIdx})" title="列印單張收款沖帳傳票憑證">🖨️ 憑證</button>
+                <button type="button" class="btn btn-sm btn-outline-danger fw-bold py-0 px-2" onclick="window.voidPaymentFromReportModal(${p.rowIdx})" title="作廢此筆沖帳並退回未收款">↩️ 作廢</button>
+            </td>
+        ` : '';
+
+        return `
+        <tr style="${hasDiff ? 'background-color: #fffdf2;' : ''}">
+            <td class="text-center text-muted fw-bold">${idx + 1}</td>
+            <td class="fw-bold text-primary text-nowrap">${escapeQuotes(p.paymentNo)}</td>
+            <td class="fw-bold text-dark text-nowrap">${escapeQuotes(p.payDate)}</td>
+            <td class="small text-muted text-nowrap">${createStr}</td>
+            <td class="fw-bold">${cId && cId !== p.client ? `<span class="badge bg-light text-secondary border me-1">${escapeQuotes(cId)}</span>` : ''}${escapeQuotes(p.client)}</td>
+            <td><span class="badge bg-light text-dark border">${escapeQuotes(p.payMethod)}</span></td>
+            <td class="small text-primary fw-bold" style="max-width: 220px;">${escapeQuotes(p.paperNos)}</td>
+            <td class="text-end fw-bold">$${Number(p.receivableTotal || 0).toLocaleString()}</td>
+            <td class="text-end fw-bold text-success fs-6">$${Number(p.receivedAmount || 0).toLocaleString()}</td>
+            <td class="text-end fw-bold ${hasDiff ? 'text-danger' : 'text-muted'}">$${Number(p.diffAmount || 0).toLocaleString()}</td>
+            <td><span class="badge bg-info text-dark" style="font-size:0.72rem;">${escapeQuotes(p.sourceType)}</span></td>
+            <td class="text-center small">${escapeQuotes(p.staff)}</td>
+            <td class="small text-danger fw-bold">${escapeQuotes(p.memo || '')}</td>
+            ${actionCols}
+        </tr>`;
+    }).join('');
+
+    return `
+    <div>
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h6 class="fw-bold text-dark mb-0">📑 工作表 1：【已沖帳收款總表】（共 ${list.length} 筆沖帳單）</h6>
+            <span class="small text-muted">${escapeQuotes(model.dateBasisText)}：${escapeQuotes(model.periodText)}</span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-sm table-bordered table-hover align-middle mb-0" style="font-size: ${forPrint ? '0.74rem' : '0.84rem'}; border-color: #adb5bd;">
+                <thead style="background-color: #d1e7dd;">
+                    <tr>
+                        <th class="text-center" style="width:42px;">#</th>
+                        <th>沖帳單號</th>
+                        <th>實際收款日</th>
+                        <th>系統建立時間</th>
+                        <th>客戶名稱</th>
+                        <th>收款方式</th>
+                        <th>沖銷發票清單</th>
+                        <th class="text-end">帳面應收總額</th>
+                        <th class="text-end">實際收款金額</th>
+                        <th class="text-end">匯費/折讓差額</th>
+                        <th>帳款來源</th>
+                        <th class="text-center">經辦</th>
+                        <th>備註說明</th>
+                        ${!forPrint ? '<th class="text-center" style="width:130px;">傳票 / 操作</th>' : ''}
+                    </tr>
+                </thead>
+                <tbody>${rowsHtml}</tbody>
+                <tfoot>
+                    <tr style="background-color: #d1e7dd; border-top: 2px solid #198754;">
+                        <td colspan="7" class="text-end fw-bold">區間總計（共 ${list.length} 張沖帳單）：</td>
+                        <td class="text-end fw-bold text-dark">$${(window.formatWbNumber(model.totalReceivable) || '0')}</td>
+                        <td class="text-end fw-bold text-success fs-6">$${(window.formatWbNumber(model.totalReceived) || '0')}</td>
+                        <td class="text-end fw-bold text-danger">$${(window.formatWbNumber(model.totalDiff) || '0')}</td>
+                        <td colspan="${!forPrint ? '4' : '3'}"></td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </div>`;
+};
+
+// 產生已沖帳【工作表 2：已沖帳發票與品項展開明細表】HTML
+window.generatePaidSheet2Html = function(model, forPrint = false) {
+    const items = model.lineItems || [];
+    if (items.length === 0) {
+        return `<div class="text-center text-muted py-5">📭 所選區間內沒有展開之發票品項明細</div>`;
+    }
+
+    const totalItemSub = Math.round(items.reduce((s, x) => s + (Number(x.subtotal) || 0), 0) * 100) / 100;
+
+    const rowsHtml = items.map((itm, idx) => `
+        <tr>
+            <td class="text-center text-muted">${idx + 1}</td>
+            <td class="fw-bold text-primary text-nowrap">${escapeQuotes(itm.paymentNo)}</td>
+            <td class="text-nowrap">${escapeQuotes(itm.payDate)}</td>
+            <td>${escapeQuotes(itm.payMethod)}</td>
+            <td class="fw-bold">${itm.custId && itm.custId !== itm.client ? `<small class="text-muted">(${escapeQuotes(itm.custId)})</small> ` : ''}${escapeQuotes(itm.client)}</td>
+            <td class="fw-bold text-primary">${escapeQuotes(itm.paperNo)}</td>
+            <td>${escapeQuotes(itm.orderNo)}</td>
+            <td>${itm.productCode && itm.productCode !== itm.name ? `<code>${escapeQuotes(itm.productCode)}</code> ` : ''}${escapeQuotes(itm.name)}</td>
+            <td class="text-center fw-bold">${itm.qty}</td>
+            <td class="text-end">$${Number(itm.price || 0).toLocaleString()}</td>
+            <td class="text-end fw-bold text-success">$${Number(itm.subtotal || 0).toLocaleString()}</td>
+            <td class="text-center small">${escapeQuotes(itm.staff)}</td>
+            <td class="small text-secondary">${escapeQuotes(itm.memo)}</td>
+        </tr>
+    `).join('');
+
+    return `
+    <div>
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h6 class="fw-bold text-dark mb-0">📑 工作表 2：【已沖帳發票與品項展開明細表】（共 ${items.length} 筆品項明細）</h6>
+            <span class="small text-muted">${escapeQuotes(model.dateBasisText)}：${escapeQuotes(model.periodText)}</span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-sm table-bordered table-hover align-middle mb-0" style="font-size: ${forPrint ? '0.73rem' : '0.83rem'}; border-color: #adb5bd;">
+                <thead style="background-color: #cfe2ff;">
+                    <tr>
+                        <th class="text-center" style="width:42px;">#</th>
+                        <th>沖帳單號</th>
+                        <th>實際收款日</th>
+                        <th>收款方式</th>
+                        <th>客戶名稱</th>
+                        <th>發票號碼</th>
+                        <th>訂單編號</th>
+                        <th>產品代號 / 品名規格</th>
+                        <th class="text-center">數量</th>
+                        <th class="text-end">單價</th>
+                        <th class="text-end">品項沖銷金額</th>
+                        <th class="text-center">經辦</th>
+                        <th>沖帳備註</th>
+                    </tr>
+                </thead>
+                <tbody>${rowsHtml}</tbody>
+                <tfoot>
+                    <tr style="background-color: #cfe2ff; border-top: 2px solid #0d6efd;">
+                        <td colspan="10" class="text-end fw-bold">展開品項沖銷金額合計：</td>
+                        <td class="text-end fw-bold text-success fs-6">$${window.formatWbNumber(totalItemSub) || '0'}</td>
+                        <td colspan="2" class="small text-muted">(實收總計：$${window.formatWbNumber(model.totalReceived) || '0'})</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </div>`;
+};
+
+// 產生已沖帳【工作表 3：客戶別已收款與收款方式統計表】HTML
+window.generatePaidSheet3Html = function(model, forPrint = false) {
+    const list = model.clientSummaries || [];
+    if (list.length === 0) {
+        return `<div class="text-center text-muted py-5">📭 所選區間內沒有客戶收款統計資料</div>`;
+    }
+
+    let sumWire = 0, sumCheck = 0, sumOther = 0;
+    const rowsHtml = list.map((c, idx) => {
+        sumWire = Math.round((sumWire + c.wireSum) * 100) / 100;
+        sumCheck = Math.round((sumCheck + c.checkSum) * 100) / 100;
+        sumOther = Math.round((sumOther + c.otherSum) * 100) / 100;
+        const pct = model.totalReceived > 0 ? ((c.receivedSum / model.totalReceived) * 100).toFixed(1) + '%' : '0.0%';
+
+        const clickAttr = !forPrint
+            ? `style="cursor:pointer; text-decoration:underline;" onclick="window.drillDownPaidReportClient('${escapeQuotes(c.client)}')" title="點擊下鑽檢視此客戶之沖帳明細"`
+            : '';
+
+        return `
+        <tr>
+            <td class="text-center text-muted fw-bold">${idx + 1}</td>
+            <td class="fw-bold text-primary">${escapeQuotes(c.custId || '--')}</td>
+            <td class="fw-bold text-dark" ${clickAttr}>${escapeQuotes(c.client)}</td>
+            <td class="text-center fw-bold">${c.recordCount} 單</td>
+            <td class="text-center">${c.invoiceSet.size} 張</td>
+            <td class="text-end fw-bold">$${c.receivableSum.toLocaleString()}</td>
+            <td class="text-end fw-bold text-success fs-6" ${clickAttr}>$${c.receivedSum.toLocaleString()}</td>
+            <td class="text-end ${Math.abs(c.diffSum) > 0 ? 'text-danger fw-bold' : 'text-muted'}">$${c.diffSum.toLocaleString()}</td>
+            <td class="text-end text-primary">$${c.wireSum.toLocaleString()}</td>
+            <td class="text-end text-info text-dark">$${c.checkSum.toLocaleString()}</td>
+            <td class="text-end text-secondary">$${c.otherSum.toLocaleString()}</td>
+            <td class="text-end fw-bold text-secondary">${pct}</td>
+        </tr>`;
+    }).join('');
+
+    return `
+    <div>
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h6 class="fw-bold text-dark mb-0">📑 工作表 3：【客戶別已收款與收款方式統計表】（共 ${list.length} 家客戶）</h6>
+            <span class="small text-muted">${escapeQuotes(model.dateBasisText)}：${escapeQuotes(model.periodText)}</span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-sm table-bordered table-hover align-middle mb-0" style="font-size: ${forPrint ? '0.75rem' : '0.85rem'}; border-color: #adb5bd;">
+                <thead style="background-color: #e2e3e5;">
+                    <tr>
+                        <th class="text-center" style="width:42px;">排行</th>
+                        <th>客戶代號</th>
+                        <th>客戶名稱</th>
+                        <th class="text-center">沖帳單數</th>
+                        <th class="text-center">沖銷發票數</th>
+                        <th class="text-end">帳面應收合計</th>
+                        <th class="text-end">實際收款合計</th>
+                        <th class="text-end">匯費/折讓差額</th>
+                        <th class="text-end">🏦 銀行匯款</th>
+                        <th class="text-end">🎫 支票收款</th>
+                        <th class="text-end">💵 其他方式</th>
+                        <th class="text-end">收款佔比</th>
+                    </tr>
+                </thead>
+                <tbody>${rowsHtml}</tbody>
+                <tfoot>
+                    <tr style="background-color: #d1e7dd; border-top: 2px solid #198754;">
+                        <td colspan="3" class="text-end fw-bold">全體客戶總計：</td>
+                        <td class="text-center fw-bold">${model.records.length} 單</td>
+                        <td class="text-center">--</td>
+                        <td class="text-end fw-bold">$${window.formatWbNumber(model.totalReceivable) || '0'}</td>
+                        <td class="text-end fw-bold text-success fs-6">$${window.formatWbNumber(model.totalReceived) || '0'}</td>
+                        <td class="text-end fw-bold text-danger">$${window.formatWbNumber(model.totalDiff) || '0'}</td>
+                        <td class="text-end fw-bold text-primary">$${window.formatWbNumber(sumWire) || '0'}</td>
+                        <td class="text-end fw-bold text-dark">$${window.formatWbNumber(sumCheck) || '0'}</td>
+                        <td class="text-end fw-bold text-secondary">$${window.formatWbNumber(sumOther) || '0'}</td>
+                        <td class="text-end fw-bold">100%</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </div>`;
+};
+
+// 進階優化 2：從「工作表 3 客戶別統計」點擊下鑽至該客戶之沖帳明細
+window.drillDownPaidReportClient = function(clientName) {
+    const pv = window.paymentModuleState.paidReportView;
+    pv.drillClient = clientName;
+    window.switchPaidReportSheet('PAID_S1', true);
+    showToast(`🔎 已為您篩選「${clientName}」於此區間內之沖帳單明細`);
+};
+
+window.clearPaidReportDrill = function() {
+    window.paymentModuleState.paidReportView.drillClient = null;
+    window.renderPaidReportModalContent();
+};
+
+// 進階優化 4：於區間查詢視窗內直接執行作廢退回未收
+window.voidPaymentFromReportModal = function(rowIdx) {
+    window.voidPaymentRecord(rowIdx);
+    setTimeout(() => {
+        if (document.getElementById('paidReportModal')?.classList.contains('show')) {
+            window.renderPaidReportModalContent();
+        }
+    }, 300);
+};
+
+// 進階優化 3：單筆沖帳單「🧾 收款沖帳核銷傳票憑證」獨立列印
+window.printSinglePaymentVoucher = function(rowIdx) {
+    const p = (globalPayments || []).find(x => x.rowIdx === rowIdx);
+    if (!p) return alert("找不到該筆沖帳單資料！");
+
+    let items = [];
+    try { items = JSON.parse(p.itemsJson || '[]'); } catch (e) { items = []; }
+
+    const d = new Date(Number(p.time) || Date.now());
+    const createStr = isNaN(d.getTime()) ? getTodayStr() : `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+    const cId = window.getPrimaryCustIdByClientName ? window.getPrimaryCustIdByClientName(p.client) : '';
+
+    const itemsRowsHtml = items.length > 0 ? items.map((itm, i) => `
+        <tr>
+            <td style="border:1px solid #000; padding:8px; text-align:center;">${i + 1}</td>
+            <td style="border:1px solid #000; padding:8px; font-weight:bold;">${escapeQuotes(itm.paperNo || '--')}</td>
+            <td style="border:1px solid #000; padding:8px;">${escapeQuotes(itm.orderNo || '--')}</td>
+            <td style="border:1px solid #000; padding:8px;">${escapeQuotes(itm.name || '')}</td>
+            <td style="border:1px solid #000; padding:8px; text-align:center;">${itm.qty || 1}</td>
+            <td style="border:1px solid #000; padding:8px; text-align:right;">$${Number(itm.price || 0).toLocaleString()}</td>
+            <td style="border:1px solid #000; padding:8px; text-align:right; font-weight:bold;">$${Number(itm.subtotal || 0).toLocaleString()}</td>
+        </tr>
+    `).join('') : `
+        <tr>
+            <td colspan="7" style="border:1px solid #000; padding:12px; text-align:center;">沖銷發票清單：${escapeQuotes(p.paperNos)}</td>
+        </tr>
+    `;
+
+    const voucherHtml = `
+        <div style="padding: 12mm 15mm; max-width: 820px; margin: 0 auto; background: #fff; color: #000; font-family: 'MingLiU', '微軟正黑體', sans-serif;">
+            <div style="text-align: center; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 16px;">
+                <h3 style="margin: 0; font-weight: 900; letter-spacing: 4px;">長固實業有限公司</h3>
+                <h4 style="margin: 8px 0 0 0; font-weight: bold; letter-spacing: 6px;">收款沖帳核銷憑證 (沖帳傳票)</h4>
+            </div>
+
+            <div style="display: flex; justify-content: space-between; font-size: 14px; line-height: 1.8; margin-bottom: 12px;">
+                <div style="width: 58%;">
+                    <div><strong>付款客戶：</strong>${cId && cId !== p.client ? `[${escapeQuotes(cId)}] ` : ''}${escapeQuotes(p.client)}</div>
+                    <div><strong>收款方式：</strong>${escapeQuotes(p.payMethod)} ｜ <strong>帳款來源：</strong>${escapeQuotes(p.sourceType)}</div>
+                    <div><strong>沖銷發票：</strong>${escapeQuotes(p.paperNos)}</div>
+                </div>
+                <div style="width: 40%; text-align: right;">
+                    <div><strong>沖帳單號：</strong><span style="font-size:16px; font-weight:bold;">${escapeQuotes(p.paymentNo)}</span></div>
+                    <div><strong>實際收款日：</strong><strong>${escapeQuotes(p.payDate)}</strong></div>
+                    <div><strong>製表時間：</strong>${createStr}</div>
+                </div>
+            </div>
+
+            <table style="width: 100%; border-collapse: collapse; font-size: 14px; border: 2px solid #000; margin-bottom: 14px;">
+                <thead>
+                    <tr style="background-color: #f1f3f5;">
+                        <th style="border:1px solid #000; padding:8px; width:45px; text-align:center;">項次</th>
+                        <th style="border:1px solid #000; padding:8px; width:115px;">發票號碼</th>
+                        <th style="border:1px solid #000; padding:8px; width:105px;">訂單編號</th>
+                        <th style="border:1px solid #000; padding:8px;">品名及規格</th>
+                        <th style="border:1px solid #000; padding:8px; width:60px; text-align:center;">數量</th>
+                        <th style="border:1px solid #000; padding:8px; width:95px; text-align:right;">單價</th>
+                        <th style="border:1px solid #000; padding:8px; width:110px; text-align:right;">應收小計</th>
+                    </tr>
+                </thead>
+                <tbody>${itemsRowsHtml}</tbody>
+            </table>
+
+            <div style="display: flex; justify-content: space-between; border: 2px solid #000; padding: 12px; background: #f8f9fa; font-size: 15px; margin-bottom: 14px;">
+                <div><strong>帳面應收總額：</strong>$${Number(p.receivableTotal || 0).toLocaleString()}</div>
+                <div><strong>匯費 / 折讓 / 差額：</strong>$${Number(p.diffAmount || 0).toLocaleString()}</div>
+                <div style="font-size: 17px;"><strong>實際收款金額：$${Number(p.receivedAmount || 0).toLocaleString()} 元整</strong></div>
+            </div>
+
+            <div style="border: 1px solid #000; padding: 10px; font-size: 14px; min-height: 48px; margin-bottom: 24px;">
+                <strong>備註說明：</strong>${escapeQuotes(p.memo || '無')}
+            </div>
+
+            <div style="display: flex; justify-content: space-between; font-size: 14px; padding-top: 10px; border-top: 1px dashed #666;">
+                <div style="width: 24%;"><strong>核准：</strong></div>
+                <div style="width: 24%;"><strong>會計覆核：</strong></div>
+                <div style="width: 24%;"><strong>出納收款：</strong></div>
+                <div style="width: 24%;"><strong>經辦製表：</strong>${escapeQuotes(p.staff || myName || '')}</div>
+            </div>
+        </div>
+    `;
+
+    bootstrap.Modal.getInstance(document.getElementById('paidReportModal'))?.hide();
+
+    let printEl = document.getElementById('printPaidReportArea');
+    if (!printEl) {
+        printEl = document.createElement('div');
+        printEl.id = 'printPaidReportArea';
+        printEl.style.display = 'none';
+        document.body.appendChild(printEl);
+    }
+    printEl.innerHTML = voucherHtml;
+
+    window.applyPrintStyle('A4', 'portrait');
+    window.showPrintPreview('printPaidReportArea');
+};
+
+// 🖨️ 列印前依勾選的工作表（可單選或多選）產生已沖帳區間報表列印預覽與 PDF
+window.printSelectedPaidReportSheets = function() {
+    const pS1 = document.getElementById('cbPrintPaid_s1')?.checked;
+    const pS2 = document.getElementById('cbPrintPaid_s2')?.checked;
+    const pS3 = document.getElementById('cbPrintPaid_s3')?.checked;
+
+    if (!pS1 && !pS2 && !pS3) {
+        return alert("請至少勾選一張要列印的工作表（1.收款沖帳總表 / 2.發票品項展開明細 / 3.客戶別收款統計）！");
+    }
+
+    const model = window.buildPaidReportDataModel();
+    if (model.records.length === 0) {
+        return alert("目前所選區間內沒有已完成沖帳的資料可供列印！");
+    }
+
+    const selectedBlocks = [];
+    const buildHeader = (sheetTitle) => `
+        <div style="border-bottom: 2px solid #000; padding-bottom: 6px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: flex-end;">
+            <div>
+                <div style="font-size: 18px; font-weight: bold; color: #000;">長固實業有限公司 — 已完成沖帳收款報表 (${sheetTitle})</div>
+                <div style="font-size: 12px; color: #444;">
+                    ${escapeQuotes(model.dateBasisText)}：${escapeQuotes(model.periodText)} ｜ 
+                    區間應收：$${window.formatWbNumber(model.totalReceivable) || '0'} ｜ 
+                    區間實收：$${window.formatWbNumber(model.totalReceived) || '0'} ｜ 
+                    差額：$${window.formatWbNumber(model.totalDiff) || '0'}
+                </div>
+            </div>
+            <div style="font-size: 12px; color: #333; text-align: right;">
+                製表人員：${escapeQuotes(myName || '管理員')} ｜ 列印日期：${getTodayStr()}
+            </div>
+        </div>
+    `;
+
+    if (pS1) {
+        selectedBlocks.push(`
+            <div style="padding: 12px; background: #fff;">
+                ${buildHeader('工作表1：已沖帳收款總表')}
+                ${window.generatePaidSheet1Html(model, true)}
+            </div>
+        `);
+    }
+    if (pS2) {
+        selectedBlocks.push(`
+            <div style="padding: 12px; background: #fff;">
+                ${buildHeader('工作表2：已沖帳發票與品項明細表')}
+                ${window.generatePaidSheet2Html(model, true)}
+            </div>
+        `);
+    }
+    if (pS3) {
+        selectedBlocks.push(`
+            <div style="padding: 12px; background: #fff;">
+                ${buildHeader('工作表3：客戶別已收款與方式統計表')}
+                ${window.generatePaidSheet3Html(model, true)}
+            </div>
+        `);
+    }
+
+    const combinedHtml = selectedBlocks.map((blockHtml, idx) => {
+        const isLast = idx === selectedBlocks.length - 1;
+        return `<div class="${!isLast ? 'print-sheet-page-break' : ''}" style="margin-bottom: 18px;">${blockHtml}</div>`;
+    }).join('');
+
+    bootstrap.Modal.getInstance(document.getElementById('paidReportModal'))?.hide();
+
+    let printEl = document.getElementById('printPaidReportArea');
+    if (!printEl) {
+        printEl = document.createElement('div');
+        printEl.id = 'printPaidReportArea';
+        printEl.style.display = 'none';
+        document.body.appendChild(printEl);
+    }
+    printEl.innerHTML = combinedHtml;
+
+    window.applyPrintStyle('A4', 'landscape');
+    window.showPrintPreview('printPaidReportArea');
+};
+
+// 📥 下載所選時間區間之「已完成沖帳三工作表 Excel (.xlsx)」
+window.exportPaidReportExcel = function() {
+    if (typeof XLSX === 'undefined') return alert("Excel 模組載入中，請稍候！");
+    const model = window.buildPaidReportDataModel();
+    if (model.records.length === 0) return alert("目前所選區間內無已沖帳資料可供匯出！");
+
+    const wb = XLSX.utils.book_new();
+
+    // 工作表 1：已沖帳收款總表
+    const s1Aoa = [[
+        "項次", "沖帳單號", "實際收款日", "建立時間", "客戶代號", "客戶名稱",
+        "收款方式", "沖銷發票清單", "帳面應收總額", "實際收款金額", "匯費/折讓/差額",
+        "帳款來源", "經辦人員", "備註說明"
+    ]];
+    model.records.forEach((p, idx) => {
+        const d = new Date(Number(p.time) || Date.now());
+        const tStr = isNaN(d.getTime()) ? '' : d.toLocaleString();
+        const cId = window.getPrimaryCustIdByClientName ? window.getPrimaryCustIdByClientName(p.client) : '';
+        s1Aoa.push([
+            idx + 1, p.paymentNo, p.payDate, tStr, cId, p.client,
+            p.payMethod, p.paperNos, Number(p.receivableTotal) || 0, Number(p.receivedAmount) || 0, Number(p.diffAmount) || 0,
+            p.sourceType, p.staff, p.memo || ''
+        ]);
+    });
+    s1Aoa.push([
+        "", "總計", `(${model.periodText})`, "", "", `共 ${model.records.length} 單`,
+        "", "", model.totalReceivable, model.totalReceived, model.totalDiff,
+        "", "", ""
+    ]);
+    const ws1 = XLSX.utils.aoa_to_sheet(s1Aoa);
+    ws1['!cols'] = [
+        { wch: 6 }, { wch: 20 }, { wch: 14 }, { wch: 20 }, { wch: 12 }, { wch: 28 },
+        { wch: 14 }, { wch: 26 }, { wch: 15 }, { wch: 15 }, { wch: 14 },
+        { wch: 18 }, { wch: 12 }, { wch: 30 }
+    ];
+    XLSX.utils.book_append_sheet(wb, ws1, "1_已沖帳收款總表");
+
+    // 工作表 2：已沖帳發票與品項明細表
+    const s2Aoa = [[
+        "項次", "沖帳單號", "實際收款日", "收款方式", "客戶代號", "客戶名稱",
+        "發票號碼", "訂單編號", "產品代號", "品名規格", "數量", "單價", "品項沖銷金額", "經辦人員", "沖帳備註"
+    ]];
+    let itemTotal = 0;
+    model.lineItems.forEach((itm, idx) => {
+        itemTotal = Math.round((itemTotal + (Number(itm.subtotal) || 0)) * 100) / 100;
+        s2Aoa.push([
+            idx + 1, itm.paymentNo, itm.payDate, itm.payMethod, itm.custId, itm.client,
+            itm.paperNo, itm.orderNo, itm.productCode, itm.name, itm.qty, itm.price, itm.subtotal, itm.staff, itm.memo
+        ]);
+    });
+    s2Aoa.push(["", "", "", "", "", "", "", "", "", "合計", "", "", itemTotal, "", ""]);
+    const ws2 = XLSX.utils.aoa_to_sheet(s2Aoa);
+    ws2['!cols'] = [
+        { wch: 6 }, { wch: 20 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 26 },
+        { wch: 15 }, { wch: 14 }, { wch: 16 }, { wch: 28 }, { wch: 10 }, { wch: 12 }, { wch: 15 }, { wch: 12 }, { wch: 26 }
+    ];
+    XLSX.utils.book_append_sheet(wb, ws2, "2_已沖帳發票品項明細");
+
+    // 工作表 3：客戶別已收款與收款方式統計表
+    const s3Aoa = [[
+        "排行", "客戶代號", "客戶名稱", "沖帳單數", "沖銷發票數",
+        "帳面應收合計", "實際收款合計", "匯費/折讓差額", "銀行匯款合計", "支票收款合計", "其他方式合計", "收款佔比(%)"
+    ]];
+    let sumW = 0, sumC = 0, sumO = 0;
+    model.clientSummaries.forEach((c, idx) => {
+        sumW = Math.round((sumW + c.wireSum) * 100) / 100;
+        sumC = Math.round((sumC + c.checkSum) * 100) / 100;
+        sumO = Math.round((sumO + c.otherSum) * 100) / 100;
+        const pct = model.totalReceived > 0 ? Number(((c.receivedSum / model.totalReceived) * 100).toFixed(2)) : 0;
+        s3Aoa.push([
+            idx + 1, c.custId, c.client, c.recordCount, c.invoiceSet.size,
+            c.receivableSum, c.receivedSum, c.diffSum, c.wireSum, c.checkSum, c.otherSum, pct
+        ]);
+    });
+    s3Aoa.push([
+        "", "", "總計", model.records.length, "",
+        model.totalReceivable, model.totalReceived, model.totalDiff, sumW, sumC, sumO, 100
+    ]);
+    const ws3 = XLSX.utils.aoa_to_sheet(s3Aoa);
+    ws3['!cols'] = [
+        { wch: 8 }, { wch: 12 }, { wch: 28 }, { wch: 10 }, { wch: 12 },
+        { wch: 15 }, { wch: 15 }, { wch: 14 }, { wch: 15 }, { wch: 15 }, { wch: 14 }, { wch: 12 }
+    ];
+    XLSX.utils.book_append_sheet(wb, ws3, "3_客戶別收款統計表");
+
+    const cleanPeriod = model.periodText.replace(/[\/\s～:]/g, '_');
+    XLSX.writeFile(wb, `長固ERP_已完成沖帳區間報表_${cleanPeriod}.xlsx`);
+    showToast("📥 已成功下載「已完成沖帳區間三表 Excel (.xlsx)」！");
+};
 // ============================================================================
 // 2. 渲染模組主控與頂部 KPI 更新
 // ============================================================================
@@ -1691,7 +2702,7 @@ window.updatePaymentTopKpis = function() {
     let totalPaidSum = 0, totalPaidCnt = 0;
     (globalPayments || []).forEach(p => {
         if (p.status !== '已作廢') {
-            totalPaidSum += (Number(p.receivedAmount) || 0);
+            totalPaidSum = Math.round((totalPaidSum + (Number(p.receivedAmount) || 0)) * 100) / 100;
             totalPaidCnt++;
         }
     });
@@ -3379,6 +4390,9 @@ window.confirmExecutePayment = function() {
         if (document.getElementById('unpaidWorkbookModal')?.classList.contains('show')) {
             window.renderUnpaidWorkbookModalContent();
         }
+        if (document.getElementById('paidReportModal')?.classList.contains('show')) {
+            window.renderPaidReportModalContent();
+        }
         if (window.paymentModuleState.unpaidReconcile.extRows.length > 0) {
             window.runUnpaidReconciliation(true);
         }
@@ -3428,8 +4442,9 @@ window.renderPaymentHistory = debounce(function() {
             ? `<span class="badge bg-danger ms-2">已作廢</span>`
             : `<span class="badge bg-success ms-2">${escapeQuotes(p.status)}</span>`;
 
-        const voidBtn = !isVoid
-            ? `<button class="btn btn-sm btn-outline-danger fw-bold" onclick="window.voidPaymentRecord(${p.rowIdx})">↩️ 作廢退回未收</button>`
+        const actionBtns = !isVoid
+            ? `<button class="btn btn-sm btn-outline-primary fw-bold me-1" onclick="window.printSinglePaymentVoucher(${p.rowIdx})">🖨️ 列印憑證</button>
+               <button class="btn btn-sm btn-outline-danger fw-bold" onclick="window.voidPaymentRecord(${p.rowIdx})">↩️ 作廢退回未收</button>`
             : '';
 
         return `
@@ -3450,7 +4465,7 @@ window.renderPaymentHistory = debounce(function() {
                 <div class="text-end">
                     <div class="small text-muted">應收: $${Number(p.receivableTotal).toLocaleString()} | 差額: $${Number(p.diffAmount).toLocaleString()}</div>
                     <div class="fs-5 fw-bold text-success">實收: $${Number(p.receivedAmount).toLocaleString()}</div>
-                    <div class="mt-1">${voidBtn}</div>
+                    <div class="mt-1">${actionBtns}</div>
                 </div>
             </div>
             <div>${itemsHtml}</div>
@@ -3483,6 +4498,9 @@ window.voidPaymentRecord = function(rowIdx) {
         salesRowIndices: salesRowIndices
     }, () => {
         window.renderPaymentModule();
+        if (document.getElementById('paidReportModal')?.classList.contains('show')) {
+            window.renderPaidReportModalContent();
+        }
         showToast(`🗑️ 已作廢沖帳單 ${p.paymentNo}，關聯明細已退回「未收款」`);
     });
 };
