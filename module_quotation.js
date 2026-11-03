@@ -1,12 +1,46 @@
 /**
  * ============================================================================
  * 模組 5：開立估價單與動態列印 (module_quotation.js) 
- * 【防連點與強健比對版】Base64印章完美保留，徹底阻絕重複估價與重複核銷
+ * 【台灣標準尺寸公司大小章（左大章 stamp.png / 右小章 stamp_small.png）無損列印升級版】
+ * 1. 自動讀取 GitHub 根目錄之 stamp.png (30mm×30mm) 與 stamp_small.png (18mm×18mm)
+ * 2. 嚴格遵守左大章、右小章、中間留白 12mm 完全分開不重疊規範
+ * 3. 支援列印預覽畫面即時切換「顯示/隱藏大小章」並確保列印與 PDF 匯出 100% 清晰呈現
  * ============================================================================
  */
 
-// 👇 【請注意】請將您的印章轉換為 Base64 後的完整字串貼在下方雙引號內
-const COMPANY_STAMP_BASE64 = "data:image/jpeg;base64,請將轉換後的一大串文字貼在這裡取代這段中文";
+const COMPANY_LARGE_STAMP_PATH = "stamp.png";
+const COMPANY_SMALL_STAMP_PATH = "stamp_small.png";
+
+window.quotationStampCache = {
+    largeSrc: COMPANY_LARGE_STAMP_PATH,
+    smallSrc: COMPANY_SMALL_STAMP_PATH
+};
+
+// 預載 GitHub 上的去背大小章圖檔至記憶體 DataURL，確保列印與轉存 PDF 零延遲且絕不破圖
+(function preloadCompanySeals() {
+    function loadSealAsDataUrl(url, key) {
+        fetch(url, { cache: 'no-cache' })
+            .then(res => {
+                if (!res.ok) throw new Error("無法讀取印章圖檔: " + url);
+                return res.blob();
+            })
+            .then(blob => {
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                    if (reader.result) {
+                        window.quotationStampCache[key] = reader.result;
+                    }
+                };
+                reader.readAsDataURL(blob);
+            })
+            .catch(() => {
+                // 若於本機開發環境或離線時，自動維持原始相對路徑
+                window.quotationStampCache[key] = url;
+            });
+    }
+    loadSealAsDataUrl(COMPANY_LARGE_STAMP_PATH, 'largeSrc');
+    loadSealAsDataUrl(COMPANY_SMALL_STAMP_PATH, 'smallSrc');
+})();
 
 // 強大的日期淨化器：專門處理後台傳來的複雜台北標準時間，確保輸出純淨的 YYYY-MM-DD
 window.cleanDateStr = function(rawDate) {
@@ -17,7 +51,8 @@ window.cleanDateStr = function(rawDate) {
 };
 
 window.renderQuotationList = debounce(function() {
-    const searchTerm = document.getElementById('quoSearchInput').value.toLowerCase();
+    const searchEl = document.getElementById('quoSearchInput');
+    const searchTerm = searchEl ? searchEl.value.toLowerCase() : '';
     
     let filtered = globalQuotes;
     if (searchTerm) {
@@ -45,8 +80,14 @@ window.renderQuotationList = debounce(function() {
         for (let gid in groups) {
             const group = groups[gid];
             const isMerged = group.isMerged;
+            const showSeal = group.quotes[0].useSeal !== false;
             
-            let titleHtml = `<div class="fw-bold text-dark fs-6">${group.client} ${isMerged ? '<span class="badge bg-primary ms-2">🔗 已合併</span>' : ''}</div>`;
+            let titleHtml = `
+                <div class="fw-bold text-dark fs-6">
+                    ${group.client}
+                    ${isMerged ? '<span class="badge bg-primary ms-2">🔗 已合併</span>' : ''}
+                    ${showSeal ? '<span class="badge bg-danger bg-opacity-10 text-danger border border-danger ms-1" style="font-size:0.72rem;">💮 附大小章</span>' : '<span class="badge bg-light text-secondary border ms-1" style="font-size:0.72rem;">無印章</span>'}
+                </div>`;
             
             let allItemsDesc = group.quotes.map(q => {
                 let items = []; try { items = JSON.parse(q.jsonStr); } catch(e){}
@@ -70,9 +111,10 @@ window.renderQuotationList = debounce(function() {
                 actionBtns += `<button class="btn btn-sm btn-success fw-bold text-white shadow-sm" onclick="verifyQuotationToInvoice('${gid}')">✅ 核銷轉發票</button>`;
             } else {
                 let statusBadge = '';
-                if(group.quotes[0].status === '已核銷') statusBadge = '<span class="badge bg-success">已核銷</span>';
-                else if(group.quotes[0].status === '已作廢') statusBadge = '<span class="badge bg-danger">已作廢</span>';
+                if(group.quotes[0].status === '已核銷') statusBadge = '<span class="badge bg-success me-1">已核銷</span>';
+                else if(group.quotes[0].status === '已作廢') statusBadge = '<span class="badge bg-danger me-1">已作廢</span>';
                 actionBtns += statusBadge;
+                actionBtns += `<button class="btn btn-sm btn-outline-secondary fw-bold" onclick="printQuotation('${gid}')">🖨️ 補印</button>`;
             }
 
             let checkboxHtml = '';
@@ -95,8 +137,10 @@ window.renderQuotationList = debounce(function() {
         return html;
     }
 
-    document.getElementById('quoPendingListContainer').innerHTML = buildQuoHtml(pending, true);
-    document.getElementById('quoVerifiedListContainer').innerHTML = buildQuoHtml(verified, false);
+    const pendingContainer = document.getElementById('quoPendingListContainer');
+    const verifiedContainer = document.getElementById('quoVerifiedListContainer');
+    if (pendingContainer) pendingContainer.innerHTML = buildQuoHtml(pending, true);
+    if (verifiedContainer) verifiedContainer.innerHTML = buildQuoHtml(verified, false);
 
 }, 300);
 
@@ -111,7 +155,7 @@ window.openQuotationModal = function(idx) {
         document.getElementById('e_quoDate').value = cleanDateStr(q.quoteDate);
         document.getElementById('e_quoNo').value = q.quoteNo;
         document.getElementById('e_quoClient').value = q.client;
-        document.getElementById('e_quoUseSeal').checked = q.useSeal;
+        document.getElementById('e_quoUseSeal').checked = (q.useSeal !== false);
         document.getElementById('e_quoMemo').value = q.memo || ''; 
         
         let items = []; try { items = JSON.parse(q.jsonStr); } catch(e){}
@@ -181,7 +225,6 @@ window.selectClientForQuotation = function(val) {
 
 window.selectProductForQuo = function(rowId, prodName) {
     const client = document.getElementById('e_quoClient').value;
-    // 支援強健比對引擎
     const p = window.findProductRobust ? window.findProductRobust(client, null, prodName) : globalCatalog.find(x => x.clientName === client && x.productName === prodName);
     if(p) {
         const item = currentQuoItems.find(x => x.id === rowId);
@@ -204,7 +247,7 @@ window.removeQuotationItem = function(id) { currentQuoItems = currentQuoItems.fi
 
 window.saveEditQuotation = function() {
     const btn = event ? event.currentTarget : null;
-    if(window.lockButton(btn)) return; // 防連點保護
+    if(window.lockButton(btn)) return;
 
     const idx = document.getElementById('e_quoRow').value;
     const date = document.getElementById('e_quoDate').value;
@@ -257,7 +300,7 @@ window.saveEditQuotation = function() {
 
 window.groupMergeQuotations = function() {
     const btn = event ? event.currentTarget : null;
-    if(window.lockButton(btn)) return; // 防連點保護
+    if(window.lockButton(btn)) return;
 
     const cbs = document.querySelectorAll('.cb-quo:checked');
     if(cbs.length < 2) return alert('請至少勾選 2 筆估價單進行合併！');
@@ -288,7 +331,7 @@ window.groupMergeQuotations = function() {
 
 window.groupUnmergeQuotations = function() {
     const btn = event ? event.currentTarget : null;
-    if(window.lockButton(btn)) return; // 防連點保護
+    if(window.lockButton(btn)) return;
 
     const cbs = document.querySelectorAll('.cb-quo:checked');
     if(cbs.length === 0) return alert('請先勾選已合併的估價單群組！');
@@ -346,7 +389,7 @@ window.voidQuotation = function(gid) {
 
 window.confirmVoidQuotationItems = function() {
     const btn = event ? event.currentTarget : null;
-    if(window.lockButton(btn)) return; // 防連點保護
+    if(window.lockButton(btn)) return;
 
     const cbs = document.querySelectorAll('.cb-void-item:checked');
     if(cbs.length === 0) return alert('請至少勾選一項要作廢的品項！');
@@ -413,7 +456,7 @@ window.confirmVoidQuotationItems = function() {
 
 window.verifyQuotationToInvoice = function(gid) {
     const btn = event ? event.currentTarget : null;
-    if(window.lockButton(btn)) return; // 防連點保護
+    if(window.lockButton(btn)) return;
 
     const quotesInGroup = globalQuotes.filter(q => q.mergeId === gid || `Single_${q.rowIdx}` === gid);
     if(quotesInGroup.length === 0) return;
@@ -463,7 +506,31 @@ window.verifyQuotationToInvoice = function(gid) {
 };
 
 // ============================================================================
-// 列印估價單 (支援 A4 舒展排版、過濾日期、真實公司大印章 PDF 無損輸出)
+// 在列印預覽畫面中即時切換「顯示 / 隱藏公司大小章」
+// ============================================================================
+window.toggleQuoteSealInPreview = function(gid) {
+    const quotesInGroup = globalQuotes.filter(q => q.mergeId === gid || `Single_${q.rowIdx}` === gid);
+    if (quotesInGroup.length === 0) return;
+
+    const currentSealState = (quotesInGroup[0].useSeal !== false);
+    const nextSealState = !currentSealState;
+
+    const rowIndices = quotesInGroup.map(q => q.rowIdx);
+    quotesInGroup.forEach(q => { q.useSeal = nextSealState; });
+
+    try {
+        if (typeof supabaseClient !== 'undefined') {
+            supabaseClient.from('quotations').update({ use_seal: nextSealState }).in('row_idx', rowIndices).then();
+        }
+    } catch (e) {}
+
+    window.renderQuotationList();
+    window.printQuotation(gid);
+    showToast(nextSealState ? "💮 已開啟顯示公司大小章（左大章、右小章）" : "⬜ 已隱藏公司大小章");
+};
+
+// ============================================================================
+// 列印估價單 (A4 舒展排版 ＋ 台灣標準尺寸公司大小章：左大章 stamp.png 30mm / 右小章 stamp_small.png 18mm)
 // ============================================================================
 window.printQuotation = function(gid) {
     const quotesInGroup = globalQuotes.filter(q => q.mergeId === gid || `Single_${q.rowIdx}` === gid);
@@ -475,8 +542,7 @@ window.printQuotation = function(gid) {
     const rawDate = quotesInGroup[0].quoteDate || getTodayStr();
     const dateStr = cleanDateStr(rawDate).replace(/-/g, '/');
     
-    const useSeal = quotesInGroup[0].useSeal;
-    
+    const useSeal = (quotesInGroup[0].useSeal !== false);
     const mainMemo = quotesInGroup.map(q => q.memo).filter(x => x).join(' / ');
 
     let allItems = [];
@@ -513,10 +579,29 @@ window.printQuotation = function(gid) {
         `;
     }).join('');
 
-    // 【極度關鍵修復】: 將 COMPANY_STAMP_BASE64 直接帶入，無損輸出 PDF 絕不破圖
+    const largeSealImgSrc = window.quotationStampCache?.largeSrc || COMPANY_LARGE_STAMP_PATH;
+    const smallSealImgSrc = window.quotationStampCache?.smallSrc || COMPANY_SMALL_STAMP_PATH;
+
+    // 【台灣公司大小章標準尺寸與分開排列規範】
+    // 左側大章 (stamp.png)：標準 1 吋方章 (30mm × 30mm)
+    // 右側小章 (stamp_small.png)：標準 6 分負責人章 (18mm × 18mm)
+    // 兩章中間以 gap: 12mm 完全分開、底部對齊、絕不重疊
     const sealHtml = useSeal ? `
-        <div style="position: absolute; right: 50px; bottom: 10px; display: flex; align-items: flex-end; pointer-events: none; z-index: 10; opacity: 0.95;">
-            <img src="${COMPANY_STAMP_BASE64}" alt="大章" style="width: 150px; height: auto; mix-blend-mode: multiply;">
+        <div id="quoteSealContainer" style="position: absolute; right: 20px; bottom: 16px; display: flex; flex-direction: row; align-items: flex-end; gap: 12mm; pointer-events: none; z-index: 10;">
+            <div style="text-align: center;">
+                <img src="${largeSealImgSrc}"
+                     onerror="if(this.src.indexOf('stamp.png')===-1) this.src='stamp.png';"
+                     alt="公司大章"
+                     crossorigin="anonymous"
+                     style="width: 30mm; height: 30mm; object-fit: contain; display: block; background: transparent;">
+            </div>
+            <div style="text-align: center;">
+                <img src="${smallSealImgSrc}"
+                     onerror="if(this.src.indexOf('stamp_small.png')===-1) this.src='stamp_small.png';"
+                     alt="負責人小章"
+                     crossorigin="anonymous"
+                     style="width: 18mm; height: 18mm; object-fit: contain; display: block; background: transparent;">
+            </div>
         </div>
     ` : '';
 
@@ -568,7 +653,7 @@ window.printQuotation = function(gid) {
 
             <div style="flex-grow: 1;"></div>
 
-            <div style="margin-top: 40px; font-size: 15px; border: 1px solid #000; padding: 20px; position: relative; min-height: 180px;">
+            <div style="margin-top: 40px; font-size: 15px; border: 1px solid #000; padding: 20px; padding-right: ${useSeal ? '72mm' : '20px'}; position: relative; min-height: 180px;">
                 <div style="font-weight: bold; margin-bottom: 10px; font-size: 16px;">備註事項：</div>
                 <div style="white-space: pre-wrap; line-height: 1.8;">${escapeQuotes(mainMemo) || '無'}</div>
                 ${sealHtml}
@@ -581,6 +666,17 @@ window.printQuotation = function(gid) {
         printQuoteArea.innerHTML = html;
         if (typeof window.applyPrintStyle === 'function') window.applyPrintStyle('A4', 'portrait');
         if (typeof window.showPrintPreview === 'function') window.showPrintPreview('printQuoteArea');
+
+        // 於列印預覽控制列動態加入「💮 顯示/隱藏大小章」即時切換按鈕
+        const controlBar = document.getElementById('printControlBar');
+        if (controlBar && !document.getElementById('btnToggleQuoteSealPreview')) {
+            const toggleBtn = document.createElement('button');
+            toggleBtn.id = 'btnToggleQuoteSealPreview';
+            toggleBtn.className = `btn ${useSeal ? 'btn-warning text-dark' : 'btn-outline-warning text-white'} fw-bold px-3 py-2 shadow-sm`;
+            toggleBtn.innerHTML = useSeal ? '💮 大小章：顯示中 (點此隱藏)' : '💮 大小章：已隱藏 (點此顯示)';
+            toggleBtn.onclick = function() { window.toggleQuoteSealInPreview(gid); };
+            controlBar.insertBefore(toggleBtn, controlBar.firstChild);
+        }
     } else {
         alert('系統錯誤：找不到估價單列印區塊');
     }
