@@ -1,9 +1,93 @@
 /**
  * ============================================================================
- * 模組 3：開立發票、歷史紀錄、跨系統比對中心 ＆ 三聯式統一發票明細表 (module_invoice_history.js)
- * 【防連點、三聯發票單價修正、已覆核專區、進度自動記憶、缺漏補登 ＆ 稅捐處發票明細表旗艦版】
+ * 模組 3：開立發票、歷史紀錄、跨系統比對中心 ＆ 三聯式/二聯式統一發票明細表 (module_invoice_history.js)
+ * 【防連點、三聯/二聯字軌智慧分流、已覆核專區、進度記憶、缺漏補登 ＆ 稅捐處雙明細表旗艦版】
  * ============================================================================
  */
+
+// ============================================================================
+// 0. 發票字軌智慧識別引擎 (自動分辨「三聯式 THREE_PART」與「二聯式 TWO_PART」)
+// ============================================================================
+const TRACK_TYPE_OVERRIDE_STORAGE_KEY = 'changgu_erp_invoice_track_type_overrides_v1';
+
+// 預設已知字軌對照表 (依貴公司實際開立字軌與財政部字軌規範內建)
+window.BUILTIN_INVOICE_TRACK_TYPES = {
+    // 三聯式字軌
+    'EC': 'THREE_PART',
+    'CA': 'THREE_PART',
+    'ZX': 'THREE_PART',
+    'XV': 'THREE_PART',
+    'VT': 'THREE_PART',
+    'TT': 'THREE_PART',
+    'RT': 'THREE_PART',
+    // 二聯式字軌
+    'EE': 'TWO_PART',
+    'CC': 'TWO_PART',
+    'ZZ': 'TWO_PART'
+};
+
+window.getTrackTypeOverrides = function() {
+    try {
+        const raw = localStorage.getItem(TRACK_TYPE_OVERRIDE_STORAGE_KEY);
+        return raw ? JSON.parse(raw) : {};
+    } catch (e) {
+        return {};
+    }
+};
+
+window.setTrackTypeOverride = function(track, formType) {
+    if (!track || track.length !== 2) return;
+    const cleanTrack = String(track).trim().toUpperCase();
+    const map = window.getTrackTypeOverrides();
+    map[cleanTrack] = formType;
+    try {
+        localStorage.setItem(TRACK_TYPE_OVERRIDE_STORAGE_KEY, JSON.stringify(map));
+    } catch (e) {}
+};
+
+// 根據發票字軌 (或完整發票號碼) 判斷屬於 'THREE_PART' (三聯式) 或 'TWO_PART' (二聯式)
+window.getInvoiceFormTypeByTrack = function(trackOrPaperNo, fallbackTaxId) {
+    const cleanStr = String(trackOrPaperNo || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+    const m = cleanStr.match(/^([A-Z]{2})/);
+    const track = m ? m[1] : '';
+
+    if (track) {
+        // 1. 優先檢查操作者手動設定的永久記憶字軌歸類
+        const overrides = window.getTrackTypeOverrides();
+        if (overrides[track]) return overrides[track];
+
+        // 2. 檢查內建字軌字典
+        if (window.BUILTIN_INVOICE_TRACK_TYPES[track]) {
+            return window.BUILTIN_INVOICE_TRACK_TYPES[track];
+        }
+
+        // 3. 自動根據歷史發票資料庫中該字軌的開立對象是否有 8 碼統編進行智慧推斷
+        const sameTrackInvs = (globalHistory || []).filter(h => {
+            if (!h || h.status === '作廢') return false;
+            const pNo = String(h.paperNo || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+            return pNo.startsWith(track);
+        });
+
+        if (sameTrackInvs.length > 0) {
+            let withTaxIdCount = 0;
+            let withoutTaxIdCount = 0;
+            sameTrackInvs.forEach(h => {
+                const cObj = (globalClients || []).find(c => c.name === h.client);
+                const tId = String(h.taxId || (cObj ? cObj.taxId : '') || '').trim();
+                if (/^\d{8}$/.test(tId)) withTaxIdCount++;
+                else withoutTaxIdCount++;
+            });
+            if (withoutTaxIdCount > withTaxIdCount) return 'TWO_PART';
+            if (withTaxIdCount > 0) return 'THREE_PART';
+        }
+    }
+
+    // 4. 若為新字軌且尚無歷史紀錄，依買受人是否有統編推斷
+    if (fallbackTaxId !== undefined) {
+        return /^\d{8}$/.test(String(fallbackTaxId || '').trim()) ? 'THREE_PART' : 'TWO_PART';
+    }
+    return 'THREE_PART';
+};
 
 // ============================================================================
 // 發票模組 - 步驟與選項控制
@@ -20,7 +104,7 @@ window.selectClientForInvoice = function(name) {
     document.getElementById('invClientInput').value = name; 
     currentInvoiceData.clientName = name; 
     currentInvoiceData.taxId = c.taxId; 
-    document.getElementById('invClientInfo').innerText = `✓ 綁定成功 (統編: ${c.taxId||'無'})`; 
+    document.getElementById('invClientInfo').innerText = `✓ 綁定成功 (統編: ${c.taxId||'無 — 適用二聯式發票'})`; 
     document.getElementById('invClientInfo').style.display = 'block'; 
     document.getElementById('btnNext1').style.display = 'block'; 
     document.getElementById('invOrderNo').value = ''; 
@@ -97,7 +181,7 @@ window.updateInvAddBtn = function() {
 };
 
 // ============================================================================
-// 發票模組 - 預覽與送出
+// 發票模組 - 預覽與送出 (自動依字軌識別三聯式 / 二聯式)
 // ============================================================================
 window.generatePreview = function() {
     try {
@@ -111,6 +195,9 @@ window.generatePreview = function() {
 
         const orderNoStr = document.getElementById('invOrderNo') ? document.getElementById('invOrderNo').value : ''; 
         const invDateStr = document.getElementById('invDate').value ? document.getElementById('invDate').value : getTodayStr();
+        const paperNoVal = document.getElementById('invPaperNo') ? document.getElementById('invPaperNo').value.toUpperCase() : '';
+        const formType = window.getInvoiceFormTypeByTrack(paperNoVal, currentInvoiceData.taxId);
+        const isTwoPart = (formType === 'TWO_PART');
 
         validItems.forEach((item, idx) => { 
             let price = Math.max(0, parseFloat(item.product.price) || 0); 
@@ -152,12 +239,13 @@ window.generatePreview = function() {
         currentInvoiceData.finalTax = tax; 
         currentInvoiceData.finalTotal = totalWithTax; 
         currentInvoiceData.validItems = validItems; 
+        currentInvoiceData.formType = formType;
         currentInvoiceData.detailsStr = validItems.map(x => `${x.product.productName || ''} x${x.qty} (單價: $${(parseFloat(x.product.price)||0).toFixed(3)}) ${x.formattedRemark ? '[' + x.formattedRemark + ']' : ''}`).join('\n');
 
         setSafeText('prevClientName', currentInvoiceData.clientName || '無'); 
-        setSafeText('prevTaxId', currentInvoiceData.taxId || '無'); 
+        setSafeText('prevTaxId', currentInvoiceData.taxId || (isTwoPart ? '無 (二聯式)' : '無')); 
         setSafeText('prevOrderNo', orderNoStr || '無'); 
-        setSafeText('prevPaperNo', document.getElementById('invPaperNo') ? document.getElementById('invPaperNo').value.toUpperCase() : '無'); 
+        setSafeText('prevPaperNo', (paperNoVal || '無') + (isTwoPart ? ' [📗二聯式]' : ' [📘三聯式]')); 
         setSafeText('prevInvDate', invDateStr); 
         setSafeText('prevNet', netTotal.toLocaleString()); 
         setSafeText('prevTax', tax.toLocaleString()); 
@@ -169,12 +257,13 @@ window.generatePreview = function() {
 
 window.submitInvoiceOptimistic = function() {
     const btn = event ? event.currentTarget : null;
-    if(window.lockButton(btn)) return; // 防連點保護
+    if(window.lockButton(btn)) return;
 
     const orderNo = document.getElementById('invOrderNo').value; 
     const paperNo = document.getElementById('invPaperNo').value.toUpperCase(); 
     const invDateVal = document.getElementById('invDate').value; 
     const invDateTimestamp = invDateVal ? new Date(invDateVal).getTime() : Date.now();
+    const isTwoPart = (window.getInvoiceFormTypeByTrack(paperNo, currentInvoiceData.taxId) === 'TWO_PART');
     
     const payloadItems = currentInvoiceData.validItems.map(i => ({ 
         name: i.product.productName, internalCode: i.product.internalCode || i.product.assetCode || "", 
@@ -208,22 +297,35 @@ window.submitInvoiceOptimistic = function() {
     pushToSyncQueue('submitInvoice', payload, null);
     if (typeof window.renderOrderList === 'function') window.renderOrderList();
     
+    // 動態更新 Step 5 模擬發票表頭為（三聯式）或（二聯式）
+    const headerSubEl = document.querySelector('#invStep5 .invoice-header .fs-5');
+    if (headerSubEl) {
+        headerSubEl.innerText = isTwoPart ? '（二聯式）' : '（三聯式）';
+    }
+
     setSafeText('visBuyer', payload.clientName); 
-    setSafeText('visTaxId', payload.taxId); 
+    setSafeText('visTaxId', payload.taxId || (isTwoPart ? '（二聯式免填統編）' : '')); 
     setSafeText('visPaperNo', paperNo); 
     setSafeText('visInvDate', invDateVal.replace(/-/g, '/')); 
-    setSafeText('visNet', payload.netTotal.toLocaleString()); 
-    setSafeText('visTax', payload.tax.toLocaleString()); 
+    setSafeText('visNet', isTwoPart ? payload.totalWithTax.toLocaleString() + ' (含稅)' : payload.netTotal.toLocaleString()); 
+    setSafeText('visTax', isTwoPart ? '內含' : payload.tax.toLocaleString()); 
     setSafeText('visTotal', payload.totalWithTax.toLocaleString());
     
     const tbody = document.getElementById('visTbody'); tbody.innerHTML = '';
     for(let i=0; i < Math.max(currentInvoiceData.validItems.length, 5); i++) {
         if(i < currentInvoiceData.validItems.length) {
             const item = currentInvoiceData.validItems[i]; 
-            const unTaxedS = Number(item.adjustedUnTaxedSub) || 0;
             const qtyNum = parseFloat(item.qty) || 1;
-            const unTaxedP = Number((unTaxedS / qtyNum).toFixed(3)).toLocaleString('en-US', { maximumFractionDigits: 3 });
-            tbody.innerHTML += `<tr><td class="text-start highlight-data">${item.product.productName}</td><td class="highlight-data">${item.qty} ${item.product.unit}</td><td class="text-end highlight-data">${unTaxedP}</td><td class="text-end highlight-data">${unTaxedS.toLocaleString()}</td><td class="highlight-data" style="font-size:0.8rem;">${item.formattedRemark}</td></tr>`;
+            if (isTwoPart) {
+                // 二聯式發票品項直接顯示含稅單價與含稅小計
+                const taxIncP = Number(item.product.price || 0);
+                const taxIncS = Math.round(qtyNum * taxIncP);
+                tbody.innerHTML += `<tr><td class="text-start highlight-data">${item.product.productName}</td><td class="highlight-data">${item.qty} ${item.product.unit}</td><td class="text-end highlight-data">${taxIncP.toLocaleString('en-US', { maximumFractionDigits: 3 })}</td><td class="text-end highlight-data">${taxIncS.toLocaleString()}</td><td class="highlight-data" style="font-size:0.8rem;">${item.formattedRemark}</td></tr>`;
+            } else {
+                const unTaxedS = Number(item.adjustedUnTaxedSub) || 0;
+                const unTaxedP = Number((unTaxedS / qtyNum).toFixed(3)).toLocaleString('en-US', { maximumFractionDigits: 3 });
+                tbody.innerHTML += `<tr><td class="text-start highlight-data">${item.product.productName}</td><td class="highlight-data">${item.qty} ${item.product.unit}</td><td class="text-end highlight-data">${unTaxedP}</td><td class="text-end highlight-data">${unTaxedS.toLocaleString()}</td><td class="highlight-data" style="font-size:0.8rem;">${item.formattedRemark}</td></tr>`;
+            }
         } else { tbody.innerHTML += `<tr><td>&nbsp;</td><td></td><td></td><td></td><td></td></tr>`; }
     }
     goStep(5);
@@ -241,7 +343,7 @@ window.resetInvoiceSystem = function() {
 };
 
 // ============================================================================
-// 歷史紀錄與報表模組
+// 歷史紀錄與報表模組 (新增三聯式 / 二聯式字軌智慧徽章)
 // ============================================================================
 window.updateHistoryDropdowns = function() { 
     const staffs = [...new Set(globalHistory.map(h => h.staff || '').filter(x => x))].sort(); 
@@ -302,10 +404,16 @@ window.renderHistory = debounce(function() {
         }
 
         const isBorrowed = String(h.paperNo).startsWith('[借用中]');
+        const formType = window.getInvoiceFormTypeByTrack(h.paperNo, h.taxId);
+        const formTypeBadge = !isBorrowed && h.paperNo
+            ? (formType === 'TWO_PART'
+                ? `<span class="badge bg-success bg-opacity-10 text-success border border-success ms-1">📗 二聯式</span>`
+                : `<span class="badge bg-primary bg-opacity-10 text-primary border border-primary ms-1">📘 三聯式</span>`)
+            : '';
         
         let paperNoHtml = '';
         if (h.paperNo) {
-            paperNoHtml = isBorrowed ? '<span class="text-danger">⚠️ ' + h.paperNo + '</span>' : '發票: ' + h.paperNo;
+            paperNoHtml = isBorrowed ? '<span class="text-danger">⚠️ ' + h.paperNo + '</span>' : '發票: ' + h.paperNo + formTypeBadge;
         }
 
         let actionBtns = '';
@@ -344,7 +452,7 @@ window.confirmSupplementInvoice = function() {
     const oldPaperNo = document.getElementById('supp_oldPaperNo').value;
     const newPaperNo = document.getElementById('supp_newPaperNo').value.trim().toUpperCase();
     if (!newPaperNo) return alert("請輸入正確的發票號碼！");
-    if(window.lockButton(btn)) return; // 防連點保護
+    if(window.lockButton(btn)) return;
     
     showLoading("連動更新中...");
     pushToSyncQueue('supplementInvoiceNo', { rowIdx: idx, oldPaperNo: oldPaperNo, newPaperNo: newPaperNo, staff: myName }, () => {
@@ -456,7 +564,7 @@ window.voidInv = function(idx, pNo) {
     const btn = event ? event.currentTarget : null;
 
     if(confirm("確定作廢？系統將自動：\n1. 註銷此發票帳款\n2. 註銷銷售明細\n3. 註銷對應的送貨單\n4. 【自動返還已出貨之庫存數量】")) { 
-        if(window.lockButton(btn)) return; // 防連點保護
+        if(window.lockButton(btn)) return;
         const h = globalHistory.find(x=>x.rowIdx === idx); 
         if(h) h.status = '作廢'; 
         
@@ -505,7 +613,7 @@ window.openEditInv = function(idx) {
 
 window.saveEditInvoice = function() { 
     const btn = event ? event.currentTarget : null;
-    if(window.lockButton(btn)) return; // 防連點保護
+    if(window.lockButton(btn)) return;
 
     const idx = parseInt(document.getElementById('e_invRow').value); 
     const h = globalHistory.find(x=>x.rowIdx === idx); 
@@ -628,7 +736,7 @@ window.confirmExportReport = function() {
     const cbs = document.querySelectorAll('.dyn-email-cb:checked');
     const emails = Array.from(cbs).map(cb => cb.value);
     if(emails.length === 0) return alert("請至少勾選一個收件信箱！");
-    if(window.lockButton(btn)) return; // 防連點保護
+    if(window.lockButton(btn)) return;
     
     const emailStr = emails.join(','); 
     
@@ -1255,7 +1363,6 @@ window.buildReconcileItemKey = function(r) {
         r.extQty !== null ? r.extQty : 'N'
     ].join('|');
 };
-
 window.runReportReconciliation = function(isSilentRestore = false) {
     const extRows = window.reconcileState.extRawRows || [];
     if (extRows.length === 0) {
@@ -2245,9 +2352,28 @@ window.exportReconciliationExcel = function() {
 };
 
 // ============================================================================
-// 【項目 5 全新子模組】📋 營業人使用三聯式統一發票明細表 (完美 1:1 復刻稅捐處 A4 直式表格)
+// 【📋 營業人使用三聯式 ＆ 二聯式統一發票明細表】（1:1 復刻稅捐處標準 A4 直式雙表格）
+// 支援：字軌自動分辨三聯/二聯、本月 401 銷項稅額匯總卡片、手寫作廢永久記憶、多冊合併列印與 Excel 匯出
 // ============================================================================
+const TAX_MANUAL_VOID_STORAGE_KEY = 'changgu_erp_tax_manual_voids_v1';
+
+window.loadManualVoidSuffixes = function() {
+    try {
+        const raw = localStorage.getItem(TAX_MANUAL_VOID_STORAGE_KEY);
+        return raw ? JSON.parse(raw) : {};
+    } catch (e) {
+        return {};
+    }
+};
+
+window.saveManualVoidSuffixes = function() {
+    try {
+        localStorage.setItem(TAX_MANUAL_VOID_STORAGE_KEY, JSON.stringify(window.taxDetailState.manualVoidSuffixes || {}));
+    } catch (e) {}
+};
+
 window.taxDetailState = {
+    formType: 'THREE_PART', // 'THREE_PART' (三聯式) | 'TWO_PART' (二聯式)
     rocYear: new Date().getFullYear() - 1911,
     month: new Date().getMonth() + 1,
     companyTaxId: '86477073',
@@ -2260,8 +2386,9 @@ window.taxDetailState = {
     rangeHalf: '00-49', // '00-49' | '50-99'
     pageTotalSheets: 1,
     pageCurrentSheet: 1,
-    manualVoidSuffixes: {}, // { 'EC525661_05': true } 支援點擊空白列切換為紙本作廢
-    detectedBooklets: []
+    manualVoidSuffixes: window.loadManualVoidSuffixes(),
+    detectedBooklets: [],      // 當前所選聯式 (三聯或二聯) 的冊別
+    allMonthBooklets: []       // 該月份全部冊別 (含三聯與二聯)
 };
 
 window.initTaxDetailTab = function() {
@@ -2282,20 +2409,72 @@ window.initTaxDetailTab = function() {
 
         root.innerHTML = `
         <div id="tdControlPanel" class="p-3 bg-light border rounded shadow-sm mb-3">
-            <div class="d-flex flex-wrap justify-content-between align-items-center border-bottom pb-2 mb-3 gap-2">
-                <div>
-                    <h5 class="fw-bold text-dark mb-0">📋 營業人使用三聯式統一發票明細表（稅捐處標準格式）</h5>
-                    <div class="small text-muted mt-1">
-                        自動依據所選中華民國年、月份、發票字軌與前六位號碼帶入 50 格發票明細（未稅銷售額、應稅打勾 <code>✓</code>、5% 稅額、作廢標註與使用份數統計）。
+            <!-- 頂部：📘 三聯式 ⇄ 📗 二聯式 大型分流切換按鈕與列印/匯出操作列 -->
+            <div class="d-flex flex-wrap justify-content-between align-items-center border-bottom pb-3 mb-3 gap-2">
+                <div class="d-flex flex-wrap align-items-center gap-2">
+                    <div class="btn-group shadow-sm" role="group">
+                        <button type="button" id="btnTaxTypeThree" class="btn btn-primary fw-bold px-3 py-2" onclick="window.setTaxDetailFormType('THREE_PART')">
+                            📘 營業人使用三聯式統一發票明細表
+                        </button>
+                        <button type="button" id="btnTaxTypeTwo" class="btn btn-outline-success bg-white fw-bold px-3 py-2" onclick="window.setTaxDetailFormType('TWO_PART')">
+                            📗 營業人使用二聯式統一發票明細表
+                        </button>
                     </div>
                 </div>
+
                 <div class="d-flex flex-wrap gap-2">
                     <button class="btn btn-primary fw-bold shadow-sm" onclick="window.printCurrentTaxDetailSheet()">
-                        🖨️ 預覽並列印本張明細表 (A4直式)
+                        🖨️ 列印本張明細表 (A4直式)
                     </button>
-                    <button class="btn btn-success fw-bold shadow-sm" onclick="window.printAllMonthTaxDetailSheets()">
-                        📚 一鍵列印本月全部冊別
+                    <button class="btn btn-success fw-bold shadow-sm" id="btnPrintCurrentTypeAll" onclick="window.printAllMonthTaxDetailSheets(false)">
+                        📚 列印本月全部三聯式冊別
                     </button>
+                    <button class="btn btn-dark fw-bold shadow-sm" onclick="window.printAllMonthTaxDetailSheets(true)" title="一次合併預覽並列印本月所有三聯式與二聯式明細表">
+                        🖨️ 合併列印本月三聯＋二聯全冊
+                    </button>
+                    <button class="btn btn-outline-success bg-white fw-bold shadow-sm" onclick="window.exportMonthTaxDetailExcel()">
+                        📥 匯出本月明細表 Excel (.xlsx)
+                    </button>
+                </div>
+            </div>
+
+            <!-- 📊 進階優化 3：本月三聯式＋二聯式 營業稅申報總覽卡片 (401 申報核對神器) -->
+            <div class="row g-2 mb-3">
+                <div class="col-12 col-md-4">
+                    <div class="p-2 bg-white border rounded shadow-sm h-100" style="border-left: 4px solid #0d6efd !important;">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <span class="small fw-bold text-primary">📘 本月三聯式發票匯總</span>
+                            <span class="badge bg-primary" id="tdSumThreeBooks">0 冊 / 0 張</span>
+                        </div>
+                        <div class="d-flex justify-content-between align-items-baseline mt-1">
+                            <span class="small text-muted">未稅銷售額：<strong class="text-dark" id="tdSumThreeNet">$0</strong></span>
+                            <span class="small text-muted">5%稅額：<strong class="text-danger" id="tdSumThreeTax">$0</strong></span>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-12 col-md-4">
+                    <div class="p-2 bg-white border rounded shadow-sm h-100" style="border-left: 4px solid #198754 !important;">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <span class="small fw-bold text-success">📗 本月二聯式發票匯總 (含稅折算)</span>
+                            <span class="badge bg-success" id="tdSumTwoBooks">0 冊 / 0 張</span>
+                        </div>
+                        <div class="d-flex justify-content-between align-items-baseline mt-1">
+                            <span class="small text-muted">含稅總額：<strong class="text-dark" id="tdSumTwoGross">$0</strong></span>
+                            <span class="small text-muted">折算未稅 <strong class="text-primary" id="tdSumTwoNet">$0</strong> ｜ 稅 <strong class="text-danger" id="tdSumTwoTax">$0</strong></span>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-12 col-md-4">
+                    <div class="p-2 bg-white border rounded shadow-sm h-100" style="border-left: 4px solid #dc3545 !important;">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <span class="small fw-bold text-danger">🧾 本月銷項營業稅總計 (三聯＋二聯)</span>
+                            <span class="badge bg-danger" id="tdSumAllCount">共 0 張應稅</span>
+                        </div>
+                        <div class="d-flex justify-content-between align-items-baseline mt-1">
+                            <span class="small text-muted">未稅總銷售額：<strong class="text-dark fs-6" id="tdSumAllNet">$0</strong></span>
+                            <span class="small text-muted">總銷項稅額：<strong class="text-danger fs-6" id="tdSumAllTax">$0</strong></span>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -2327,13 +2506,16 @@ window.initTaxDetailTab = function() {
                 </div>
             </div>
 
-            <!-- 第二排：發票字軌、前六位號碼、冊別區間、稅籍編號與頁次 -->
+            <!-- 第二排：發票字軌 (含字軌屬性切換)、前六位號碼、冊別區間、稅籍編號與頁次 -->
             <div class="row g-2 align-items-end mb-2">
-                <div class="col-4 col-md-2">
-                    <label class="small fw-bold text-danger">發票字軌 (2碼英文) *</label>
-                    <input type="text" id="td_track" class="form-control form-control-sm fw-bold text-center text-uppercase border-danger" maxlength="2" placeholder="如: EC" value="${window.taxDetailState.track}" oninput="this.value=this.value.toUpperCase(); window.renderTaxDetailPreview()">
+                <div class="col-5 col-md-2">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <label class="small fw-bold text-danger mb-0">發票字軌 *</label>
+                        <a href="javascript:void(0)" id="td_trackTypeToggleBadge" class="badge bg-primary text-decoration-none" onclick="window.toggleCurrentTrackFormType()" title="點擊可將此字軌永久切換為三聯式或二聯式">📘三聯字軌</a>
+                    </div>
+                    <input type="text" id="td_track" class="form-control form-control-sm fw-bold text-center text-uppercase border-danger" maxlength="2" placeholder="如: EC / EE" value="${window.taxDetailState.track}" oninput="this.value=this.value.toUpperCase(); window.onManualTrackInput()">
                 </div>
-                <div class="col-8 col-md-2">
+                <div class="col-7 col-md-2">
                     <label class="small fw-bold text-danger">發票前六位號碼 *</label>
                     <input type="text" id="td_prefix6" class="form-control form-control-sm fw-bold text-center border-danger" maxlength="6" inputmode="numeric" placeholder="如: 525667" value="${window.taxDetailState.prefix6}" oninput="window.renderTaxDetailPreview()">
                 </div>
@@ -2345,7 +2527,7 @@ window.initTaxDetailTab = function() {
                     </select>
                 </div>
                 <div class="col-6 col-md-2">
-                    <label class="small fw-bold text-muted">稅籍編號 (9碼，選填自動記憶)</label>
+                    <label class="small fw-bold text-muted">稅籍編號 (9碼，自動記憶)</label>
                     <input type="text" id="td_taxRegNo" class="form-control form-control-sm text-center" maxlength="9" placeholder="9碼稅籍編號" value="${escapeQuotes(window.taxDetailState.taxRegNo)}" oninput="localStorage.setItem('changgu_tax_reg_no', this.value); window.renderTaxDetailPreview()">
                 </div>
                 <div class="col-6 col-md-2">
@@ -2363,14 +2545,14 @@ window.initTaxDetailTab = function() {
                 </div>
             </div>
 
-            <!-- 智慧偵測該月份已開立發票冊別快選列 -->
+            <!-- 智慧偵測該月份已開立發票冊別快選列 (依三聯式 / 二聯式自動分流) -->
             <div class="pt-2 border-top mt-2">
                 <div class="d-flex flex-wrap align-items-center gap-1">
-                    <span class="small fw-bold text-secondary me-1">✨ 系統自動偵測本月已開立之發票字軌冊別（點擊一鍵帶入）：</span>
+                    <span class="small fw-bold text-secondary me-1" id="td_bookletPromptLabel">✨ 系統自動偵測本月已開立之【三聯式】發票字軌冊別（點擊一鍵帶入）：</span>
                     <div id="td_bookletPills" class="d-flex flex-wrap gap-1"></div>
                 </div>
                 <div class="small text-muted mt-1">
-                    💡 <strong>小提示</strong>：若某張紙本發票為「手寫作廢」而未建檔於系統中，您可直接點擊下方預覽表的該列，即可在「空白 ⇄ 作廢」之間快速切換並自動更新下方份數統計！
+                    💡 <strong>互動小提示</strong>：1. 若某張紙本發票為「手寫作廢」，直接點擊下方表格該列即可在「空白 ⇄ 作廢」間切換（自動記憶）；2. 點擊字軌上方「📘三聯字軌 / 📗二聯字軌」小標籤可手動變更該字軌歸屬。
                 </div>
             </div>
         </div>
@@ -2384,11 +2566,77 @@ window.initTaxDetailTab = function() {
     window.onTaxPeriodChange();
 };
 
-// 當切換中華民國年份或月份時，自動掃描該月份所有已開立發票，整理出每本發票冊 (字軌+前6碼+00~49/50~99)
+// 切換「📘 三聯式明細表」與「📗 二聯式明細表」
+window.setTaxDetailFormType = function(formType) {
+    window.taxDetailState.formType = formType;
+    const isTwo = (formType === 'TWO_PART');
+
+    const btnThree = document.getElementById('btnTaxTypeThree');
+    const btnTwo = document.getElementById('btnTaxTypeTwo');
+    if (btnThree && btnTwo) {
+        btnThree.className = isTwo ? 'btn btn-outline-primary bg-white fw-bold px-3 py-2' : 'btn btn-primary fw-bold px-3 py-2';
+        btnTwo.className = isTwo ? 'btn btn-success fw-bold px-3 py-2' : 'btn btn-outline-success bg-white fw-bold px-3 py-2';
+    }
+
+    const btnPrintAll = document.getElementById('btnPrintCurrentTypeAll');
+    if (btnPrintAll) {
+        btnPrintAll.innerHTML = isTwo ? '📚 列印本月全部二聯式冊別' : '📚 列印本月全部三聯式冊別';
+    }
+
+    const promptLabel = document.getElementById('td_bookletPromptLabel');
+    if (promptLabel) {
+        promptLabel.innerHTML = isTwo
+            ? '✨ 系統自動偵測本月已開立之【<strong class="text-success">📗 二聯式</strong>】發票字軌冊別（點擊一鍵帶入）：'
+            : '✨ 系統自動偵測本月已開立之【<strong class="text-primary">📘 三聯式</strong>】發票字軌冊別（點擊一鍵帶入）：';
+    }
+
+    window.onTaxPeriodChange();
+};
+
+// 手動輸入字軌時同步檢查並更新字軌標籤
+window.onManualTrackInput = function() {
+    const trk = (document.getElementById('td_track')?.value || '').trim().toUpperCase();
+    window.updateTrackTypeBadgeUI(trk);
+    window.renderTaxDetailPreview();
+};
+
+window.updateTrackTypeBadgeUI = function(track) {
+    const badge = document.getElementById('td_trackTypeToggleBadge');
+    if (!badge) return;
+    if (!track || track.length < 2) {
+        badge.innerText = window.taxDetailState.formType === 'TWO_PART' ? '📗二聯字軌' : '📘三聯字軌';
+        badge.className = window.taxDetailState.formType === 'TWO_PART' ? 'badge bg-success text-decoration-none' : 'badge bg-primary text-decoration-none';
+        return;
+    }
+    const fType = window.getInvoiceFormTypeByTrack(track);
+    if (fType === 'TWO_PART') {
+        badge.innerText = `📗 ${track}=二聯(點此改三聯)`;
+        badge.className = 'badge bg-success text-decoration-none';
+    } else {
+        badge.innerText = `📘 ${track}=三聯(點此改二聯)`;
+        badge.className = 'badge bg-primary text-decoration-none';
+    }
+};
+
+// 點擊字軌旁小標籤，手動將該字軌永久切換為三聯式或二聯式
+window.toggleCurrentTrackFormType = function() {
+    const trk = (document.getElementById('td_track')?.value || '').trim().toUpperCase();
+    if (!trk || trk.length !== 2) return alert("請先在發票字軌欄位輸入 2 碼英文字軌！");
+
+    const currentType = window.getInvoiceFormTypeByTrack(trk);
+    const nextType = currentType === 'TWO_PART' ? 'THREE_PART' : 'TWO_PART';
+    window.setTrackTypeOverride(trk, nextType);
+
+    showToast(`🏷️ 已將字軌「${trk}」永久設定為【${nextType === 'TWO_PART' ? '📗 二聯式' : '📘 三聯式'}】！`);
+    window.setTaxDetailFormType(nextType);
+};
+
+// 當切換中華民國年份、月份或聯式時，自動掃描該月份所有已開立發票，並依字軌分流「三聯式」與「二聯式」冊別
 window.onTaxPeriodChange = function() {
     const rocY = parseInt(document.getElementById('td_rocYear')?.value, 10) || (new Date().getFullYear() - 1911);
     const mon = parseInt(document.getElementById('td_month')?.value, 10) || (new Date().getMonth() + 1);
     const westY = rocY + 1911;
+    const activeFormType = window.taxDetailState.formType || 'THREE_PART';
 
     window.taxDetailState.rocYear = rocY;
     window.taxDetailState.month = mon;
@@ -2408,38 +2656,55 @@ window.onTaxPeriodChange = function() {
         const sufNum = parseInt(m[3], 10);
         const half = sufNum < 50 ? '00-49' : '50-99';
         const key = `${trk}_${pfx}_${half}`;
+        const fType = window.getInvoiceFormTypeByTrack(trk, h.taxId);
 
         if (!bookMap.has(key)) {
-            bookMap.set(key, { track: trk, prefix6: pfx, half: half, count: 0 });
+            bookMap.set(key, { track: trk, prefix6: pfx, half: half, count: 0, formType: fType });
         }
         bookMap.get(key).count++;
     });
 
-    const booklets = Array.from(bookMap.values()).sort((a, b) => {
+    const allBooklets = Array.from(bookMap.values()).sort((a, b) => {
         const ka = `${a.track}${a.prefix6}_${a.half}`;
         const kb = `${b.track}${b.prefix6}_${b.half}`;
         return ka.localeCompare(kb);
     });
 
-    window.taxDetailState.detectedBooklets = booklets;
+    window.taxDetailState.allMonthBooklets = allBooklets;
+
+    // 過濾出屬於當前聯式 (三聯式或二聯式) 的發票冊
+    const filteredBooklets = allBooklets.filter(b => b.formType === activeFormType);
+    window.taxDetailState.detectedBooklets = filteredBooklets;
+
+    // 更新頂部三聯＋二聯匯總卡片
+    window.updateMonthBothTypesSummaryBanner(rocY, mon);
 
     const pillsContainer = document.getElementById('td_bookletPills');
     if (pillsContainer) {
-        if (booklets.length === 0) {
-            pillsContainer.innerHTML = `<span class="badge bg-light text-muted border">此月份 (${rocY}年${mon}月) 尚無標準字軌發票紀錄，請手動輸入字軌與前六位號碼</span>`;
+        if (filteredBooklets.length === 0) {
+            const typeName = activeFormType === 'TWO_PART' ? '二聯式 (如 EE/CC/ZZ)' : '三聯式 (如 EC/CA/ZX)';
+            pillsContainer.innerHTML = `<span class="badge bg-light text-muted border">此月份 (${rocY}年${mon}月) 尚無已開立之${typeName}發票紀錄，可手動輸入字軌與前六位號碼</span>`;
         } else {
-            pillsContainer.innerHTML = booklets.map((b, idx) => `
-                <button type="button" class="btn btn-sm btn-outline-primary fw-bold py-0 px-2" onclick="window.selectTaxBooklet(${idx})">
-                    📘 ${b.track}-${b.prefix6} (${b.half}) <span class="badge bg-primary ms-1">${b.count}張</span>
+            const btnStyle = activeFormType === 'TWO_PART' ? 'btn-outline-success' : 'btn-outline-primary';
+            const badgeStyle = activeFormType === 'TWO_PART' ? 'bg-success' : 'bg-primary';
+            const icon = activeFormType === 'TWO_PART' ? '📗' : '📘';
+            pillsContainer.innerHTML = filteredBooklets.map((b, idx) => `
+                <button type="button" class="btn btn-sm ${btnStyle} fw-bold py-0 px-2" onclick="window.selectTaxBooklet(${idx})">
+                    ${icon} ${b.track}-${b.prefix6} (${b.half}) <span class="badge ${badgeStyle} ms-1">${b.count}張</span>
                 </button>
             `).join('');
         }
     }
 
-    // 若目前尚未填入前六碼，或切換了月份，自動帶入第一本發票冊
-    if (booklets.length > 0) {
+    if (filteredBooklets.length > 0) {
         window.selectTaxBooklet(0);
     } else {
+        const defaultTrk = activeFormType === 'TWO_PART' ? 'EE' : 'EC';
+        if (document.getElementById('td_track')) document.getElementById('td_track').value = defaultTrk;
+        if (document.getElementById('td_prefix6')) document.getElementById('td_prefix6').value = '';
+        if (document.getElementById('td_totalSheets')) document.getElementById('td_totalSheets').value = 1;
+        if (document.getElementById('td_currentSheet')) document.getElementById('td_currentSheet').value = 1;
+        window.updateTrackTypeBadgeUI(defaultTrk);
         window.renderTaxDetailPreview();
     }
 };
@@ -2455,10 +2720,11 @@ window.selectTaxBooklet = function(idx) {
     document.getElementById('td_totalSheets').value = booklets.length;
     document.getElementById('td_currentSheet').value = idx + 1;
 
+    window.updateTrackTypeBadgeUI(b.track);
     window.renderTaxDetailPreview();
 };
 
-// 點擊預覽表列時，若該號原本在系統中為「空白」，允許操作員一鍵切換為「作廢」
+// 點擊預覽表列時，若該號原本在系統中為「空白」，允許操作員一鍵切換為「作廢」(並永久記憶於 localStorage)
 window.toggleManualVoidOnTaxSheet = function(track, prefix6, suffix2) {
     const fullNo = `${track}${prefix6}${suffix2}`;
     const inSystem = (globalHistory || []).find(h => String(h.paperNo || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase() === fullNo);
@@ -2470,32 +2736,59 @@ window.toggleManualVoidOnTaxSheet = function(track, prefix6, suffix2) {
     const key = `${track}${prefix6}_${suffix2}`;
     if (window.taxDetailState.manualVoidSuffixes[key]) {
         delete window.taxDetailState.manualVoidSuffixes[key];
-        showToast(`已將末二碼 ${suffix2} 還原為「空白」`);
+        showToast(`已將 ${track}-${prefix6}${suffix2} 還原為「空白」`);
     } else {
         window.taxDetailState.manualVoidSuffixes[key] = true;
-        showToast(`已將末二碼 ${suffix2} 手動標記為「作廢」`);
+        showToast(`已將 ${track}-${prefix6}${suffix2} 手動標記為「作廢」`);
     }
+    window.saveManualVoidSuffixes();
     window.renderTaxDetailPreview();
 };
 
-// 核心渲染函式：產生單張「營業人使用三聯式統一發票明細表」標準 HTML (完美適配 A4 直式 21x29.7cm)
+// 更新頂部「📊 本月三聯式＋二聯式 營業稅申報總覽卡片」
+window.updateMonthBothTypesSummaryBanner = function(rocYear, month) {
+    const threeStats = window.calculateMonthGrandTaxStats(rocYear, month, 'THREE_PART');
+    const twoStats = window.calculateMonthGrandTaxStats(rocYear, month, 'TWO_PART');
+
+    const allBooks = window.taxDetailState.allMonthBooklets || [];
+    const threeBookCnt = allBooks.filter(b => b.formType === 'THREE_PART').length;
+    const twoBookCnt = allBooks.filter(b => b.formType === 'TWO_PART').length;
+
+    setSafeText('tdSumThreeBooks', `${threeBookCnt} 冊 / ${threeStats.taxableCount} 張應稅`);
+    setSafeText('tdSumThreeNet', '$' + threeStats.netSum.toLocaleString());
+    setSafeText('tdSumThreeTax', '$' + threeStats.taxSum.toLocaleString());
+
+    setSafeText('tdSumTwoBooks', `${twoBookCnt} 冊 / ${twoStats.taxableCount} 張應稅`);
+    setSafeText('tdSumTwoGross', '$' + twoStats.grossSum.toLocaleString());
+    setSafeText('tdSumTwoNet', '$' + twoStats.netSum.toLocaleString());
+    setSafeText('tdSumTwoTax', '$' + twoStats.taxSum.toLocaleString());
+
+    const combinedCount = threeStats.taxableCount + twoStats.taxableCount;
+    const combinedNet = threeStats.netSum + twoStats.netSum;
+    const combinedTax = threeStats.taxSum + twoStats.taxSum;
+
+    setSafeText('tdSumAllCount', `共 ${combinedCount} 張應稅`);
+    setSafeText('tdSumAllNet', '$' + combinedNet.toLocaleString());
+    setSafeText('tdSumAllTax', '$' + combinedTax.toLocaleString());
+};
+
+// 核心渲染函式：產生單張「三聯式」或「二聯式」統一發票明細表標準 HTML (1:1 復刻稅捐處 A4 直式 21x29.7cm)
 window.buildSingleTaxDetailSheetHtml = function(params, isPrintMode = false) {
     const {
-        rocYear, month, companyTaxId, companyName, taxRegNo, taxOfficeCode,
+        formType, rocYear, month, companyTaxId, companyName, taxRegNo, taxOfficeCode,
         declareDate, track, prefix6, rangeHalf, totalSheets, currentSheet,
         monthGrandStats
     } = params;
 
-    const westY = Number(rocYear) + 1911;
+    const isTwoPart = (formType === 'TWO_PART');
     const cleanTrack = String(track || '').trim().toUpperCase();
     const cleanPrefix6 = String(prefix6 || '').trim();
 
-    // 建立該月份所有發票的快速索引 Map (key: 完整8碼數字或字軌+8碼)
+    // 建立所有發票的快速索引 Map
     const invMap = new Map();
     (globalHistory || []).forEach(h => {
         const pNo = String(h.paperNo || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
         if (!pNo) return;
-        // 若同號碼有多筆，優先保留正常狀態或最新一筆
         if (!invMap.has(pNo) || h.status !== '作廢') {
             invMap.set(pNo, h);
         }
@@ -2507,8 +2800,9 @@ window.buildSingleTaxDetailSheetHtml = function(params, isPrintMode = false) {
     let sheetTaxableCount = 0;
     let sheetVoidCount = 0;
     let sheetBlankCount = 0;
-    let sheetNetSum = 0;
-    let sheetTaxSum = 0;
+    let sheetGrossSum = 0; // 二聯式：發票總金額(1) (含稅總計)
+    let sheetNetSum = 0;   // 三聯式：未稅銷售額合計；二聯式：ROUND(含稅總額 * 100 / 105)
+    let sheetTaxSum = 0;   // 三聯式：稅額合計；二聯式：ROUND(未稅銷售額 * 5%)
 
     for (let i = 0; i < 50; i++) {
         const num = startNum + i;
@@ -2524,6 +2818,7 @@ window.buildSingleTaxDetailSheetHtml = function(params, isPrintMode = false) {
             units: num % 10,
             buyerTaxId: '',
             netStr: '',
+            grossStr: '',
             isTaxable: false,
             taxStr: '',
             remark: '',
@@ -2538,17 +2833,20 @@ window.buildSingleTaxDetailSheetHtml = function(params, isPrintMode = false) {
             } else {
                 const cObj = (globalClients || []).find(c => c.name === matchedInv.client);
                 const bTaxId = String(matchedInv.taxId || (cObj ? cObj.taxId : '') || '').trim();
-                const netVal = Math.round(Number(matchedInv.net) || 0);
-                const taxVal = Math.round(Number(matchedInv.tax) || 0);
+                const grossVal = Math.round(Number(matchedInv.total) || 0);
+                const netVal = Math.round(Number(matchedInv.net) || Math.round(grossVal / 1.05));
+                const taxVal = Math.round(Number(matchedInv.tax) || (grossVal - netVal));
 
                 slotData.buyerTaxId = bTaxId;
                 slotData.netStr = netVal.toLocaleString();
+                slotData.grossStr = grossVal.toLocaleString();
                 slotData.isTaxable = true;
                 slotData.taxStr = taxVal.toLocaleString();
                 slotData.remark = '';
                 slotData.rowType = 'TAXABLE';
 
                 sheetTaxableCount++;
+                sheetGrossSum += grossVal;
                 sheetNetSum += netVal;
                 sheetTaxSum += taxVal;
             }
@@ -2563,20 +2861,30 @@ window.buildSingleTaxDetailSheetHtml = function(params, isPrintMode = false) {
         slots.push(slotData);
     }
 
-    // 若本期總計大於本表合計則使用本期總計，否則預設等於本表合計
+    // 針對「二聯式發票明細表」，底部銷售額(2) 與 稅額(3) 依稅捐處表頭公式：
+    // (2) = ROUND((1) * 100 / 105)
+    // (3) = ROUND((2) * 5%)
+    if (isTwoPart) {
+        sheetNetSum = Math.round((sheetGrossSum * 100) / 105);
+        sheetTaxSum = Math.round(sheetNetSum * 0.05);
+    }
+
     const periodTaxableCount = Math.max(sheetTaxableCount, monthGrandStats.taxableCount);
     const periodVoidCount    = Math.max(sheetVoidCount, monthGrandStats.voidCount);
     const periodBlankCount   = Math.max(sheetBlankCount, monthGrandStats.blankCount);
-    const periodNetSum       = Math.max(sheetNetSum, monthGrandStats.netSum);
-    const periodTaxSum       = Math.max(sheetTaxSum, monthGrandStats.taxSum);
+    const periodGrossSum     = Math.max(sheetGrossSum, monthGrandStats.grossSum || 0);
+    const periodNetSum       = isTwoPart
+        ? Math.round((periodGrossSum * 100) / 105)
+        : Math.max(sheetNetSum, monthGrandStats.netSum);
+    const periodTaxSum       = isTwoPart
+        ? Math.round(periodNetSum * 0.05)
+        : Math.max(sheetTaxSum, monthGrandStats.taxSum);
 
-    // 格式化統一編號 8 格與稅籍編號 9 格
     const taxIdChars = String(companyTaxId || '86477073').padEnd(8, ' ').slice(0, 8).split('');
     const taxRegChars = String(taxRegNo || '').padEnd(9, ' ').slice(0, 9).split('');
     const trackChars = cleanTrack.padEnd(2, ' ').slice(0, 2).split('');
     const pfxChars = cleanPrefix6.padEnd(6, ' ').slice(0, 6).split('');
 
-    // 解析申報日期為民國年
     let decRocY = rocYear, decM = '', decD = '';
     if (declareDate) {
         const dd = new Date(declareDate);
@@ -2587,7 +2895,6 @@ window.buildSingleTaxDetailSheetHtml = function(params, isPrintMode = false) {
         }
     }
 
-    // 建立 25 列雙欄對照表格 HTML (完美復刻紙本十位數跨列合併與個位數分格)
     const getSpanForLeftTens = (rowIndex) => {
         if (rowIndex === 0) return 10;
         if (rowIndex === 10) return 10;
@@ -2612,120 +2919,206 @@ window.buildSingleTaxDetailSheetHtml = function(params, isPrintMode = false) {
         const rSpan = getSpanForRightTens(r);
 
         const lTensCell = lSpan > 0
-            ? `<td rowspan="${lSpan}" style="${cellBorder} width: 14px; text-align: center; vertical-align: middle; font-weight: bold; font-size: 12px; padding: 0;">${leftSlot.tens}</td>`
+            ? `<td rowspan="${lSpan}" style="${cellBorder} width: 15px; text-align: center; vertical-align: middle; font-weight: bold; font-size: 12px; padding: 0;">${leftSlot.tens}</td>`
             : '';
         const rTensCell = rSpan > 0
-            ? `<td rowspan="${rSpan}" style="${cellBorder} width: 14px; text-align: center; vertical-align: middle; font-weight: bold; font-size: 12px; padding: 0; border-left: 2px solid #000;">${rightSlot.tens}</td>`
+            ? `<td rowspan="${rSpan}" style="${cellBorder} width: 15px; text-align: center; vertical-align: middle; font-weight: bold; font-size: 12px; padding: 0; border-left: 2px solid #000;">${rightSlot.tens}</td>`
             : '';
 
         const clickAttrL = !isPrintMode ? `onclick="window.toggleManualVoidOnTaxSheet('${cleanTrack}','${cleanPrefix6}','${leftSlot.suf2}')" style="cursor:pointer;" title="點擊切換空白/作廢"` : '';
         const clickAttrR = !isPrintMode ? `onclick="window.toggleManualVoidOnTaxSheet('${cleanTrack}','${cleanPrefix6}','${rightSlot.suf2}')" style="cursor:pointer;" title="點擊切換空白/作廢"` : '';
 
-        rows25Html += `
-        <tr style="height: 20px;">
-            <!-- 左半欄 (00~24 或 50~74) -->
-            ${lTensCell}
-            <td ${clickAttrL} style="${cellBorder} width: 16px; text-align: center; font-weight: bold; font-size: 11.5px; padding: 0;">${leftSlot.units}</td>
-            <td ${clickAttrL} style="${cellBorder} width: 78px; text-align: center; font-family: monospace; font-size: 12px; font-weight: bold; letter-spacing: 0.5px; padding: 0 2px;">${escapeQuotes(leftSlot.buyerTaxId)}</td>
-            <td ${clickAttrL} style="${cellBorder} width: 78px; text-align: right; font-size: 12px; font-weight: bold; padding: 0 4px;">${leftSlot.netStr}</td>
-            <td ${clickAttrL} style="${cellBorder} width: 20px; text-align: center; font-size: 12px; font-weight: bold; padding: 0;">${leftSlot.isTaxable ? '✓' : ''}</td>
-            <td ${clickAttrL} style="${cellBorder} width: 20px; text-align: center; font-size: 11px; padding: 0;"></td>
-            <td ${clickAttrL} style="${cellBorder} width: 20px; text-align: center; font-size: 11px; padding: 0;"></td>
-            <td ${clickAttrL} style="${cellBorder} width: 54px; text-align: right; font-size: 12px; font-weight: bold; padding: 0 4px;">${leftSlot.taxStr}</td>
-            <td ${clickAttrL} style="${cellBorder} width: 44px; text-align: center; font-size: 11.5px; color: ${leftSlot.rowType === 'VOID' ? '#c92a2a' : '#000'}; font-weight: bold; padding: 0 2px;">${escapeQuotes(leftSlot.remark)}</td>
+        if (isTwoPart) {
+            // 📗 二聯式統一發票明細表 25 列結構 (末二位號碼 | 發票總計金額 | 課稅別(應稅/零稅率/免稅) | 備註)
+            rows25Html += `
+            <tr style="height: 20px;">
+                <!-- 左半欄 (00~24 或 50~74) -->
+                ${lTensCell}
+                <td ${clickAttrL} style="${cellBorder} width: 18px; text-align: center; font-weight: bold; font-size: 11.5px; padding: 0;">${leftSlot.units}</td>
+                <td ${clickAttrL} style="${cellBorder} width: 138px; text-align: right; font-size: 12.5px; font-weight: bold; padding: 0 6px;">${leftSlot.grossStr}</td>
+                <td ${clickAttrL} style="${cellBorder} width: 28px; text-align: center; font-size: 12px; font-weight: bold; padding: 0;">${leftSlot.isTaxable ? '✓' : ''}</td>
+                <td ${clickAttrL} style="${cellBorder} width: 28px; text-align: center; font-size: 11px; padding: 0;"></td>
+                <td ${clickAttrL} style="${cellBorder} width: 28px; text-align: center; font-size: 11px; padding: 0;"></td>
+                <td ${clickAttrL} style="${cellBorder} width: 88px; text-align: center; font-size: 11.5px; color: ${leftSlot.rowType === 'VOID' ? '#c92a2a' : '#000'}; font-weight: bold; padding: 0 2px;">${escapeQuotes(leftSlot.remark)}</td>
 
-            <!-- 右半欄 (25~49 或 75~99) -->
-            ${rTensCell}
-            <td ${clickAttrR} style="${cellBorder} width: 16px; text-align: center; font-weight: bold; font-size: 11.5px; padding: 0;">${rightSlot.units}</td>
-            <td ${clickAttrR} style="${cellBorder} width: 78px; text-align: center; font-family: monospace; font-size: 12px; font-weight: bold; letter-spacing: 0.5px; padding: 0 2px;">${escapeQuotes(rightSlot.buyerTaxId)}</td>
-            <td ${clickAttrR} style="${cellBorder} width: 78px; text-align: right; font-size: 12px; font-weight: bold; padding: 0 4px;">${rightSlot.netStr}</td>
-            <td ${clickAttrR} style="${cellBorder} width: 20px; text-align: center; font-size: 12px; font-weight: bold; padding: 0;">${rightSlot.isTaxable ? '✓' : ''}</td>
-            <td ${clickAttrR} style="${cellBorder} width: 20px; text-align: center; font-size: 11px; padding: 0;"></td>
-            <td ${clickAttrR} style="${cellBorder} width: 20px; text-align: center; font-size: 11px; padding: 0;"></td>
-            <td ${clickAttrR} style="${cellBorder} width: 54px; text-align: right; font-size: 12px; font-weight: bold; padding: 0 4px;">${rightSlot.taxStr}</td>
-            <td ${clickAttrR} style="${cellBorder} width: 44px; text-align: center; font-size: 11.5px; color: ${rightSlot.rowType === 'VOID' ? '#c92a2a' : '#000'}; font-weight: bold; padding: 0 2px;">${escapeQuotes(rightSlot.remark)}</td>
-        </tr>`;
+                <!-- 右半欄 (25~49 或 75~99) -->
+                ${rTensCell}
+                <td ${clickAttrR} style="${cellBorder} width: 18px; text-align: center; font-weight: bold; font-size: 11.5px; padding: 0;">${rightSlot.units}</td>
+                <td ${clickAttrR} style="${cellBorder} width: 138px; text-align: right; font-size: 12.5px; font-weight: bold; padding: 0 6px;">${rightSlot.grossStr}</td>
+                <td ${clickAttrR} style="${cellBorder} width: 28px; text-align: center; font-size: 12px; font-weight: bold; padding: 0;">${rightSlot.isTaxable ? '✓' : ''}</td>
+                <td ${clickAttrR} style="${cellBorder} width: 28px; text-align: center; font-size: 11px; padding: 0;"></td>
+                <td ${clickAttrR} style="${cellBorder} width: 28px; text-align: center; font-size: 11px; padding: 0;"></td>
+                <td ${clickAttrR} style="${cellBorder} width: 88px; text-align: center; font-size: 11.5px; color: ${rightSlot.rowType === 'VOID' ? '#c92a2a' : '#000'}; font-weight: bold; padding: 0 2px;">${escapeQuotes(rightSlot.remark)}</td>
+            </tr>`;
+        } else {
+            // 📘 三聯式統一發票明細表 25 列結構 (末二位號碼 | 買受人統編 | 銷售額 | 課稅別 | 稅額 | 備註)
+            rows25Html += `
+            <tr style="height: 20px;">
+                <!-- 左半欄 (00~24 或 50~74) -->
+                ${lTensCell}
+                <td ${clickAttrL} style="${cellBorder} width: 16px; text-align: center; font-weight: bold; font-size: 11.5px; padding: 0;">${leftSlot.units}</td>
+                <td ${clickAttrL} style="${cellBorder} width: 78px; text-align: center; font-family: monospace; font-size: 12px; font-weight: bold; letter-spacing: 0.5px; padding: 0 2px;">${escapeQuotes(leftSlot.buyerTaxId)}</td>
+                <td ${clickAttrL} style="${cellBorder} width: 78px; text-align: right; font-size: 12px; font-weight: bold; padding: 0 4px;">${leftSlot.netStr}</td>
+                <td ${clickAttrL} style="${cellBorder} width: 20px; text-align: center; font-size: 12px; font-weight: bold; padding: 0;">${leftSlot.isTaxable ? '✓' : ''}</td>
+                <td ${clickAttrL} style="${cellBorder} width: 20px; text-align: center; font-size: 11px; padding: 0;"></td>
+                <td ${clickAttrL} style="${cellBorder} width: 20px; text-align: center; font-size: 11px; padding: 0;"></td>
+                <td ${clickAttrL} style="${cellBorder} width: 54px; text-align: right; font-size: 12px; font-weight: bold; padding: 0 4px;">${leftSlot.taxStr}</td>
+                <td ${clickAttrL} style="${cellBorder} width: 44px; text-align: center; font-size: 11.5px; color: ${leftSlot.rowType === 'VOID' ? '#c92a2a' : '#000'}; font-weight: bold; padding: 0 2px;">${escapeQuotes(leftSlot.remark)}</td>
+
+                <!-- 右半欄 (25~49 或 75~99) -->
+                ${rTensCell}
+                <td ${clickAttrR} style="${cellBorder} width: 16px; text-align: center; font-weight: bold; font-size: 11.5px; padding: 0;">${rightSlot.units}</td>
+                <td ${clickAttrR} style="${cellBorder} width: 78px; text-align: center; font-family: monospace; font-size: 12px; font-weight: bold; letter-spacing: 0.5px; padding: 0 2px;">${escapeQuotes(rightSlot.buyerTaxId)}</td>
+                <td ${clickAttrR} style="${cellBorder} width: 78px; text-align: right; font-size: 12px; font-weight: bold; padding: 0 4px;">${rightSlot.netStr}</td>
+                <td ${clickAttrR} style="${cellBorder} width: 20px; text-align: center; font-size: 12px; font-weight: bold; padding: 0;">${rightSlot.isTaxable ? '✓' : ''}</td>
+                <td ${clickAttrR} style="${cellBorder} width: 20px; text-align: center; font-size: 11px; padding: 0;"></td>
+                <td ${clickAttrR} style="${cellBorder} width: 20px; text-align: center; font-size: 11px; padding: 0;"></td>
+                <td ${clickAttrR} style="${cellBorder} width: 54px; text-align: right; font-size: 12px; font-weight: bold; padding: 0 4px;">${rightSlot.taxStr}</td>
+                <td ${clickAttrR} style="${cellBorder} width: 44px; text-align: center; font-size: 11.5px; color: ${rightSlot.rowType === 'VOID' ? '#c92a2a' : '#000'}; font-weight: bold; padding: 0 2px;">${escapeQuotes(rightSlot.remark)}</td>
+            </tr>`;
+        }
     }
 
     const pageBreakStyle = isPrintMode ? 'page-break-after: always; break-after: page;' : '';
+    const sheetTitleText = isTwoPart ? '營業人使用二聯式統一發票明細表' : '營業人使用三聯式統一發票明細表';
+    const footerSheetTypeText = isTwoPart ? '二聯式' : '三聯式';
 
-    return `
-    <div class="tax-detail-a4-page" style="width: 210mm; min-height: 292mm; max-height: 296mm; margin: 0 auto; padding: 7mm 10mm; box-sizing: border-box; background: #fff; color: #000; font-family: 'DFKai-SB', 'BiauKai', '標楷體', 'MingLiU', '微軟正黑體', serif; position: relative; ${pageBreakStyle}">
-        
-        <!-- 頂部標題區 -->
-        <div style="text-align: center; position: relative; margin-bottom: 4px;">
-            <div style="font-size: 22px; font-weight: bold; letter-spacing: 6px;">營業人使用三聯式統一發票明細表</div>
-            <div style="font-size: 14px; font-weight: bold; margin-top: 2px; letter-spacing: 2px;">
-                中華民國 <span style="display:inline-block; min-width: 32px; border-bottom: 1px solid #000;">${rocYear}</span> 年
-                <span style="display:inline-block; min-width: 28px; border-bottom: 1px solid #000;">${month}</span> 月份
-            </div>
-        </div>
+    // 中間 50 格表格的表頭 HTML (依三聯式 / 二聯式切換)
+    const mainTableHeaderHtml = isTwoPart ? `
+        <thead>
+            <tr style="background-color: #f8f9fa;">
+                <!-- 左欄表頭 -->
+                <th colspan="2" rowspan="2" style="${cellBorder} text-align: center; padding: 2px; line-height: 1.15;">末二位<br>號 碼</th>
+                <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px; letter-spacing: 1px;">發 票 總 計 金 額</th>
+                <th colspan="3" style="${cellBorder} text-align: center; padding: 2px; letter-spacing: 2px;">課 稅 別</th>
+                <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px; letter-spacing: 2px;">備 註</th>
 
-        <!-- 頂部營業人基本資料與發票字軌號碼區 -->
-        <table style="width: 100%; border-collapse: collapse; border: 2px solid #000; border-bottom: none; font-size: 12px;">
+                <!-- 右欄表頭 -->
+                <th colspan="2" rowspan="2" style="${cellBorder} border-left: 2px solid #000; text-align: center; padding: 2px; line-height: 1.15;">末二位<br>號 碼</th>
+                <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px; letter-spacing: 1px;">發 票 總 計 金 額</th>
+                <th colspan="3" style="${cellBorder} text-align: center; padding: 2px; letter-spacing: 2px;">課 稅 別</th>
+                <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px; letter-spacing: 2px;">備 註</th>
+            </tr>
+            <tr style="background-color: #f8f9fa; font-size: 10.5px;">
+                <th style="${cellBorder} text-align: center; padding: 1px;">應<br>稅</th>
+                <th style="${cellBorder} text-align: center; padding: 1px; line-height: 1.05;">零<br>稅<br>率</th>
+                <th style="${cellBorder} text-align: center; padding: 1px;">免<br>稅</th>
+                <th style="${cellBorder} text-align: center; padding: 1px;">應<br>稅</th>
+                <th style="${cellBorder} text-align: center; padding: 1px; line-height: 1.05;">零<br>稅<br>率</th>
+                <th style="${cellBorder} text-align: center; padding: 1px;">免<br>稅</th>
+            </tr>
+        </thead>
+    ` : `
+        <thead>
+            <tr style="background-color: #f8f9fa;">
+                <!-- 左欄表頭 -->
+                <th colspan="2" rowspan="2" style="${cellBorder} text-align: center; padding: 2px; line-height: 1.15;">末二位<br>號 碼</th>
+                <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px; line-height: 1.15;">買 受 人<br>統一編號</th>
+                <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px;">銷 售 額</th>
+                <th colspan="3" style="${cellBorder} text-align: center; padding: 2px;">課 稅 別</th>
+                <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px;">稅 額</th>
+                <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px;">備 註</th>
+
+                <!-- 右欄表頭 -->
+                <th colspan="2" rowspan="2" style="${cellBorder} border-left: 2px solid #000; text-align: center; padding: 2px; line-height: 1.15;">末二位<br>號 碼</th>
+                <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px; line-height: 1.15;">買 受 人<br>統一編號</th>
+                <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px;">銷 售 額</th>
+                <th colspan="3" style="${cellBorder} text-align: center; padding: 2px;">課 稅 別</th>
+                <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px;">稅 額</th>
+                <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px;">備 註</th>
+            </tr>
+            <tr style="background-color: #f8f9fa; font-size: 10.5px;">
+                <th style="${cellBorder} text-align: center; padding: 1px;">應<br>稅</th>
+                <th style="${cellBorder} text-align: center; padding: 1px; line-height: 1.05;">零<br>稅<br>率</th>
+                <th style="${cellBorder} text-align: center; padding: 1px;">免<br>稅</th>
+                <th style="${cellBorder} text-align: center; padding: 1px;">應<br>稅</th>
+                <th style="${cellBorder} text-align: center; padding: 1px; line-height: 1.05;">零<br>稅<br>率</th>
+                <th style="${cellBorder} text-align: center; padding: 1px;">免<br>稅</th>
+            </tr>
+        </thead>
+    `;
+
+    // 底部統計區 HTML (二聯式含「發票總金額(1)」、「銷售額(2)=(1)×100/105」、「稅額(3)=(2)×5%」三欄結構)
+    const bottomSummaryTableHtml = isTwoPart ? `
+        <table style="width: 100%; border-collapse: collapse; border: 2px solid #000; border-top: none; font-size: 11px;">
             <tr>
-                <td style="${cellBorder} width: 72px; text-align: center; font-weight: bold; padding: 3px;">統一編號</td>
-                ${taxIdChars.map(ch => `<td style="${cellBorder} width: 22px; text-align: center; font-weight: bold; font-size: 14px; font-family: monospace;">${escapeQuotes(ch)}</td>`).join('')}
-                <td style="${cellBorder} width: 82px; text-align: center; font-weight: bold; padding: 3px;">營業人名稱</td>
-                <td colspan="2" style="${cellBorder} padding: 3px 8px; font-weight: bold; font-size: 14px;">${escapeQuotes(companyName)}</td>
+                <td rowspan="3" style="${cellBorder} width: 46px; text-align: center; font-weight: bold; padding: 2px; line-height: 1.3;">
+                    區分<br>項目
+                </td>
+                <td colspan="5" style="${cellBorder} text-align: center; font-weight: bold; padding: 2px; letter-spacing: 2px;">
+                    發 票 使 用 情 形
+                </td>
+                <td colspan="5" style="${cellBorder} border-left: 2px solid #000; text-align: center; font-weight: bold; padding: 2px; letter-spacing: 2px;">
+                    銷 售 額 及 稅 額 計 算
+                </td>
             </tr>
             <tr>
-                <td style="${cellBorder} text-align: center; font-weight: bold; padding: 3px;">稅籍編號</td>
-                ${taxRegChars.map(ch => `<td style="${cellBorder} width: 20px; text-align: center; font-weight: bold; font-size: 13px; font-family: monospace;">${escapeQuotes(ch)}</td>`).join('')}
-                <td style="${cellBorder} text-align: center; font-size: 11px; line-height: 1.2; padding: 2px 4px; width: 115px;">
-                    所屬年月及發票字軌<br>號碼請營業人填註
+                <td colspan="5" style="${cellBorder} text-align: center; font-weight: bold; padding: 2px;">
+                    使 用 份 數
                 </td>
-                <td style="${cellBorder} padding: 3px 6px;">
-                    <div style="display: flex; align-items: center; justify-content: space-around; flex-wrap: nowrap;">
-                        <div style="display: flex; align-items: center; gap: 3px;">
-                            <span style="font-weight: bold; font-size: 11.5px;">發票字軌：</span>
-                            <span style="display: inline-block; width: 22px; height: 20px; line-height: 20px; border: 1px solid #000; text-align: center; font-weight: bold; font-size: 13px;">${escapeQuotes(trackChars[0])}</span>
-                            <span style="display: inline-block; width: 22px; height: 20px; line-height: 20px; border: 1px solid #000; text-align: center; font-weight: bold; font-size: 13px;">${escapeQuotes(trackChars[1])}</span>
-                        </div>
-                        <div style="display: flex; align-items: center; gap: 2px;">
-                            <span style="font-weight: bold; font-size: 11.5px;">發票前六位號碼：</span>
-                            ${pfxChars.map(d => `<span style="display: inline-block; width: 19px; height: 20px; line-height: 20px; border: 1px solid #000; text-align: center; font-weight: bold; font-size: 13px; font-family: monospace;">${escapeQuotes(d)}</span>`).join('')}
-                        </div>
-                    </div>
+                <td colspan="3" style="${cellBorder} border-left: 2px solid #000; text-align: center; font-weight: bold; padding: 2px; letter-spacing: 4px;">
+                    應     稅
+                </td>
+                <td style="${cellBorder} text-align: center; font-weight: bold; padding: 2px;">
+                    零 稅 率
+                </td>
+                <td style="${cellBorder} text-align: center; font-weight: bold; padding: 2px;">
+                    免 稅
                 </td>
             </tr>
+            <tr style="text-align: center; font-weight: bold; font-size: 10.5px;">
+                <td style="${cellBorder} width: 40px; padding: 2px;">應稅</td>
+                <td style="${cellBorder} width: 42px; padding: 2px;">零稅率</td>
+                <td style="${cellBorder} width: 40px; padding: 2px;">免稅</td>
+                <td style="${cellBorder} width: 40px; padding: 2px;">作廢</td>
+                <td style="${cellBorder} width: 40px; padding: 2px;">空白</td>
+                <td style="${cellBorder} border-left: 2px solid #000; width: 92px; padding: 2px; line-height: 1.15;">
+                    發票總金額<br>(1)
+                </td>
+                <td style="${cellBorder} width: 100px; padding: 1px 2px; line-height: 1.1;">
+                    銷售額<br>
+                    <span style="display:inline-flex; align-items:center; justify-content:center; font-size:9.5px;">
+                        (2)=(1)×
+                        <span style="display:inline-block; text-align:center; line-height:1; margin-left:2px;">
+                            <span style="border-bottom:1px solid #000; display:block; padding:0 1px;">100</span>
+                            <span style="display:block; padding:0 1px;">105</span>
+                        </span>
+                    </span>
+                </td>
+                <td style="${cellBorder} width: 82px; padding: 2px; line-height: 1.15;">
+                    稅額<br><span style="font-size:9.5px;">(3)=(2)×5%</span>
+                </td>
+                <td style="${cellBorder} width: 74px; padding: 2px;">銷 售 額</td>
+                <td style="${cellBorder} width: 74px; padding: 2px;">銷 售 額</td>
+            </tr>
+            <tr style="height: 24px;">
+                <td style="${cellBorder} text-align: center; font-weight: bold; line-height: 1.15; padding: 2px;">本表<br>合計</td>
+                <td style="${cellBorder} text-align: center; font-weight: bold; font-size: 12.5px;">${sheetTaxableCount}</td>
+                <td style="${cellBorder} text-align: center; font-size: 12px;">0</td>
+                <td style="${cellBorder} text-align: center; font-size: 12px;">0</td>
+                <td style="${cellBorder} text-align: center; font-weight: bold; font-size: 12.5px;">${sheetVoidCount}</td>
+                <td style="${cellBorder} text-align: center; font-weight: bold; font-size: 12.5px;">${sheetBlankCount}</td>
+                <td style="${cellBorder} border-left: 2px solid #000; text-align: right; font-weight: bold; font-size: 12.5px; padding: 0 4px;">${sheetGrossSum.toLocaleString()}</td>
+                <td style="${cellBorder} text-align: right; font-weight: bold; font-size: 12.5px; padding: 0 4px;">${sheetNetSum.toLocaleString()}</td>
+                <td style="${cellBorder} text-align: right; font-weight: bold; font-size: 12.5px; padding: 0 4px;">${sheetTaxSum.toLocaleString()}</td>
+                <td style="${cellBorder} text-align: right; padding: 0 4px;">0</td>
+                <td style="${cellBorder} text-align: right; padding: 0 4px;">0</td>
+            </tr>
+            <tr style="height: 24px;">
+                <td style="${cellBorder} text-align: center; font-weight: bold; line-height: 1.15; padding: 2px;">本期(月)<br>總 計</td>
+                <td style="${cellBorder} text-align: center; font-weight: bold; font-size: 12.5px;">${periodTaxableCount}</td>
+                <td style="${cellBorder} text-align: center; font-size: 12px;">0</td>
+                <td style="${cellBorder} text-align: center; font-size: 12px;">0</td>
+                <td style="${cellBorder} text-align: center; font-weight: bold; font-size: 12.5px;">${periodVoidCount}</td>
+                <td style="${cellBorder} text-align: center; font-weight: bold; font-size: 12.5px;">${periodBlankCount}</td>
+                <td style="${cellBorder} border-left: 2px solid #000; text-align: right; font-weight: bold; font-size: 12.5px; padding: 0 4px;">${periodGrossSum.toLocaleString()}</td>
+                <td style="${cellBorder} text-align: right; font-weight: bold; font-size: 12.5px; padding: 0 4px;">${periodNetSum.toLocaleString()}</td>
+                <td style="${cellBorder} text-align: right; font-weight: bold; font-size: 12.5px; padding: 0 4px;">${periodTaxSum.toLocaleString()}</td>
+                <td style="${cellBorder} text-align: right; padding: 0 4px;">0</td>
+                <td style="${cellBorder} text-align: right; padding: 0 4px;">0</td>
+            </tr>
         </table>
-
-        <!-- 中間 50 格雙欄明細主表 -->
-        <table style="width: 100%; border-collapse: collapse; border: 2px solid #000; font-size: 11.5px;">
-            <thead>
-                <tr style="background-color: #f8f9fa;">
-                    <!-- 左欄表頭 -->
-                    <th colspan="2" rowspan="2" style="${cellBorder} text-align: center; padding: 2px; line-height: 1.15;">末二位<br>號 碼</th>
-                    <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px; line-height: 1.15;">買 受 人<br>統一編號</th>
-                    <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px;">銷 售 額</th>
-                    <th colspan="3" style="${cellBorder} text-align: center; padding: 2px;">課 稅 別</th>
-                    <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px;">稅 額</th>
-                    <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px;">備 註</th>
-
-                    <!-- 右欄表頭 -->
-                    <th colspan="2" rowspan="2" style="${cellBorder} border-left: 2px solid #000; text-align: center; padding: 2px; line-height: 1.15;">末二位<br>號 碼</th>
-                    <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px; line-height: 1.15;">買 受 人<br>統一編號</th>
-                    <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px;">銷 售 額</th>
-                    <th colspan="3" style="${cellBorder} text-align: center; padding: 2px;">課 稅 別</th>
-                    <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px;">稅 額</th>
-                    <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px;">備 註</th>
-                </tr>
-                <tr style="background-color: #f8f9fa; font-size: 10.5px;">
-                    <th style="${cellBorder} text-align: center; padding: 1px;">應<br>稅</th>
-                    <th style="${cellBorder} text-align: center; padding: 1px; line-height: 1.05;">零<br>稅<br>率</th>
-                    <th style="${cellBorder} text-align: center; padding: 1px;">免<br>稅</th>
-                    <th style="${cellBorder} text-align: center; padding: 1px;">應<br>稅</th>
-                    <th style="${cellBorder} text-align: center; padding: 1px; line-height: 1.05;">零<br>稅<br>率</th>
-                    <th style="${cellBorder} text-align: center; padding: 1px;">免<br>稅</th>
-                </tr>
-            </thead>
-            <tbody>
-                ${rows25Html}
-            </tbody>
-        </table>
-
-        <!-- 底部統計區：發票使用情形 ＆ 銷售額及稅額計算 -->
+    ` : `
         <table style="width: 100%; border-collapse: collapse; border: 2px solid #000; border-top: none; font-size: 11.5px;">
             <tr>
                 <td rowspan="3" style="${cellBorder} width: 52px; text-align: center; font-weight: bold; padding: 2px; line-height: 1.3;">
@@ -2788,6 +3181,60 @@ window.buildSingleTaxDetailSheetHtml = function(params, isPrintMode = false) {
                 <td style="${cellBorder} text-align: right; padding: 0 5px;">0</td>
             </tr>
         </table>
+    `;
+
+    return `
+    <div class="tax-detail-a4-page" style="width: 210mm; min-height: 292mm; max-height: 296mm; margin: 0 auto; padding: 7mm 10mm; box-sizing: border-box; background: #fff; color: #000; font-family: 'DFKai-SB', 'BiauKai', '標楷體', 'MingLiU', '微軟正黑體', serif; position: relative; ${pageBreakStyle}">
+        
+        <!-- 頂部標題區 -->
+        <div style="text-align: center; position: relative; margin-bottom: 4px;">
+            <div style="font-size: 22px; font-weight: bold; letter-spacing: 5px;">${sheetTitleText}</div>
+            <div style="font-size: 14px; font-weight: bold; margin-top: 2px; letter-spacing: 2px;">
+                中華民國 <span style="display:inline-block; min-width: 32px; border-bottom: 1px solid #000;">${rocYear}</span> 年
+                <span style="display:inline-block; min-width: 28px; border-bottom: 1px solid #000;">${month}</span> 月份
+            </div>
+        </div>
+
+        <!-- 頂部營業人基本資料與發票字軌號碼區 -->
+        <table style="width: 100%; border-collapse: collapse; border: 2px solid #000; border-bottom: none; font-size: 12px;">
+            <tr>
+                <td style="${cellBorder} width: 72px; text-align: center; font-weight: bold; padding: 3px;">統一編號</td>
+                ${taxIdChars.map(ch => `<td style="${cellBorder} width: 22px; text-align: center; font-weight: bold; font-size: 14px; font-family: monospace;">${escapeQuotes(ch)}</td>`).join('')}
+                <td style="${cellBorder} width: 82px; text-align: center; font-weight: bold; padding: 3px;">營業人名稱</td>
+                <td colspan="2" style="${cellBorder} padding: 3px 8px; font-weight: bold; font-size: 14px;">${escapeQuotes(companyName)}</td>
+            </tr>
+            <tr>
+                <td style="${cellBorder} text-align: center; font-weight: bold; padding: 3px;">稅籍編號</td>
+                ${taxRegChars.map(ch => `<td style="${cellBorder} width: 20px; text-align: center; font-weight: bold; font-size: 13px; font-family: monospace;">${escapeQuotes(ch)}</td>`).join('')}
+                <td style="${cellBorder} text-align: center; font-size: 11px; line-height: 1.2; padding: 2px 4px; width: 115px;">
+                    所屬年月及發票字軌<br>號碼請營業人填註
+                </td>
+                <td style="${cellBorder} padding: 3px 6px;">
+                    <div style="display: flex; align-items: center; justify-content: space-around; flex-wrap: nowrap;">
+                        <div style="display: flex; align-items: center; gap: 3px;">
+                            <span style="font-weight: bold; font-size: 11.5px;">發票字軌：</span>
+                            <span style="display: inline-block; width: 22px; height: 20px; line-height: 20px; border: 1px solid #000; text-align: center; font-weight: bold; font-size: 13px;">${escapeQuotes(trackChars[0])}</span>
+                            <span style="display: inline-block; width: 22px; height: 20px; line-height: 20px; border: 1px solid #000; text-align: center; font-weight: bold; font-size: 13px;">${escapeQuotes(trackChars[1])}</span>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 2px;">
+                            <span style="font-weight: bold; font-size: 11.5px;">發票前六位號碼：</span>
+                            ${pfxChars.map(d => `<span style="display: inline-block; width: 19px; height: 20px; line-height: 20px; border: 1px solid #000; text-align: center; font-weight: bold; font-size: 13px; font-family: monospace;">${escapeQuotes(d)}</span>`).join('')}
+                        </div>
+                    </div>
+                </td>
+            </tr>
+        </table>
+
+        <!-- 中間 50 格雙欄明細主表 -->
+        <table style="width: 100%; border-collapse: collapse; border: 2px solid #000; font-size: 11.5px;">
+            ${mainTableHeaderHtml}
+            <tbody>
+                ${rows25Html}
+            </tbody>
+        </table>
+
+        <!-- 底部統計區：發票使用情形 ＆ 銷售額及稅額計算 -->
+        ${bottomSummaryTableHtml}
 
         <!-- 最底部申報單位、申報日期、稽徵機關編號與頁次說明區 -->
         <table style="width: 100%; border-collapse: collapse; border: 2px solid #000; border-top: none; font-size: 11.5px;">
@@ -2810,14 +3257,14 @@ window.buildSingleTaxDetailSheetHtml = function(params, isPrintMode = false) {
                 </td>
                 <td style="${cellBorder} vertical-align: middle; padding: 4px 8px; line-height: 1.55;">
                     <div style="font-weight: bold;">
-                        頁次：本表為本期(月)三聯式發票明細表共
+                        頁次：本表為本期(月)${footerSheetTypeText}發票明細表共
                         <span style="display:inline-block; min-width: 22px; text-align:center; border-bottom: 1px solid #000;">${totalSheets}</span>
                         張之第
                         <span style="display:inline-block; min-width: 22px; text-align:center; border-bottom: 1px solid #000;">${currentSheet}</span>
                         張
                     </div>
                     <div style="font-size: 10.5px; margin-top: 3px;">
-                        第一聯：申報聯，申報主管稽徵機關<br>
+                        第一聯：申報聯，申報主管稽徵機關。<br>
                         第二聯：存查聯，由營業人存查。
                     </div>
                 </td>
@@ -2828,10 +3275,12 @@ window.buildSingleTaxDetailSheetHtml = function(params, isPrintMode = false) {
     </div>`;
 };
 
-// 計算該月份全部發票冊的「本期(月)總計」統計值
-window.calculateMonthGrandTaxStats = function(rocYear, month) {
+// 計算該月份指定聯式 ('THREE_PART' 或 'TWO_PART') 全部發票冊的「本期(月)總計」統計值
+window.calculateMonthGrandTaxStats = function(rocYear, month, targetFormType) {
     const westY = Number(rocYear) + 1911;
-    const booklets = window.taxDetailState.detectedBooklets || [];
+    const fType = targetFormType || window.taxDetailState.formType || 'THREE_PART';
+    const allBooks = window.taxDetailState.allMonthBooklets || [];
+    const booklets = allBooks.filter(b => b.formType === fType);
 
     const invMap = new Map();
     (globalHistory || []).forEach(h => {
@@ -2845,11 +3294,12 @@ window.calculateMonthGrandTaxStats = function(rocYear, month) {
     let taxableCount = 0;
     let voidCount = 0;
     let blankCount = 0;
+    let grossSum = 0;
     let netSum = 0;
     let taxSum = 0;
 
     if (booklets.length === 0) {
-        return { taxableCount: 0, voidCount: 0, blankCount: 50, netSum: 0, taxSum: 0 };
+        return { taxableCount: 0, voidCount: 0, blankCount: 50, grossSum: 0, netSum: 0, taxSum: 0 };
     }
 
     booklets.forEach(b => {
@@ -2865,8 +3315,12 @@ window.calculateMonthGrandTaxStats = function(rocYear, month) {
                     voidCount++;
                 } else {
                     taxableCount++;
-                    netSum += Math.round(Number(matched.net) || 0);
-                    taxSum += Math.round(Number(matched.tax) || 0);
+                    const gVal = Math.round(Number(matched.total) || 0);
+                    const nVal = Math.round(Number(matched.net) || Math.round(gVal / 1.05));
+                    const tVal = Math.round(Number(matched.tax) || (gVal - nVal));
+                    grossSum += gVal;
+                    netSum += nVal;
+                    taxSum += tVal;
                 }
             } else if (window.taxDetailState.manualVoidSuffixes[mKey]) {
                 voidCount++;
@@ -2876,16 +3330,22 @@ window.calculateMonthGrandTaxStats = function(rocYear, month) {
         }
     });
 
-    return { taxableCount, voidCount, blankCount, netSum, taxSum };
+    if (fType === 'TWO_PART') {
+        netSum = Math.round((grossSum * 100) / 105);
+        taxSum = Math.round(netSum * 0.05);
+    }
+
+    return { taxableCount, voidCount, blankCount, grossSum, netSum, taxSum };
 };
 
 window.getCurrentTaxFormParams = function() {
+    const formType = window.taxDetailState.formType || 'THREE_PART';
     const rocYear = parseInt(document.getElementById('td_rocYear')?.value, 10) || window.taxDetailState.rocYear;
     const month = parseInt(document.getElementById('td_month')?.value, 10) || window.taxDetailState.month;
     const declareDate = document.getElementById('td_declareDate')?.value || getTodayStr();
     const companyTaxId = document.getElementById('td_companyTaxId')?.value || '86477073';
     const companyName = document.getElementById('td_companyName')?.value || '長固實業股份有限公司';
-    const track = (document.getElementById('td_track')?.value || 'EC').trim().toUpperCase();
+    const track = (document.getElementById('td_track')?.value || (formType === 'TWO_PART' ? 'EE' : 'EC')).trim().toUpperCase();
     const prefix6 = (document.getElementById('td_prefix6')?.value || '').trim();
     const rangeHalf = document.getElementById('td_rangeHalf')?.value || '00-49';
     const taxRegNo = document.getElementById('td_taxRegNo')?.value || '';
@@ -2893,10 +3353,10 @@ window.getCurrentTaxFormParams = function() {
     const totalSheets = parseInt(document.getElementById('td_totalSheets')?.value, 10) || 1;
     const currentSheet = parseInt(document.getElementById('td_currentSheet')?.value, 10) || 1;
 
-    const monthGrandStats = window.calculateMonthGrandTaxStats(rocYear, month);
+    const monthGrandStats = window.calculateMonthGrandTaxStats(rocYear, month, formType);
 
     return {
-        rocYear, month, declareDate, companyTaxId, companyName,
+        formType, rocYear, month, declareDate, companyTaxId, companyName,
         track, prefix6, rangeHalf, taxRegNo, taxOfficeCode,
         totalSheets, currentSheet, monthGrandStats
     };
@@ -2909,7 +3369,7 @@ window.renderTaxDetailPreview = function() {
     container.innerHTML = window.buildSingleTaxDetailSheetHtml(params, false);
 };
 
-// 列印目前顯示的單張「營業人使用三聯式統一發票明細表」(A4 直式)
+// 列印目前顯示的單張「三聯式或二聯式統一發票明細表」(A4 直式)
 window.printCurrentTaxDetailSheet = function() {
     const params = window.getCurrentTaxFormParams();
     if (!params.track || params.track.length < 2 || !params.prefix6 || params.prefix6.length < 6) {
@@ -2924,24 +3384,42 @@ window.printCurrentTaxDetailSheet = function() {
     if (typeof window.showPrintPreview === 'function') window.showPrintPreview('printTaxDetailArea');
 };
 
-// 一鍵預覽並列印該月份偵測到的全部發票冊別 (多頁 A4 直式)
-window.printAllMonthTaxDetailSheets = function() {
-    const booklets = window.taxDetailState.detectedBooklets || [];
-    if (booklets.length === 0) {
-        return alert("此月份未偵測到已開立的發票冊別，請先手動輸入字軌與前六位號碼後，點擊「🖨️ 預覽並列印本張明細表」。");
+// 進階優化 4：一鍵預覽並列印該月份「目前聯式全部冊別」或「三聯＋二聯合併全部冊別」(多頁 A4 直式)
+window.printAllMonthTaxDetailSheets = function(includeBothTypes = false) {
+    const baseParams = window.getCurrentTaxFormParams();
+    const allBooks = window.taxDetailState.allMonthBooklets || [];
+    const targetBooks = includeBothTypes
+        ? allBooks
+        : (window.taxDetailState.detectedBooklets || []);
+
+    if (targetBooks.length === 0) {
+        return alert("此月份未偵測到對應的已開立發票冊別，請先手動輸入字軌與前六位號碼後，點擊「🖨️ 列印本張明細表」。");
     }
 
-    const baseParams = window.getCurrentTaxFormParams();
-    const pagesHtml = booklets.map((b, idx) => {
+    const threeBooks = targetBooks.filter(b => b.formType === 'THREE_PART');
+    const twoBooks = targetBooks.filter(b => b.formType === 'TWO_PART');
+    const statsThree = window.calculateMonthGrandTaxStats(baseParams.rocYear, baseParams.month, 'THREE_PART');
+    const statsTwo = window.calculateMonthGrandTaxStats(baseParams.rocYear, baseParams.month, 'TWO_PART');
+
+    const orderedList = [...threeBooks, ...twoBooks];
+    let threeIdx = 0;
+    let twoIdx = 0;
+
+    const pagesHtml = orderedList.map((b, idx) => {
+        const isTwo = (b.formType === 'TWO_PART');
+        if (isTwo) twoIdx++; else threeIdx++;
+
         const sheetParams = {
             ...baseParams,
+            formType: b.formType,
             track: b.track,
             prefix6: b.prefix6,
             rangeHalf: b.half,
-            totalSheets: booklets.length,
-            currentSheet: idx + 1
+            totalSheets: isTwo ? twoBooks.length : threeBooks.length,
+            currentSheet: isTwo ? twoIdx : threeIdx,
+            monthGrandStats: isTwo ? statsTwo : statsThree
         };
-        return window.buildSingleTaxDetailSheetHtml(sheetParams, idx < booklets.length - 1);
+        return window.buildSingleTaxDetailSheetHtml(sheetParams, idx < orderedList.length - 1);
     }).join('');
 
     const printArea = document.getElementById('printTaxDetailArea');
@@ -2950,4 +3428,156 @@ window.printAllMonthTaxDetailSheets = function() {
     printArea.innerHTML = pagesHtml;
     if (typeof window.applyPrintStyle === 'function') window.applyPrintStyle('A4', 'portrait');
     if (typeof window.showPrintPreview === 'function') window.showPrintPreview('printTaxDetailArea');
+};
+
+// 進階優化 5：一鍵匯出本月「三聯式＋二聯式統一發票明細表」完整 Excel (.xlsx)
+window.exportMonthTaxDetailExcel = function() {
+    if (typeof XLSX === 'undefined') return alert("Excel 模組載入中，請稍候！");
+    const baseParams = window.getCurrentTaxFormParams();
+    const rocY = baseParams.rocYear;
+    const mon = baseParams.month;
+    const westY = rocY + 1911;
+
+    const allBooks = window.taxDetailState.allMonthBooklets || [];
+    const statsThree = window.calculateMonthGrandTaxStats(rocY, mon, 'THREE_PART');
+    const statsTwo = window.calculateMonthGrandTaxStats(rocY, mon, 'TWO_PART');
+
+    const invMap = new Map();
+    (globalHistory || []).forEach(h => {
+        const d = new Date(h.time);
+        if (isNaN(d.getTime()) || d.getFullYear() !== westY || (d.getMonth() + 1) !== Number(mon)) return;
+        const pNo = String(h.paperNo || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+        if (!pNo) return;
+        if (!invMap.has(pNo) || h.status !== '作廢') invMap.set(pNo, h);
+    });
+
+    const wb = XLSX.utils.book_new();
+
+    // 工作表 1：本月營業稅申報總覽 (三聯式 + 二聯式)
+    const summaryAoa = [
+        [`長固實業股份有限公司 — 中華民國 ${rocY} 年 ${mon} 月份 統一發票明細表申報總覽`],
+        ["統一編號", baseParams.companyTaxId, "稅籍編號", baseParams.taxRegNo || "", "申報日期", baseParams.declareDate],
+        [],
+        ["發票聯式分類", "冊數 (每冊50張)", "應稅份數", "作廢份數", "空白份數", "發票含稅總金額 (1)", "折算/未稅銷售額 (2)", "營業稅額 (3)"],
+        [
+            "📘 三聯式統一發票",
+            allBooks.filter(b => b.formType === 'THREE_PART').length,
+            statsThree.taxableCount, statsThree.voidCount, statsThree.blankCount,
+            statsThree.grossSum, statsThree.netSum, statsThree.taxSum
+        ],
+        [
+            "📗 二聯式統一發票",
+            allBooks.filter(b => b.formType === 'TWO_PART').length,
+            statsTwo.taxableCount, statsTwo.voidCount, statsTwo.blankCount,
+            statsTwo.grossSum, statsTwo.netSum, statsTwo.taxSum
+        ],
+        [
+            "🧾 本期(月)銷項總計",
+            allBooks.length,
+            statsThree.taxableCount + statsTwo.taxableCount,
+            statsThree.voidCount + statsTwo.voidCount,
+            statsThree.blankCount + statsTwo.blankCount,
+            statsThree.grossSum + statsTwo.grossSum,
+            statsThree.netSum + statsTwo.netSum,
+            statsThree.taxSum + statsTwo.taxSum
+        ]
+    ];
+    const wsSum = XLSX.utils.aoa_to_sheet(summaryAoa);
+    wsSum['!cols'] = [{ wch: 24 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 20 }, { wch: 20 }, { wch: 16 }];
+    XLSX.utils.book_append_sheet(wb, wsSum, "0_本月營業稅申報總覽");
+
+    // 若該月無自動偵測冊別，匯出目前畫面上輸入的那一冊
+    const targetBooks = allBooks.length > 0 ? allBooks : [{
+        track: baseParams.track,
+        prefix6: baseParams.prefix6 || '000000',
+        half: baseParams.rangeHalf,
+        formType: baseParams.formType
+    }];
+
+    targetBooks.forEach((b, bIdx) => {
+        const isTwo = (b.formType === 'TWO_PART');
+        const startNum = b.half === '50-99' ? 50 : 0;
+        const sheetAoa = [];
+
+        if (isTwo) {
+            sheetAoa.push([`營業人使用二聯式統一發票明細表（中華民國 ${rocY} 年 ${mon} 月份）`]);
+            sheetAoa.push(["統一編號", baseParams.companyTaxId, "營業人名稱", baseParams.companyName, "發票字軌", b.track, "前六位號碼", b.prefix6, "區間", b.half]);
+            sheetAoa.push(["末二位號碼", "完整發票號碼", "客戶名稱(內部參考)", "發票總計金額(含稅)", "課稅別(應稅)", "備註"]);
+
+            let sTaxCnt = 0, sVoidCnt = 0, sBlankCnt = 0, sGross = 0;
+            for (let i = 0; i < 50; i++) {
+                const suf2 = String(startNum + i).padStart(2, '0');
+                const fullNo = `${b.track}${b.prefix6}${suf2}`;
+                const mKey = `${b.track}${b.prefix6}_${suf2}`;
+                const inv = invMap.get(fullNo);
+
+                if (inv) {
+                    if (inv.status === '作廢') {
+                        sVoidCnt++;
+                        sheetAoa.push([suf2, fullNo, inv.client || '', '', '', '作廢']);
+                    } else {
+                        const gVal = Math.round(Number(inv.total) || 0);
+                        sTaxCnt++;
+                        sGross += gVal;
+                        sheetAoa.push([suf2, fullNo, inv.client || '', gVal, '✓', '']);
+                    }
+                } else if (window.taxDetailState.manualVoidSuffixes[mKey]) {
+                    sVoidCnt++;
+                    sheetAoa.push([suf2, fullNo, '', '', '', '作廢']);
+                } else {
+                    sBlankCnt++;
+                    sheetAoa.push([suf2, fullNo, '', '', '', '']);
+                }
+            }
+            const sNet = Math.round((sGross * 100) / 105);
+            const sTax = Math.round(sNet * 0.05);
+            sheetAoa.push([]);
+            sheetAoa.push(["本表合計", `應稅:${sTaxCnt}份`, `作廢:${sVoidCnt}份`, `空白:${sBlankCnt}份`, `發票總金額(1): ${sGross}`, `銷售額(2)=(1)*100/105: ${sNet}`, `稅額(3)=(2)*5%: ${sTax}`]);
+        } else {
+            sheetAoa.push([`營業人使用三聯式統一發票明細表（中華民國 ${rocY} 年 ${mon} 月份）`]);
+            sheetAoa.push(["統一編號", baseParams.companyTaxId, "營業人名稱", baseParams.companyName, "發票字軌", b.track, "前六位號碼", b.prefix6, "區間", b.half]);
+            sheetAoa.push(["末二位號碼", "完整發票號碼", "買受人名稱(內部參考)", "買受人統一編號", "銷售額(未稅)", "課稅別(應稅)", "稅額(5%)", "備註"]);
+
+            let sTaxCnt = 0, sVoidCnt = 0, sBlankCnt = 0, sNet = 0, sTax = 0;
+            for (let i = 0; i < 50; i++) {
+                const suf2 = String(startNum + i).padStart(2, '0');
+                const fullNo = `${b.track}${b.prefix6}${suf2}`;
+                const mKey = `${b.track}${b.prefix6}_${suf2}`;
+                const inv = invMap.get(fullNo);
+
+                if (inv) {
+                    if (inv.status === '作廢') {
+                        sVoidCnt++;
+                        sheetAoa.push([suf2, fullNo, inv.client || '', '', '', '', '', '作廢']);
+                    } else {
+                        const cObj = (globalClients || []).find(c => c.name === inv.client);
+                        const bTaxId = String(inv.taxId || (cObj ? cObj.taxId : '') || '').trim();
+                        const nVal = Math.round(Number(inv.net) || 0);
+                        const tVal = Math.round(Number(inv.tax) || 0);
+                        sTaxCnt++;
+                        sNet += nVal;
+                        sTax += tVal;
+                        sheetAoa.push([suf2, fullNo, inv.client || '', bTaxId, nVal, '✓', tVal, '']);
+                    }
+                } else if (window.taxDetailState.manualVoidSuffixes[mKey]) {
+                    sVoidCnt++;
+                    sheetAoa.push([suf2, fullNo, '', '', '', '', '', '作廢']);
+                } else {
+                    sBlankCnt++;
+                    sheetAoa.push([suf2, fullNo, '', '', '', '', '', '']);
+                }
+            }
+            sheetAoa.push([]);
+            sheetAoa.push(["本表合計", `應稅:${sTaxCnt}份`, `作廢:${sVoidCnt}份`, `空白:${sBlankCnt}份`, `未稅銷售額: ${sNet}`, "", `稅額: ${sTax}`, ""]);
+        }
+
+        const wsBook = XLSX.utils.aoa_to_sheet(sheetAoa);
+        wsBook['!cols'] = [{ wch: 12 }, { wch: 16 }, { wch: 26 }, { wch: 18 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
+        const prefixTag = isTwo ? '二聯' : '三聯';
+        const safeSheetName = `${bIdx + 1}_${prefixTag}_${b.track}${b.prefix6}_${b.half}`.slice(0, 31);
+        XLSX.utils.book_append_sheet(wb, wsBook, safeSheetName);
+    });
+
+    XLSX.writeFile(wb, `長固ERP_${rocY}年${mon}月_三聯與二聯發票明細表.xlsx`);
+    showToast("📥 已成功匯出本月「三聯式＋二聯式統一發票明細表」Excel 檔案！");
 };
