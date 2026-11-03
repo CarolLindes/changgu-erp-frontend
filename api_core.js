@@ -1,11 +1,12 @@
 /**
  * ============================================================================
  * 模組 1：API 核心、全域狀態與雙軌並行架構 (api_core.js) 
- * 【極速登入 ＆ 報表直出 ＆ 外部系統客戶代號對照 ＆ 沖帳中樞 ＆ 未收款三表分析列印升級版】
+ * 【極速登入 ＆ 真實誰在線上懸浮卡 ＆ 外部客戶代號對照 ＆ 沖帳中樞 ＆ 多表列印升級版】
  * 1. 直連 Supabase 實現 0.1 秒極速登入
- * 2. 整合 SheetJS 與 PDF.js 於前端瞬間生成/解析 Excel 與 PDF 報表，交由 GAS 遙控器寄信
- * 3. 內建 customer1.xlsx 客戶代號 (CUSTID) 智慧雙向對照引擎 (含正向與反向查表)
- * 4. 支援跨系統明細補登、5月前歷史帳移轉、批次快速沖帳、撤銷還原(Undo)與未收款三表多選列印
+ * 2. 內建 Supabase Realtime Presence 真實線上同仁追蹤與輕量懸浮資訊卡 (顯示姓名/所在模組/裝置/活躍狀態)
+ * 3. 整合 SheetJS 與 PDF.js 於前端瞬間生成/解析 Excel 與 PDF 報表，交由 GAS 遙控器寄信
+ * 4. 內建 customer1.xlsx 客戶代號 (CUSTID) 智慧雙向對照引擎 (含正向與反向查表)
+ * 5. 支援跨系統明細補登、5月前歷史帳移轉、批次快速沖帳、撤銷還原(Undo)與未收/已沖帳多表列印
  * ============================================================================
  */
 
@@ -66,6 +67,261 @@ let currentInvoiceData = { clientName:'', taxId:'', items:[] };
 let currentSearchSource = []; 
 let currentSearchCallback = null;
 let myLastSyncTime = Date.now();
+
+// ============================================================================
+// 👥 線上同仁即時狀態追蹤與輕量懸浮資訊卡 (Presence & Popover)
+// ============================================================================
+window.onlinePresenceState = {
+    channel: null,
+    myLoginTime: Date.now(),
+    myLastActive: Date.now(),
+    myCurrentModule: '🏠 系統大廳',
+    myDevice: /Mobile|Android|iP(hone|od|ad)/i.test(navigator.userAgent) ? '📱 手機/平板' : '💻 電腦版',
+    usersMap: new Map()
+};
+
+window.formatOnlineTimeAgo = function(ts) {
+    if (!ts) return '剛剛';
+    const diffSec = Math.max(0, Math.floor((Date.now() - Number(ts)) / 1000));
+    if (diffSec < 60) return '剛剛活躍';
+    const diffMin = Math.floor(diffSec / 60);
+    if (diffMin < 60) return `${diffMin} 分鐘前活躍`;
+    const diffHr = Math.floor(diffMin / 60);
+    return `${diffHr} 小時前活躍`;
+};
+
+window.formatLoginClockTime = function(ts) {
+    const d = new Date(Number(ts) || Date.now());
+    if (isNaN(d.getTime())) return '--:--';
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+};
+
+window.getOnlineUsersArray = function() {
+    const map = new Map();
+    const rawMap = window.onlinePresenceState.usersMap;
+
+    rawMap.forEach((u) => {
+        if (!u || !u.name) return;
+        const key = `${u.name}__${u.uid || ''}`;
+        const existing = map.get(key);
+        if (!existing || (u.lastActive || 0) > (existing.lastActive || 0)) {
+            map.set(key, u);
+        }
+    });
+
+    // 確保當前已登入的操作者本人一定在列表中
+    if (myName) {
+        const selfKey = `${myName}__${myUid}`;
+        map.set(selfKey, {
+            uid: myUid,
+            name: myName,
+            module: window.onlinePresenceState.myCurrentModule || '🏠 系統大廳',
+            device: window.onlinePresenceState.myDevice,
+            loginTime: window.onlinePresenceState.myLoginTime,
+            lastActive: window.onlinePresenceState.myLastActive
+        });
+    }
+
+    // 若同一個人開啟多個分頁，依姓名歸戶並保留最新活躍的分頁狀態
+    const byNameMap = new Map();
+    map.forEach((u) => {
+        const prev = byNameMap.get(u.name);
+        if (!prev || (u.lastActive || 0) >= (prev.lastActive || 0)) {
+            byNameMap.set(u.name, u);
+        }
+    });
+
+    return Array.from(byNameMap.values()).sort((a, b) => {
+        if (a.name === myName && b.name !== myName) return -1;
+        if (b.name === myName && a.name !== myName) return 1;
+        return (b.lastActive || 0) - (a.lastActive || 0);
+    });
+};
+
+window.updateOnlineBadgesUI = function() {
+    const users = window.getOnlineUsersArray();
+    const count = Math.max(1, users.length);
+    const namesPreview = users.map(u => u.name).join('、');
+
+    const mqEl = document.getElementById('mqOnline');
+    if (mqEl) {
+        mqEl.innerHTML = `👥 ${count} 人在線 <span style="font-size:0.75rem; text-decoration:underline;">(點此查看)</span>`;
+        mqEl.style.cursor = 'pointer';
+        mqEl.title = `目前在線：${namesPreview} (點擊查看詳細動態)`;
+        mqEl.onclick = function(e) {
+            e.stopPropagation();
+            window.toggleOnlineUsersPopover(e);
+        };
+    }
+
+    const navEl = document.getElementById('navOnlineCount');
+    if (navEl) {
+        navEl.innerHTML = `🟢 👥 ${count} 人`;
+        navEl.style.cursor = 'pointer';
+        navEl.title = `目前在線：${namesPreview} (點擊查看詳細動態)`;
+        navEl.onclick = function(e) {
+            e.stopPropagation();
+            window.toggleOnlineUsersPopover(e);
+        };
+    }
+
+    const pop = document.getElementById('onlineUsersPopover');
+    if (pop && pop.style.display === 'block') {
+        window.renderOnlineUsersPopoverContent();
+    }
+};
+
+window.broadcastMyPresence = async function(customModule) {
+    if (customModule) {
+        window.onlinePresenceState.myCurrentModule = customModule;
+    }
+    window.onlinePresenceState.myLastActive = Date.now();
+    window.updateOnlineBadgesUI();
+
+    const ch = window.onlinePresenceState.channel;
+    if (ch && myName) {
+        try {
+            await ch.track({
+                uid: myUid,
+                name: myName,
+                module: window.onlinePresenceState.myCurrentModule,
+                device: window.onlinePresenceState.myDevice,
+                loginTime: window.onlinePresenceState.myLoginTime,
+                lastActive: window.onlinePresenceState.myLastActive
+            });
+        } catch (err) {
+            console.warn("Presence 廣播更新略過:", err);
+        }
+    }
+};
+
+window.ensureOnlineUsersPopoverDOM = function() {
+    if (document.getElementById('onlineUsersPopover')) return;
+
+    const popDiv = document.createElement('div');
+    popDiv.id = 'onlineUsersPopover';
+    popDiv.className = 'd-print-none';
+    popDiv.style.cssText = `
+        display: none;
+        position: fixed;
+        top: 56px;
+        right: 14px;
+        width: 320px;
+        max-width: calc(100vw - 28px);
+        background: rgba(255, 255, 255, 0.98);
+        backdrop-filter: blur(10px);
+        border: 1px solid #dee2e6;
+        border-top: 4px solid #198754;
+        border-radius: 12px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
+        z-index: 10950;
+        overflow: hidden;
+        font-size: 0.86rem;
+    `;
+    popDiv.onclick = function(e) { e.stopPropagation(); };
+    document.body.appendChild(popDiv);
+
+    // 點擊畫面其他區域自動收合懸浮卡片，不佔據工作空間
+    document.addEventListener('click', function() {
+        const p = document.getElementById('onlineUsersPopover');
+        if (p && p.style.display === 'block') {
+            p.style.display = 'none';
+        }
+    });
+
+    // 監聽使用者互動，每 45 秒自動更新一次活躍時間
+    let lastActivityTrack = 0;
+    ['click', 'keydown', 'touchstart'].forEach(evtName => {
+        document.addEventListener(evtName, function() {
+            const now = Date.now();
+            if (now - lastActivityTrack > 45000 && myName) {
+                lastActivityTrack = now;
+                window.broadcastMyPresence();
+            }
+        }, { passive: true });
+    });
+};
+
+window.toggleOnlineUsersPopover = function(evt) {
+    window.ensureOnlineUsersPopoverDOM();
+    const pop = document.getElementById('onlineUsersPopover');
+    if (!pop) return;
+
+    if (pop.style.display === 'block') {
+        pop.style.display = 'none';
+        return;
+    }
+
+    // 若點擊來源在螢幕特定高度，微調彈出位置讓視覺更順眼
+    if (evt && evt.currentTarget) {
+        const rect = evt.currentTarget.getBoundingClientRect();
+        const topPos = Math.min(window.innerHeight - 280, Math.max(12, rect.bottom + 8));
+        pop.style.top = `${topPos}px`;
+    } else {
+        pop.style.top = '56px';
+    }
+
+    window.renderOnlineUsersPopoverContent();
+    pop.style.display = 'block';
+};
+
+window.renderOnlineUsersPopoverContent = function() {
+    const pop = document.getElementById('onlineUsersPopover');
+    if (!pop) return;
+
+    const users = window.getOnlineUsersArray();
+    const now = Date.now();
+
+    const rowsHtml = users.map(u => {
+        const isSelf = (u.name === myName);
+        const idleMs = now - (Number(u.lastActive) || now);
+        const isIdle = idleMs > 10 * 60 * 1000; // 超過 10 分鐘無動作視為暫離閒置
+        const dotHtml = isIdle
+            ? `<span style="display:inline-block; width:9px; height:9px; border-radius:50%; background:#ffc107; box-shadow: 0 0 6px #ffc107;" title="閒置中"></span>`
+            : `<span style="display:inline-block; width:9px; height:9px; border-radius:50%; background:#198754; box-shadow: 0 0 6px #198754;" title="在線活躍中"></span>`;
+
+        const statusBadge = isIdle
+            ? `<span class="badge bg-warning text-dark" style="font-size:0.68rem;">🟡 暫離閒置</span>`
+            : `<span class="badge bg-success bg-opacity-10 text-success border border-success" style="font-size:0.68rem;">🟢 在線作業中</span>`;
+
+        return `
+        <div class="p-2 border-bottom ${isSelf ? 'bg-light' : 'bg-white'}">
+            <div class="d-flex justify-content-between align-items-center mb-1">
+                <div class="d-flex align-items-center gap-2">
+                    ${dotHtml}
+                    <strong class="text-dark" style="font-size:0.92rem;">${escapeQuotes(u.name)}</strong>
+                    ${isSelf ? `<span class="badge bg-primary" style="font-size:0.68rem;">您本人</span>` : ''}
+                </div>
+                ${statusBadge}
+            </div>
+            <div class="d-flex justify-content-between align-items-center small text-secondary ps-3">
+                <span class="fw-bold text-primary">📍 ${escapeQuotes(u.module || '🏠 系統大廳')}</span>
+                <span>${escapeQuotes(u.device || '💻 電腦版')}</span>
+            </div>
+            <div class="text-muted ps-3 mt-1" style="font-size:0.74rem;">
+                🕒 ${window.formatLoginClockTime(u.loginTime)} 登入 ｜ ${window.formatOnlineTimeAgo(u.lastActive)}
+            </div>
+        </div>`;
+    }).join('');
+
+    pop.innerHTML = `
+        <div class="px-3 py-2 bg-dark text-white d-flex justify-content-between align-items-center">
+            <div class="fw-bold">
+                👥 目前在線同仁名單 <span class="badge bg-success ms-1">${users.length} 人</span>
+            </div>
+            <div class="d-flex align-items-center gap-2">
+                <button type="button" class="btn btn-sm btn-outline-light py-0 px-1" style="font-size:0.75rem;" onclick="window.broadcastMyPresence()" title="立即刷新在線狀態">🔄</button>
+                <button type="button" class="btn-close btn-close-white" style="font-size:0.65rem;" onclick="document.getElementById('onlineUsersPopover').style.display='none'"></button>
+            </div>
+        </div>
+        <div style="max-height: 290px; overflow-y: auto;">
+            ${rowsHtml}
+        </div>
+        <div class="px-3 py-1 bg-light text-muted text-center border-top" style="font-size:0.72rem;">
+            💡 即時顯示同仁所在模組，避免多人重複處理同筆單據
+        </div>
+    `;
+};
 
 // ============================================================================
 // 【跨系統勾稽核心】外部系統 (customer1.xlsx) CUSTID 與客戶名稱對照字典
@@ -249,12 +505,10 @@ window.resolveClientCustIds = function(clientName, taxId, existingCustId) {
 window.getPrimaryCustIdByClientName = function(clientName) {
     if (!clientName) return "未設代號";
     const cleanName = String(clientName).trim();
-    // 若本身已經是 6 碼數字代號則直接回傳
     if (/^\d{6}$/.test(cleanName)) return cleanName;
 
     const normTarget = window.normalizeClientName(cleanName);
 
-    // 1. 優先從 globalClients 尋找
     const matchedClient = (globalClients || []).find(c =>
         c.name === cleanName || window.normalizeClientName(c.name) === normTarget
     );
@@ -264,7 +518,6 @@ window.getPrimaryCustIdByClientName = function(clientName) {
         if (numCode) return numCode;
     }
 
-    // 2. 從內建字典 EXTERNAL_CUSTID_DICT 尋找 (優先挑選 200xxx 開頭的主代號)
     const dictHits = (window.EXTERNAL_CUSTID_DICT || []).filter(d =>
         d.name === cleanName || window.normalizeClientName(d.name) === normTarget
     );
@@ -273,7 +526,6 @@ window.getPrimaryCustIdByClientName = function(clientName) {
         return primaryHit.custId;
     }
 
-    // 3. 若為同行或一般醫院歸類
     if (/生技|醫技|儀器|器材|實業|企業|有限公司|股份|行$/.test(cleanName)) return "200104";
     if (/醫院|診所|分院|衛生|醫務/.test(cleanName)) return "200116";
 
@@ -429,7 +681,7 @@ window.getNextCatalogRowIndex = function() {
 // API 通訊模組 (攔截前端邏輯 或 發送至機器人)
 // ============================================================================
 async function callApi(action, payload = {}) {
-    if (action === 'heartbeat') return { count: Math.floor(Math.random() * 3) + 1 };
+    if (action === 'heartbeat') return { count: window.getOnlineUsersArray().length };
     
     if (action === 'saveReportEmails') {
         localStorage.setItem('reportSelectedEmails', JSON.stringify(payload.selectedEmails));
@@ -720,7 +972,6 @@ async function executeSupabaseAction(action, payload) {
         }
     }
     else if (action === 'batchExecutePaymentReconcile') {
-        // 支援「⚡ 比對無誤一鍵快速確認沖帳」批次寫入多筆沖帳單與銷售明細狀態
         const pRecords = (payload.paymentRecords || []).map(pRec => ({
             row_idx: pRec.rowIdx,
             payment_no: pRec.paymentNo,
@@ -755,7 +1006,6 @@ async function executeSupabaseAction(action, payload) {
         }
     }
     else if (action === 'undoPaymentReconcile') {
-        // 支援「⏪ 撤銷返回上一步」防呆還原機制：移除剛建立之沖帳單，並將銷售明細恢復為沖帳前原始狀態
         if (payload.paymentRowIndices && payload.paymentRowIndices.length > 0) {
             const { error: delPayErr } = await supabaseClient
                 .from('payment_records')
@@ -890,7 +1140,6 @@ async function executeSupabaseAction(action, payload) {
         });
     } 
     else if (action === 'saveAdminPurchaseItem') {
-        // 品項與客戶編輯「🏭 進貨品項」直接管理 Supabase inventory 資料表
         const record = {
             name: payload.name,
             qty: Number(payload.qty) || 0,
@@ -1324,7 +1573,17 @@ async function silentRefreshTable(table) {
 
 let realtimeDebounceTimer = null;
 function setupSupabaseRealtime() {
-    supabaseClient.channel('custom-all-channel')
+    window.ensureOnlineUsersPopoverDOM();
+
+    const channel = supabaseClient.channel('custom-all-channel', {
+        config: {
+            presence: {
+                key: `${myName || '員工'}_${myUid}`
+            }
+        }
+    });
+
+    channel
         .on('postgres_changes', { event: '*', schema: 'public' }, payload => {
             const changedTable = payload.table;
             clearTimeout(realtimeDebounceTimer);
@@ -1332,9 +1591,41 @@ function setupSupabaseRealtime() {
                 silentRefreshTable(changedTable); 
             }, 800);
         })
-        .subscribe((status) => {
+        .on('presence', { event: 'sync' }, () => {
+            const state = channel.presenceState();
+            const newMap = new Map();
+            Object.keys(state).forEach(k => {
+                const presences = state[k] || [];
+                presences.forEach(p => {
+                    if (p && p.name) {
+                        newMap.set(`${p.name}__${p.uid || k}`, p);
+                    }
+                });
+            });
+            window.onlinePresenceState.usersMap = newMap;
+            window.updateOnlineBadgesUI();
+        })
+        .on('presence', { event: 'join' }, ({ newPresences }) => {
+            (newPresences || []).forEach(p => {
+                if (p && p.name) {
+                    window.onlinePresenceState.usersMap.set(`${p.name}__${p.uid || ''}`, p);
+                }
+            });
+            window.updateOnlineBadgesUI();
+        })
+        .on('presence', { event: 'leave' }, ({ leftPresences }) => {
+            (leftPresences || []).forEach(p => {
+                if (p && p.name) {
+                    window.onlinePresenceState.usersMap.delete(`${p.name}__${p.uid || ''}`);
+                }
+            });
+            window.updateOnlineBadgesUI();
+        })
+        .subscribe(async (status) => {
             if (status === 'SUBSCRIBED') {
-                console.log('✅ Supabase Realtime 即時監聽已啟動');
+                console.log('✅ Supabase Realtime 即時監聽與線上同仁追蹤已啟動');
+                window.onlinePresenceState.channel = channel;
+                await window.broadcastMyPresence();
             }
         });
 }
@@ -1349,6 +1640,7 @@ function refreshAllUI() {
     if (typeof window.populateLogDropdowns === "function") window.populateLogDropdowns();
     if (typeof window.updateOrderClientDropdown === "function") window.updateOrderClientDropdown();
     if (typeof window.renderEmailSettings === "function") window.renderEmailSettings();
+    window.updateOnlineBadgesUI();
     
     if(document.getElementById('sys-history') && document.getElementById('sys-history').style.display === 'block') { 
         if (typeof window.renderHistory === "function") window.renderHistory(); 
@@ -1419,9 +1711,9 @@ window.lockButton = function(btn) {
 };
 
 // ============================================================================
-// 列印與 PDF 分享引擎 (含 A5 橫式防跨頁裁切保護 ＆ A4 橫向未收款三表分頁列印支援)
+// 列印與 PDF 分享引擎 (含 A5 橫式防跨頁裁切保護 ＆ A4 未收/已沖帳三表分頁列印支援)
 // ============================================================================
-const ALL_PRINT_AREA_IDS = ['printArea', 'printPoArea', 'printQuoteArea', 'printDeliveryArea', 'printTaxDetailArea', 'printUnpaidWorkbookArea'];
+const ALL_PRINT_AREA_IDS = ['printArea', 'printPoArea', 'printQuoteArea', 'printDeliveryArea', 'printTaxDetailArea', 'printUnpaidWorkbookArea', 'printPaidReportArea'];
 
 window.applyPrintStyle = function(size, layout) {
     let styleNode = document.getElementById('dynamicPrintStyle');
@@ -1434,7 +1726,7 @@ window.applyPrintStyle = function(size, layout) {
     const isA5Landscape = (String(size).toUpperCase() === 'A5' && String(layout).toLowerCase() === 'landscape');
     
     styleNode.innerHTML = `
-    @page { size: ${size} ${layout}; margin: 6mm !important; }
+    @page { size: ${size} ${layout}; margin: ${isA5Landscape ? '0mm' : '6mm'} !important; }
 
     @media screen {
         .print-active > div {
@@ -1591,6 +1883,16 @@ window.sharePdf = async function(areaId) {
         opt.filename = `長固ERP_未收款三表分析_${getTodayStr()}.pdf`;
         opt.jsPDF.format = 'a4';
         opt.jsPDF.orientation = 'landscape';
+    } else if (areaId === 'printPaidReportArea') {
+        opt.margin = 6;
+        opt.filename = `長固ERP_已沖帳收款報表_${getTodayStr()}.pdf`;
+        opt.jsPDF.format = 'a4';
+        opt.jsPDF.orientation = 'landscape';
+    } else if (areaId === 'printQuoteArea') {
+        opt.margin = 0;
+        opt.filename = `長固ERP_估價單_${getTodayStr()}.pdf`;
+        opt.jsPDF.format = 'a4';
+        opt.jsPDF.orientation = 'portrait';
     }
 
     try {
@@ -1755,6 +2057,7 @@ window.loginSystem = async function() {
         }
         
         myName = data.name; 
+        window.onlinePresenceState.myLoginTime = Date.now();
         localStorage.setItem('invStaffName', myName); 
         localStorage.setItem('invTokenExp', Date.now() + 7 * 24 * 60 * 60 * 1000); 
         
@@ -1792,13 +2095,10 @@ window.onload = function() {
         document.getElementById('authScreen').style.display = 'flex'; 
     }
     
+    // 每 20 秒刷新一次線上人數徽章與活躍秒數顯示
     setInterval(() => { 
-        if(document.getElementById('mainApp') && document.getElementById('mainApp').style.display === 'block') { 
-            let count = Math.floor(Math.random() * 3) + 1;
-            if(document.getElementById('mqOnline')) document.getElementById('mqOnline').innerText = `👥 ${count} 人`; 
-            if(document.getElementById('navOnlineCount')) document.getElementById('navOnlineCount').innerText = `👥 ${count}`; 
-        } 
-    }, 15000); 
+        window.updateOnlineBadgesUI();
+    }, 20000); 
 };
 
 window.initSystemData = function() {
@@ -1825,6 +2125,7 @@ window.initSystemData = function() {
                 document.getElementById('splashScreen').style.display = 'none'; 
                 unlockScreen(); 
                 document.getElementById('homeMenu').style.display = 'block'; 
+                window.updateOnlineBadgesUI();
                 if(typeof window.renderOrderList === "function") window.renderOrderList(); 
             }, 500); 
         }, 500);
@@ -1856,8 +2157,12 @@ window.enterSystem = function(modId) {
         'payment': '💰 收款明細與沖帳'
     }; 
     
-    if(document.getElementById('sysTitle')) document.getElementById('sysTitle').innerText = titles[modId] || '長固 ERP'; 
+    const currentModTitle = titles[modId] || '長固 ERP';
+    if(document.getElementById('sysTitle')) document.getElementById('sysTitle').innerText = currentModTitle; 
     document.getElementById('mainApp').scrollTo(0,0);
+
+    // 廣播目前操作者進入的模組位置
+    window.broadcastMyPresence(currentModTitle);
     
     if(modId === 'history') { 
         if (typeof window.renderHistory === "function") window.renderHistory(); 
@@ -1892,4 +2197,8 @@ window.enterSystem = function(modId) {
     }
 };
 
-window.backToHome = function() { document.getElementById('mainApp').style.display = 'none'; document.getElementById('homeMenu').style.display = 'block'; };
+window.backToHome = function() {
+    document.getElementById('mainApp').style.display = 'none';
+    document.getElementById('homeMenu').style.display = 'block';
+    window.broadcastMyPresence('🏠 系統大廳');
+};
