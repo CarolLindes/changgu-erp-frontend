@@ -1,9 +1,9 @@
 /**
  * ============================================================================
  * 模組 5：開立估價單與動態列印 (module_quotation.js) 
- * 【台灣標準尺寸公司大小章（左大章 stamp.png / 右小章 stamp_small.png）無損列印升級版】
- * 1. 自動讀取 GitHub 根目錄之 stamp.png (30mm×30mm) 與 stamp_small.png (18mm×18mm)
- * 2. 嚴格遵守左大章、右小章、中間留白 12mm 完全分開不重疊規範
+ * 【1:1 實體掃描尺寸還原版：左橢圓大章 45mm×32.6mm / 右小方章 15mm×15mm 無損列印】
+ * 1. 自動讀取 GitHub 根目錄之 stamp.png (45mm×32.6mm) 與 stamp_small.png (15mm×15mm)
+ * 2. 嚴格遵守左大章、右小章、中間留白 8mm 完全分開不重疊規範，復刻實體蓋印比例
  * 3. 支援列印預覽畫面即時切換「顯示/隱藏大小章」並確保列印與 PDF 匯出 100% 清晰呈現
  * ============================================================================
  */
@@ -16,14 +16,18 @@ window.quotationStampCache = {
     smallSrc: COMPANY_SMALL_STAMP_PATH
 };
 
-// 預載 GitHub 上的去背大小章圖檔至記憶體 DataURL，確保列印與轉存 PDF 零延遲且絕不破圖
+// 預載 GitHub 上的去背大小章圖檔至記憶體 DataURL (自動相容 .png 與 .jpg)，確保列印與轉存 PDF 零延遲且絕不破圖
 (function preloadCompanySeals() {
-    function loadSealAsDataUrl(url, key) {
-        fetch(url, { cache: 'no-cache' })
+    function loadSealWithFallback(primaryUrl, fallbackUrl, key) {
+        fetch(primaryUrl, { cache: 'no-cache' })
             .then(res => {
-                if (!res.ok) throw new Error("無法讀取印章圖檔: " + url);
+                if (!res.ok) throw new Error("Primary not found");
                 return res.blob();
             })
+            .catch(() => fetch(fallbackUrl, { cache: 'no-cache' }).then(res => {
+                if (!res.ok) throw new Error("Fallback not found");
+                return res.blob();
+            }))
             .then(blob => {
                 const reader = new FileReader();
                 reader.onloadend = () => {
@@ -34,12 +38,11 @@ window.quotationStampCache = {
                 reader.readAsDataURL(blob);
             })
             .catch(() => {
-                // 若於本機開發環境或離線時，自動維持原始相對路徑
-                window.quotationStampCache[key] = url;
+                window.quotationStampCache[key] = primaryUrl;
             });
     }
-    loadSealAsDataUrl(COMPANY_LARGE_STAMP_PATH, 'largeSrc');
-    loadSealAsDataUrl(COMPANY_SMALL_STAMP_PATH, 'smallSrc');
+    loadSealWithFallback("stamp.png", "stamp.jpg", "largeSrc");
+    loadSealWithFallback("stamp_small.png", "stamp_small.jpg", "smallSrc");
 })();
 
 // 強大的日期淨化器：專門處理後台傳來的複雜台北標準時間，確保輸出純淨的 YYYY-MM-DD
@@ -530,7 +533,7 @@ window.toggleQuoteSealInPreview = function(gid) {
 };
 
 // ============================================================================
-// 列印估價單 (A4 舒展排版 ＋ 台灣標準尺寸公司大小章：左大章 stamp.png 30mm / 右小章 stamp_small.png 18mm)
+// 列印估價單 (1:1 還原實體掃描檔印章尺寸：左橢圓大章 45mm×32.6mm / 右小方章 15mm×15mm)
 // ============================================================================
 window.printQuotation = function(gid) {
     const quotesInGroup = globalQuotes.filter(q => q.mergeId === gid || `Single_${q.rowIdx}` === gid);
@@ -582,25 +585,25 @@ window.printQuotation = function(gid) {
     const largeSealImgSrc = window.quotationStampCache?.largeSrc || COMPANY_LARGE_STAMP_PATH;
     const smallSealImgSrc = window.quotationStampCache?.smallSrc || COMPANY_SMALL_STAMP_PATH;
 
-    // 【台灣公司大小章標準尺寸與分開排列規範】
-    // 左側大章 (stamp.png)：標準 1 吋方章 (30mm × 30mm)
-    // 右側小章 (stamp_small.png)：標準 6 分負責人章 (18mm × 18mm)
-    // 兩章中間以 gap: 12mm 完全分開、底部對齊、絕不重疊
+    // 【依實體掃描檔 1:1 物理尺寸精確設定】
+    // 左側公司橢圓大章 (stamp.png / stamp.jpg)：寬 45mm × 高 32.6mm (符合 519×376 原圖 1.38:1 橢圓比例)
+    // 右側負責人小方章 (stamp_small.png / stamp_small.jpg)：寬 15mm × 高 15mm (標準 5 分私章尺寸)
+    // 兩章中間以 gap: 8mm 分開呈現、底部切齊、絕不重疊
     const sealHtml = useSeal ? `
-        <div id="quoteSealContainer" style="position: absolute; right: 20px; bottom: 16px; display: flex; flex-direction: row; align-items: flex-end; gap: 12mm; pointer-events: none; z-index: 10;">
-            <div style="text-align: center;">
+        <div id="quoteSealContainer" style="position: absolute; right: 18mm; bottom: 10mm; display: flex; flex-direction: row; align-items: flex-end; gap: 8mm; pointer-events: none; z-index: 10;">
+            <div style="flex-shrink: 0;">
                 <img src="${largeSealImgSrc}"
-                     onerror="if(this.src.indexOf('stamp.png')===-1) this.src='stamp.png';"
+                     onerror="if(this.src.indexOf('stamp.png')!==-1){this.src='stamp.jpg';}else if(this.src.indexOf('stamp.jpg')===-1){this.src='stamp.png';}"
                      alt="公司大章"
                      crossorigin="anonymous"
-                     style="width: 30mm; height: 30mm; object-fit: contain; display: block; background: transparent;">
+                     style="width: 45mm !important; height: 32.6mm !important; min-width: 45mm !important; max-width: none !important; object-fit: fill; display: block; background: transparent;">
             </div>
-            <div style="text-align: center;">
+            <div style="flex-shrink: 0; margin-bottom: 1mm;">
                 <img src="${smallSealImgSrc}"
-                     onerror="if(this.src.indexOf('stamp_small.png')===-1) this.src='stamp_small.png';"
+                     onerror="if(this.src.indexOf('stamp_small.png')!==-1){this.src='stamp_small.jpg';}else if(this.src.indexOf('stamp_small.jpg')===-1){this.src='stamp_small.png';}"
                      alt="負責人小章"
                      crossorigin="anonymous"
-                     style="width: 18mm; height: 18mm; object-fit: contain; display: block; background: transparent;">
+                     style="width: 15mm !important; height: 15mm !important; min-width: 15mm !important; max-width: none !important; object-fit: contain; display: block; background: transparent;">
             </div>
         </div>
     ` : '';
@@ -653,7 +656,7 @@ window.printQuotation = function(gid) {
 
             <div style="flex-grow: 1;"></div>
 
-            <div style="margin-top: 40px; font-size: 15px; border: 1px solid #000; padding: 20px; padding-right: ${useSeal ? '72mm' : '20px'}; position: relative; min-height: 180px;">
+            <div style="margin-top: 40px; font-size: 15px; border: 1px solid #000; padding: 20px; padding-right: ${useSeal ? '90mm' : '20px'}; position: relative; min-height: 180px;">
                 <div style="font-weight: bold; margin-bottom: 10px; font-size: 16px;">備註事項：</div>
                 <div style="white-space: pre-wrap; line-height: 1.8;">${escapeQuotes(mainMemo) || '無'}</div>
                 ${sealHtml}
