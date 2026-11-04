@@ -1,28 +1,103 @@
 /**
  * ============================================================================
  * 模組 2：訂單辨識建檔 (module_order.js)
- * 【強健比對、匯入日期顯示、同單號多單位核銷 ＆ AI 失敗信件自動重試升級版】
+ * 【醫院資材碼 ＆ 長固代號雙向自動適配、舊訂單自動拆分回填、同單號多單位核銷升級版】
  * ============================================================================
  */
 
 // ============================================================================
 // 【核心工具】強健產品比對引擎 (Robust Product Matching)
-// 解決醫院品名差異、隱藏空白、大小寫，並優先信任「資材碼」與「內部代號」
+// 解決醫院品名差異、隱藏空白、大小寫，並優先信任「醫院資材碼」與「長固代號」
 // ============================================================================
 window.findProductRobust = function(clientName, itemCode, itemName) {
     if (!clientName) return null;
-    return globalCatalog.find(x => {
-        if (x.clientName !== clientName) return false;
-        
-        // 1. 絕對優先：資材碼或長固內部代號比對 (只要代碼對，無視品名差異)
-        if (itemCode && (itemCode === x.assetCode || itemCode === x.internalCode)) return true;
-        
-        // 2. 降級容錯：消除所有空白、換行，並轉為小寫後進行品名強健比對
-        let nameA = String(x.productName || '').replace(/\s+/g, '').toLowerCase();
-        let nameB = String(itemName || '').replace(/\s+/g, '').toLowerCase();
-        
-        return nameA === nameB;
+    const normClient = typeof window.normalizeClientName === 'function'
+        ? window.normalizeClientName(clientName)
+        : String(clientName).trim().toLowerCase();
+
+    // 若傳入的 itemCode 含有 '/'，先拆出長固代號與資材碼以便精準比對
+    let searchIntCode = '';
+    let searchAstCode = '';
+    if (itemCode) {
+        if (typeof window.splitCombinedCodePair === 'function' && /[\/／\|]/.test(String(itemCode))) {
+            const sr = window.splitCombinedCodePair(itemCode, '');
+            searchIntCode = String(sr.internalCode || '').trim().toUpperCase();
+            searchAstCode = String(sr.assetCode || '').trim().toUpperCase();
+        } else {
+            searchIntCode = String(itemCode).trim().toUpperCase();
+            searchAstCode = searchIntCode;
+        }
+    }
+
+    const normTargetName = String(itemName || '').replace(/\s+/g, '').toLowerCase();
+
+    // 1. 先篩選出屬於該客戶的合約品項
+    const clientCatalog = (globalCatalog || []).filter(x => {
+        if (x.clientName === clientName) return true;
+        const normXClient = typeof window.normalizeClientName === 'function'
+            ? window.normalizeClientName(x.clientName)
+            : String(x.clientName || '').trim().toLowerCase();
+        return normClient && normXClient === normClient;
     });
+
+    // 2. 第一優先：品名與代碼同時吻合，或品名完全吻合 (避免同資材碼對應多規格時抓錯)
+    if (normTargetName) {
+        const exactNameMatch = clientCatalog.find(x =>
+            String(x.productName || '').replace(/\s+/g, '').toLowerCase() === normTargetName
+        );
+        if (exactNameMatch) return exactNameMatch;
+    }
+
+    // 3. 第二優先：依「醫院資材碼」或「長固代號」精準比對
+    if (searchIntCode || searchAstCode) {
+        const codeMatch = clientCatalog.find(x => {
+            let xInt = String(x.internalCode || '').trim().toUpperCase();
+            let xAst = String(x.assetCode || '').trim().toUpperCase();
+            if (typeof window.splitCombinedCodePair === 'function' && (/[\/／\|]/.test(xInt) || /[\/／\|]/.test(xAst))) {
+                const sr = window.splitCombinedCodePair(xInt, xAst);
+                xInt = String(sr.internalCode || '').trim().toUpperCase();
+                xAst = String(sr.assetCode || '').trim().toUpperCase();
+            }
+            return (searchAstCode && (xAst === searchAstCode || xInt === searchAstCode)) ||
+                   (searchIntCode && (xInt === searchIntCode || xAst === searchIntCode));
+        });
+        if (codeMatch) return codeMatch;
+    }
+
+    return null;
+};
+
+// 淨化並補齊單筆訂單品項的「醫院資材碼 (code)」與「長固代號 (internalCode)」
+window.normalizeOrderItemCodes = function(clientName, rawItem, refCatalogItem = null) {
+    let code = String(rawItem?.code || '').trim();
+    let internalCode = String(rawItem?.internalCode || '').trim();
+    const name = String(rawItem?.name || '').trim();
+
+    // 1. 若欄位內含有過去合併填寫的「長固代號 / 資材碼」，立即自動拆開
+    if (typeof window.splitCombinedCodePair === 'function' && (/[\/／\|]/.test(internalCode) || /[\/／\|]/.test(code))) {
+        const sr = window.splitCombinedCodePair(internalCode, code);
+        internalCode = sr.internalCode;
+        code = sr.assetCode;
+    }
+
+    // 2. 從指定合約品項或透過強健搜尋自動補齊缺漏的醫院資材碼與長固代號
+    const matchedProd = refCatalogItem || (clientName ? window.findProductRobust(clientName, code || internalCode, name) : null);
+    if (matchedProd) {
+        let pInt = matchedProd.internalCode || '';
+        let pAst = matchedProd.assetCode || '';
+        if (typeof window.splitCombinedCodePair === 'function' && (/[\/／\|]/.test(pInt) || /[\/／\|]/.test(pAst))) {
+            const sr = window.splitCombinedCodePair(pInt, pAst);
+            pInt = sr.internalCode;
+            pAst = sr.assetCode;
+        }
+        if (!code && pAst) code = pAst;
+        if (!internalCode && pInt) internalCode = pInt;
+    }
+
+    return {
+        code: code,
+        internalCode: internalCode
+    };
 };
 
 // 強健品項名稱核對工具（解決訂單原始品名與轉發票後建檔品名的空白或字元微差）
@@ -210,17 +285,12 @@ window.recheckAiItems = function() {
     if(!aiTempData || !aiTempData.items) return; 
     const clientName = document.getElementById('aiClient').value;
     const html = aiTempData.items.map((i, index) => {
-        let internalCode = ""; 
-        let assetCode = "";
-        if (clientName) { 
-            const p = window.findProductRobust(clientName, i.code || i.internalCode, i.name);
-            if(p) {
-                internalCode = p.internalCode || "";
-                assetCode = p.assetCode || "";
-            } 
-        }
-        let codeDisplay = `<span class="badge bg-secondary">醫院資材碼: ${i.code || assetCode || '無'}</span>`; 
-        if (internalCode) codeDisplay += `<span class="badge bg-info text-dark ms-1">長固代號: ${internalCode}</span>`;
+        const normCodes = window.normalizeOrderItemCodes(clientName, i);
+        i.code = normCodes.code;
+        i.internalCode = normCodes.internalCode;
+
+        let codeDisplay = `<span class="badge bg-secondary">醫院資材碼: ${i.code || '無'}</span>`; 
+        if (i.internalCode) codeDisplay += `<span class="badge bg-info text-dark ms-1">長固代號: ${i.internalCode}</span>`;
         return `<div class="p-3 border rounded mb-2 bg-white shadow-sm"><label class="form-label small fw-bold text-muted mb-1">確認/修改品名</label><input type="text" class="form-control form-control-sm fw-bold text-dark mb-2" value="${escapeQuotes(i.name)}" oninput="updateAiItemName(${index}, this.value)"><div class="d-flex justify-content-between align-items-center mt-2"><div>${codeDisplay}</div><div class="d-flex align-items-center"><label class="form-label small fw-bold text-danger mb-0 me-2">數量:</label><input type="number" class="form-control form-control-sm text-danger fw-bold text-center" style="width: 70px;" value="${i.qty}" min="0" step="any" oninput="updateAiItemQty(${index}, this.value)"></div></div></div>`;
     }).join('');
     document.getElementById('aiItemsContainer').innerHTML = html || '<div class="text-muted">未擷取到品項</div>';
@@ -264,11 +334,9 @@ window.saveOrderAI = function() {
     if(window.lockButton(btn)) return; // 防連點保護
 
     aiTempData.items.forEach(i => { 
-        const p = window.findProductRobust(aiTempData.clientName, i.code || i.internalCode, i.name);
-        if(p) {
-            i.internalCode = p.internalCode || "";
-            if (!i.code && p.assetCode) i.code = p.assetCode;
-        } 
+        const normCodes = window.normalizeOrderItemCodes(aiTempData.clientName, i);
+        i.code = normCodes.code;
+        i.internalCode = normCodes.internalCode;
     });
     
     const newRowIdx = Date.now() + Math.floor(Math.random() * 1000);
@@ -328,11 +396,12 @@ window.renderOrderList = debounce(function() {
             if (remaining > 0) orderFullyShipped = false; 
             if (invoicedQty > 0) hasPartial = true;
             
-            const p = window.findProductRobust(o.client, i.code || i.internalCode, i.name);
-            const intCodeBadge = (p && p.internalCode) ? `<span class="badge bg-info text-dark ms-1">長固: ${p.internalCode}</span>` : '';
+            const normCodes = window.normalizeOrderItemCodes(o.client, i);
+            const astCodeBadge = normCodes.code ? `<span class="badge bg-light text-primary border ms-1">資材碼: ${escapeQuotes(normCodes.code)}</span>` : '';
+            const intCodeBadge = normCodes.internalCode ? `<span class="badge bg-info text-dark ms-1">長固: ${escapeQuotes(normCodes.internalCode)}</span>` : '';
             
-            if (invoicedQty === 0) return `<div>${i.name} ${intCodeBadge} <span class="badge bg-secondary">x${i.qty}</span></div>`; 
-            else return `<div>${i.name} ${intCodeBadge} <br><small class="text-primary fw-bold">需求: ${i.qty} | 已開: ${invoicedQty} | 剩餘: <span class="text-danger">${Math.max(0, remaining)}</span></small></div>`;
+            if (invoicedQty === 0) return `<div>${escapeQuotes(i.name)} ${astCodeBadge} ${intCodeBadge} <span class="badge bg-secondary ms-1">x${i.qty}</span></div>`; 
+            else return `<div>${escapeQuotes(i.name)} ${astCodeBadge} ${intCodeBadge} <br><small class="text-primary fw-bold">需求: ${i.qty} | 已開: ${invoicedQty} | 剩餘: <span class="text-danger">${Math.max(0, remaining)}</span></small></div>`;
         }).join('<hr class="my-2" style="opacity: 0.1;">');
         
         if (orderFullyShipped && items.length > 0) return;
@@ -396,7 +465,7 @@ window.renderOrderList = debounce(function() {
 }, 300);
 
 // ============================================================================
-// 手動建檔與訂單編輯
+// 手動建檔與訂單編輯 (雙代碼自動適配與舊訂單自動拆分回填)
 // ============================================================================
 
 window.renderSingleOrderManualItem = function(item) {
@@ -405,12 +474,21 @@ window.renderSingleOrderManualItem = function(item) {
         <button class="btn btn-sm btn-outline-danger position-absolute" style="top:8px; right:8px;" onclick="removeOrderManualItem('${item.id}')">✕</button>
         <div class="mb-2 pe-4 ps-4">
             <label class="form-label small fw-bold text-muted mb-1">品名</label>
-            <input type="text" class="form-control fake-input-btn form-control-sm fw-bold fs-6" id="ordM_name_${item.id}" value="${escapeQuotes(item.name)}" readonly placeholder="點此選擇品名..." onclick="openSearchModal('item_ord_${item.id}', (val)=>selectProductForOrderManual('${item.id}', val))">
+            <input type="text" class="form-control fake-input-btn form-control-sm fw-bold fs-6" id="ordM_name_${item.id}" value="${escapeQuotes(item.name)}" readonly placeholder="點此選擇品名..." onclick="openSearchModal('item_ord_${item.id}', (val, ref)=>selectProductForOrderManual('${item.id}', val, ref))">
         </div>
         <div class="row g-2 ps-4">
-            <div class="col-4"><label class="form-label small fw-bold text-muted mb-1">醫院資材碼</label><input type="text" class="form-control form-control-sm bg-white text-secondary" id="ordM_code_${item.id}" value="${escapeQuotes(item.code)}" readonly placeholder="自動匹配"></div>
-            <div class="col-4"><label class="form-label small fw-bold text-muted mb-1 text-info">長固代號</label><input type="text" class="form-control form-control-sm bg-white text-info fw-bold" id="ordM_intcode_${item.id}" value="${escapeQuotes(item.internalCode)}" readonly placeholder="內部代號"></div>
-            <div class="col-4"><label class="form-label small fw-bold text-muted mb-1">數量</label><input type="number" class="form-control form-control-sm fw-bold text-primary fs-6" id="ordM_qty_${item.id}" value="${item.qty}" min="0" step="any" inputmode="numeric" oninput="updateOrderManualQty('${item.id}', this.value)" placeholder="輸入數量"></div>
+            <div class="col-4">
+                <label class="form-label small fw-bold text-primary mb-1">醫院資材碼</label>
+                <input type="text" class="form-control form-control-sm bg-white text-primary fw-bold" id="ordM_code_${item.id}" value="${escapeQuotes(item.code)}" oninput="updateOrderManualAssetCode('${item.id}', this.value)" placeholder="自動匹配/可微調">
+            </div>
+            <div class="col-4">
+                <label class="form-label small fw-bold text-info mb-1">長固代號</label>
+                <input type="text" class="form-control form-control-sm bg-white text-info fw-bold" id="ordM_intcode_${item.id}" value="${escapeQuotes(item.internalCode)}" oninput="updateOrderManualInternalCode('${item.id}', this.value)" placeholder="內部代號">
+            </div>
+            <div class="col-4">
+                <label class="form-label small fw-bold text-muted mb-1">數量</label>
+                <input type="number" class="form-control form-control-sm fw-bold text-primary fs-6" id="ordM_qty_${item.id}" value="${item.qty}" min="0" step="any" inputmode="numeric" oninput="updateOrderManualQty('${item.id}', this.value)" placeholder="輸入數量">
+            </div>
         </div>
     </div>`;
 };
@@ -432,6 +510,7 @@ window.openOrderModal = function(idx) {
     currentOrderManualItems = [];
     if(idx) {
         const o = globalOrders.find(x => x.rowIdx === idx); 
+        if (!o) return;
         document.getElementById('e_ordRow').value = idx; 
         document.getElementById('e_ordClient').value = o.client; 
         document.getElementById('e_ordNo').value = o.orderNo; 
@@ -441,10 +520,38 @@ window.openOrderModal = function(idx) {
         document.getElementById('btnSaveOrd').classList.replace('w-100', 'w-50');
         
         let items = []; try { items = JSON.parse(o.jsonStr); } catch(e){} 
+        let autoFixedCount = 0;
+
         items.forEach(i => { 
             const rowId = `ordM_${Date.now()}_${Math.random().toString(36).substr(2,5)}`; 
-            currentOrderManualItems.push({ id: rowId, code: i.code||'', internalCode: i.internalCode||'', name: i.name||'', qty: i.qty||'' }); 
+            const normCodes = window.normalizeOrderItemCodes(o.client, i);
+            if (normCodes.code !== (i.code || '') || normCodes.internalCode !== (i.internalCode || '')) {
+                autoFixedCount++;
+            }
+            currentOrderManualItems.push({
+                id: rowId,
+                code: normCodes.code,
+                internalCode: normCodes.internalCode,
+                name: i.name || '',
+                qty: i.qty || ''
+            }); 
         });
+
+        // 若開啟舊訂單時偵測到有合併代碼或未填入的資材碼，立即為該筆訂單自動更新記憶
+        if (autoFixedCount > 0) {
+            const updatedItems = currentOrderManualItems.map(x => ({
+                code: x.code,
+                internalCode: x.internalCode,
+                name: x.name,
+                qty: x.qty
+            }));
+            o.jsonStr = JSON.stringify(updatedItems);
+            try {
+                if (typeof supabaseClient !== 'undefined') {
+                    supabaseClient.from('orders').update({ json_str: o.jsonStr }).eq('row_idx', idx).then();
+                }
+            } catch (e) {}
+        }
     } else {
         document.getElementById('e_ordRow').value = ''; 
         document.getElementById('e_ordClient').value = ''; 
@@ -467,13 +574,49 @@ window.addOrderManualItemRow = function() {
     window.reRenderOrderManualItems(); 
 };
 
-window.selectProductForOrderManual = function(rowId, prodName) { 
+window.selectProductForOrderManual = function(rowId, prodName, refCatalogItem = null) { 
     const clientName = document.getElementById('e_ordClient').value;
-    const p = window.findProductRobust(clientName, null, prodName); 
+    const p = refCatalogItem || window.findProductRobust(clientName, null, prodName); 
     if(!p) return; 
+
     const item = currentOrderManualItems.find(x => x.id === rowId); 
-    if(item) { item.name = p.productName; item.code = p.assetCode || ''; item.internalCode = p.internalCode || ''; } 
+    if(item) {
+        item.name = p.productName;
+        const normCodes = window.normalizeOrderItemCodes(clientName, {
+            name: p.productName,
+            code: p.assetCode || '',
+            internalCode: p.internalCode || ''
+        }, p);
+        item.code = normCodes.code;
+        item.internalCode = normCodes.internalCode;
+    } 
     window.reRenderOrderManualItems(); 
+};
+
+window.updateOrderManualAssetCode = function(rowId, val) {
+    const item = currentOrderManualItems.find(x => x.id === rowId);
+    if (!item) return;
+    if (typeof window.splitCombinedCodePair === 'function' && /[\/／\|]/.test(val || '')) {
+        const sr = window.splitCombinedCodePair(item.internalCode || '', val);
+        item.internalCode = sr.internalCode;
+        item.code = sr.assetCode;
+        window.reRenderOrderManualItems();
+    } else {
+        item.code = (val || '').trim();
+    }
+};
+
+window.updateOrderManualInternalCode = function(rowId, val) {
+    const item = currentOrderManualItems.find(x => x.id === rowId);
+    if (!item) return;
+    if (typeof window.splitCombinedCodePair === 'function' && /[\/／\|]/.test(val || '')) {
+        const sr = window.splitCombinedCodePair(val, item.code || '');
+        item.internalCode = sr.internalCode;
+        item.code = sr.assetCode;
+        window.reRenderOrderManualItems();
+    } else {
+        item.internalCode = (val || '').trim();
+    }
 };
 
 window.updateOrderManualQty = function(rowId, qty) { 
@@ -500,7 +643,13 @@ window.saveEditOrder = function() {
     let items = [];
     for (let item of currentOrderManualItems) { 
         if (!item.name || item.qty <= 0) return alert('品項明細填寫不完整或數量無效！'); 
-        items.push({ code: item.code, internalCode: item.internalCode, name: item.name, qty: item.qty }); 
+        const normCodes = window.normalizeOrderItemCodes(c, item);
+        items.push({
+            code: normCodes.code,
+            internalCode: normCodes.internalCode,
+            name: item.name,
+            qty: item.qty
+        }); 
     }
     if (items.length === 0) return alert('請至少新增一項品項！');
 
@@ -544,7 +693,7 @@ window.saveEditOrder = function() {
     if(typeof window.updateOrderClientDropdown === 'function') window.updateOrderClientDropdown(); 
     window.renderOrderList(); 
     bootstrap.Modal.getInstance(document.getElementById('editOrdModal')).hide(); 
-    showToast("✅ 訂單儲存完成");
+    showToast("✅ 訂單儲存完成（已同步綁定醫院資材碼與長固代號）");
 };
 
 window.deleteOrder = function() { 
