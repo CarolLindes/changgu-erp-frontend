@@ -1,16 +1,16 @@
 /**
  * ============================================================================
  * 模組 3：開立發票、歷史紀錄、跨系統比對中心 ＆ 三聯式/二聯式統一發票明細表 (module_invoice_history.js)
- * 【防連點、三聯/二聯字軌智慧分流、已覆核專區、進度記憶、缺漏補登 ＆ 稅捐處雙明細表旗艦版】
+ * 【防連點、三聯/二聯字軌與雙月期別智慧攔截、異常單號診斷修正、已覆核專區 ＆ 稅捐處雙明細表旗艦版】
  * ============================================================================
  */
 
 // ============================================================================
-// 0. 發票字軌智慧識別引擎 (自動分辨「三聯式 THREE_PART」與「二聯式 TWO_PART」)
+// 0. 發票字軌智慧識別引擎 (自動分辨「三聯式 / 二聯式」與「法定雙月所屬期別」)
 // ============================================================================
 const TRACK_TYPE_OVERRIDE_STORAGE_KEY = 'changgu_erp_invoice_track_type_overrides_v1';
 
-// 預設已知字軌對照表 (依貴公司實際開立字軌與財政部字軌規範內建)
+// 預設已知字軌之聯式對照表
 window.BUILTIN_INVOICE_TRACK_TYPES = {
     // 三聯式字軌
     'EC': 'THREE_PART',
@@ -24,6 +24,20 @@ window.BUILTIN_INVOICE_TRACK_TYPES = {
     'EE': 'TWO_PART',
     'CC': 'TWO_PART',
     'ZZ': 'TWO_PART'
+};
+
+// 預設已知字軌之法定所屬雙月期別對照表 (1-2月、3-4月、5-6月、7-8月、9-10月、11-12月)
+window.BUILTIN_TRACK_BI_MONTH_MAP = {
+    'RT': [9, 10],
+    'TT': [11, 12],
+    'VT': [1, 2],
+    'XV': [3, 4],
+    'ZX': [5, 6],
+    'ZZ': [5, 6],
+    'CA': [7, 8],
+    'CC': [7, 8],
+    'EC': [9, 10],
+    'EE': [9, 10]
 };
 
 window.getTrackTypeOverrides = function() {
@@ -45,6 +59,63 @@ window.setTrackTypeOverride = function(track, formType) {
     } catch (e) {}
 };
 
+// 取得某個月份所屬的雙月期別陣列 (例如 10月 -> [9, 10]；6月 -> [5, 6])
+window.getBiMonthPair = function(month) {
+    const m = parseInt(month, 10) || 1;
+    const startM = (m % 2 === 1) ? m : (m - 1);
+    return [startM, startM + 1];
+};
+
+// 判斷某個 2 碼字軌是否屬於目標月份的法定雙月期別 (回傳 { isMatch: boolean, expectedMonths: [m1, m2] | null })
+window.checkTrackPeriodMatch = function(track, targetWestYear, targetMonth) {
+    const cleanTrack = String(track || '').trim().toUpperCase();
+    if (cleanTrack.length !== 2) return { isMatch: true, expectedMonths: null };
+
+    const targetPair = window.getBiMonthPair(targetMonth);
+
+    // 1. 優先檢查內建法定字軌期別表
+    if (window.BUILTIN_TRACK_BI_MONTH_MAP[cleanTrack]) {
+        const expPair = window.BUILTIN_TRACK_BI_MONTH_MAP[cleanTrack];
+        const isMatch = expPair.includes(Number(targetMonth));
+        return { isMatch: isMatch, expectedMonths: expPair };
+    }
+
+    // 2. 若為未來新字軌，自動統計資料庫中該字軌最常出現的雙月期別 (多數決)
+    const pairCounts = {};
+    let totalValid = 0;
+    (globalHistory || []).forEach(h => {
+        if (!h || h.status === '作廢') return;
+        const pNo = String(h.paperNo || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+        if (!pNo.startsWith(cleanTrack)) return;
+        const d = new Date(h.time);
+        if (isNaN(d.getTime())) return;
+        const m = d.getMonth() + 1;
+        const pair = window.getBiMonthPair(m);
+        const key = pair.join('-');
+        pairCounts[key] = (pairCounts[key] || 0) + 1;
+        totalValid++;
+    });
+
+    if (totalValid >= 5) {
+        let dominantKey = null;
+        let maxCnt = 0;
+        Object.keys(pairCounts).forEach(k => {
+            if (pairCounts[k] > maxCnt) {
+                maxCnt = pairCounts[k];
+                dominantKey = k;
+            }
+        });
+        // 若該字軌有超過 80% 的發票集中在某個雙月期別，則認定該雙月為其法定期別
+        if (dominantKey && (maxCnt / totalValid) >= 0.8) {
+            const expPair = dominantKey.split('-').map(Number);
+            const isMatch = expPair.includes(Number(targetMonth));
+            return { isMatch: isMatch, expectedMonths: expPair };
+        }
+    }
+
+    return { isMatch: true, expectedMonths: targetPair };
+};
+
 // 根據發票字軌 (或完整發票號碼) 判斷屬於 'THREE_PART' (三聯式) 或 'TWO_PART' (二聯式)
 window.getInvoiceFormTypeByTrack = function(trackOrPaperNo, fallbackTaxId) {
     const cleanStr = String(trackOrPaperNo || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
@@ -52,16 +123,13 @@ window.getInvoiceFormTypeByTrack = function(trackOrPaperNo, fallbackTaxId) {
     const track = m ? m[1] : '';
 
     if (track) {
-        // 1. 優先檢查操作者手動設定的永久記憶字軌歸類
         const overrides = window.getTrackTypeOverrides();
         if (overrides[track]) return overrides[track];
 
-        // 2. 檢查內建字軌字典
         if (window.BUILTIN_INVOICE_TRACK_TYPES[track]) {
             return window.BUILTIN_INVOICE_TRACK_TYPES[track];
         }
 
-        // 3. 自動根據歷史發票資料庫中該字軌的開立對象是否有 8 碼統編進行智慧推斷
         const sameTrackInvs = (globalHistory || []).filter(h => {
             if (!h || h.status === '作廢') return false;
             const pNo = String(h.paperNo || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
@@ -82,11 +150,22 @@ window.getInvoiceFormTypeByTrack = function(trackOrPaperNo, fallbackTaxId) {
         }
     }
 
-    // 4. 若為新字軌且尚無歷史紀錄，依買受人是否有統編推斷
     if (fallbackTaxId !== undefined) {
         return /^\d{8}$/.test(String(fallbackTaxId || '').trim()) ? 'THREE_PART' : 'TWO_PART';
     }
     return 'THREE_PART';
+};
+
+// 計算兩個 6 碼字串的漢明距離 (相差幾個字元)，用於偵測如 528665 vs 525665 的單碼打錯異常
+window.getPrefixHammingDistance = function(strA, strB) {
+    const a = String(strA || '');
+    const b = String(strB || '');
+    if (a.length !== 6 || b.length !== 6) return 99;
+    let diff = 0;
+    for (let i = 0; i < 6; i++) {
+        if (a[i] !== b[i]) diff++;
+    }
+    return diff;
 };
 
 // ============================================================================
@@ -297,7 +376,6 @@ window.submitInvoiceOptimistic = function() {
     pushToSyncQueue('submitInvoice', payload, null);
     if (typeof window.renderOrderList === 'function') window.renderOrderList();
     
-    // 動態更新 Step 5 模擬發票表頭為（三聯式）或（二聯式）
     const headerSubEl = document.querySelector('#invStep5 .invoice-header .fs-5');
     if (headerSubEl) {
         headerSubEl.innerText = isTwoPart ? '（二聯式）' : '（三聯式）';
@@ -317,7 +395,6 @@ window.submitInvoiceOptimistic = function() {
             const item = currentInvoiceData.validItems[i]; 
             const qtyNum = parseFloat(item.qty) || 1;
             if (isTwoPart) {
-                // 二聯式發票品項直接顯示含稅單價與含稅小計
                 const taxIncP = Number(item.product.price || 0);
                 const taxIncS = Math.round(qtyNum * taxIncP);
                 tbody.innerHTML += `<tr><td class="text-start highlight-data">${item.product.productName}</td><td class="highlight-data">${item.qty} ${item.product.unit}</td><td class="text-end highlight-data">${taxIncP.toLocaleString('en-US', { maximumFractionDigits: 3 })}</td><td class="text-end highlight-data">${taxIncS.toLocaleString()}</td><td class="highlight-data" style="font-size:0.8rem;">${item.formattedRemark}</td></tr>`;
@@ -343,7 +420,7 @@ window.resetInvoiceSystem = function() {
 };
 
 // ============================================================================
-// 歷史紀錄與報表模組 (新增三聯式 / 二聯式字軌智慧徽章)
+// 歷史紀錄與報表模組 (含三聯式 / 二聯式字軌智慧徽章 ＆ 支援修改發票日期)
 // ============================================================================
 window.updateHistoryDropdowns = function() { 
     const staffs = [...new Set(globalHistory.map(h => h.staff || '').filter(x => x))].sort(); 
@@ -593,17 +670,37 @@ window.voidInv = function(idx, pNo) {
         if(typeof window.renderShipments === 'function') window.renderShipments(); 
         if(typeof window.renderDeliveryList === 'function') window.renderDeliveryList();
         window.generateReport(); 
+        if(document.getElementById('tdControlPanel')) window.onTaxPeriodChange();
         
         pushToSyncQueue('updateInvoiceRecord', {action:'void', rowIdx: idx, staff: myName, paperNo: pNo}, null); 
         showToast("🗑️ 已作廢並返還庫存，相關送貨單已同步註銷");
     } 
 };
 
-window.openEditInv = function(idx) { 
+// 升級版「✏️ 編輯發票紀錄」：自動注入「開立日期」欄位，方便直接修正跨期誤植日期或打錯之發票號碼
+window.openEditInv = function(idx, suggestedPaperNo = null, suggestedDateStr = null) { 
     const h = globalHistory.find(x=>x.rowIdx === idx); 
     if(!h) return; 
+
+    // 動態確保 editInvModal 內有「開立日期 (e_invDate)」欄位
+    const paperInput = document.getElementById('e_invPaper');
+    if (paperInput && !document.getElementById('e_invDate')) {
+        const dateWrapper = document.createElement('div');
+        dateWrapper.className = 'mb-2';
+        dateWrapper.innerHTML = `<label class="small text-primary fw-bold">📅 開立日期 (可修正跨期誤植日期)</label><input type="date" class="form-control fw-bold text-primary border-primary" id="e_invDate">`;
+        paperInput.parentElement.parentElement.insertBefore(dateWrapper, paperInput.parentElement);
+    }
+
+    const d = new Date(h.time);
+    const curDateStr = !isNaN(d.getTime())
+        ? `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+        : getTodayStr();
+
     document.getElementById('e_invRow').value = idx; 
-    document.getElementById('e_invPaper').value = h.paperNo; 
+    if (document.getElementById('e_invDate')) {
+        document.getElementById('e_invDate').value = suggestedDateStr || curDateStr;
+    }
+    document.getElementById('e_invPaper').value = suggestedPaperNo || h.paperNo; 
     document.getElementById('e_invOrder').value = h.orderNo; 
     document.getElementById('e_invNet').value = h.net; 
     document.getElementById('e_invTotal').value = h.total; 
@@ -617,28 +714,71 @@ window.saveEditInvoice = function() {
 
     const idx = parseInt(document.getElementById('e_invRow').value); 
     const h = globalHistory.find(x=>x.rowIdx === idx); 
-    const oldPaperNo = h ? h.paperNo : '';
+    if (!h) return;
+
+    const oldPaperNo = h.paperNo || '';
     const newPaperNo = document.getElementById('e_invPaper').value.trim().toUpperCase();
+    const newDateVal = document.getElementById('e_invDate')?.value || '';
+    const newTimestamp = newDateVal ? (new Date(newDateVal + 'T12:00:00').getTime() || h.time) : h.time;
+
     const data = { 
-        client: h.client, taxId: h.taxId, paperNo: newPaperNo, 
-        orderNo: document.getElementById('e_invOrder').value, net: document.getElementById('e_invNet').value, 
-        tax: Math.round(document.getElementById('e_invTotal').value - document.getElementById('e_invNet').value), 
-        total: document.getElementById('e_invTotal').value, details: document.getElementById('e_invDetails').value 
+        client: h.client,
+        taxId: h.taxId,
+        paperNo: newPaperNo, 
+        orderNo: document.getElementById('e_invOrder').value,
+        net: Number(document.getElementById('e_invNet').value) || 0, 
+        tax: Math.round((Number(document.getElementById('e_invTotal').value) || 0) - (Number(document.getElementById('e_invNet').value) || 0)), 
+        total: Number(document.getElementById('e_invTotal').value) || 0,
+        details: document.getElementById('e_invDetails').value 
     }; 
-    if(h) {
-        Object.assign(h, data);
-        h.historyLog = "[\"修改紀錄存在\"]";
-        if (oldPaperNo && newPaperNo && oldPaperNo !== newPaperNo) {
-            globalSalesDetails.forEach(sd => {
-                if (sd.paperNo === oldPaperNo) sd.paperNo = newPaperNo;
-            });
-            pushToSyncQueue('supplementInvoiceNo', { rowIdx: idx, oldPaperNo: oldPaperNo, newPaperNo: newPaperNo, staff: myName }, null);
+
+    const dateChanged = (Math.abs(newTimestamp - Number(h.time)) > 43200000);
+    Object.assign(h, data);
+    h.time = newTimestamp;
+    h.historyLog = "[\"修改紀錄存在\"]";
+
+    if (oldPaperNo && newPaperNo && oldPaperNo !== newPaperNo) {
+        globalSalesDetails.forEach(sd => {
+            if (sd.paperNo === oldPaperNo) {
+                sd.paperNo = newPaperNo;
+                if (dateChanged) sd.time = newTimestamp;
+            }
+        });
+        pushToSyncQueue('supplementInvoiceNo', { rowIdx: idx, oldPaperNo: oldPaperNo, newPaperNo: newPaperNo, staff: myName }, null);
+    } else if (dateChanged && newPaperNo) {
+        globalSalesDetails.forEach(sd => {
+            if (sd.paperNo === newPaperNo) sd.time = newTimestamp;
+        });
+    }
+
+    // 同步將更新後的開立日期 (time) 與發票號碼寫入 Supabase
+    try {
+        if (typeof supabaseClient !== 'undefined') {
+            supabaseClient.from('invoices').update({
+                time: newTimestamp,
+                paper_no: newPaperNo,
+                order_no: data.orderNo,
+                net: data.net,
+                tax: data.tax,
+                total: data.total,
+                details: data.details
+            }).eq('row_idx', idx).then();
+
+            if (dateChanged && newPaperNo) {
+                supabaseClient.from('sales_details').update({
+                    time: newTimestamp,
+                    paper_no: newPaperNo
+                }).eq('paper_no', newPaperNo).then();
+            }
         }
-    } 
+    } catch (e) {}
+
     window.renderHistory(); 
     if(typeof window.renderOrderList === 'function') window.renderOrderList();
+    if(document.getElementById('tdControlPanel')) window.onTaxPeriodChange();
     bootstrap.Modal.getInstance(document.getElementById('editInvModal')).hide(); 
     pushToSyncQueue('updateInvoiceRecord', {action:'edit', rowIdx: idx, staff: myName, data: data}, null); 
+    showToast("✅ 發票資料與日期已成功修正並連動更新！");
 };
 
 window.setReportDate = function(days) { 
@@ -2353,7 +2493,7 @@ window.exportReconciliationExcel = function() {
 
 // ============================================================================
 // 【📋 營業人使用三聯式 ＆ 二聯式統一發票明細表】（1:1 復刻稅捐處標準 A4 直式雙表格）
-// 支援：字軌自動分辨三聯/二聯、本月 401 銷項稅額匯總卡片、手寫作廢永久記憶、多冊合併列印與 Excel 匯出
+// 支援：字軌與雙月期別智慧攔截、異常單號診斷修正、唯一單號精確計數、本月 401 銷項匯總、多冊合併列印與 Excel 匯出
 // ============================================================================
 const TAX_MANUAL_VOID_STORAGE_KEY = 'changgu_erp_tax_manual_voids_v1';
 
@@ -2387,8 +2527,13 @@ window.taxDetailState = {
     pageTotalSheets: 1,
     pageCurrentSheet: 1,
     manualVoidSuffixes: window.loadManualVoidSuffixes(),
-    detectedBooklets: [],      // 當前所選聯式 (三聯或二聯) 的冊別
-    allMonthBooklets: []       // 該月份全部冊別 (含三聯與二聯)
+    detectedBooklets: [],      // 當前所選聯式 (三聯或二聯) 的有效冊別
+    allMonthBooklets: [],      // 該月份全部有效冊別 (含三聯與二聯)
+    anomalies: {
+        crossPeriod: [],       // 🔴 跨期字軌日期誤植 (如 10 月出現 5-6 月的 ZX 字軌)
+        typoPrefixes: [],      // 🟡 疑似前六碼打錯之孤立冊別 (如 EC-528665 vs EC-525665)
+        duplicates: []         // 🟣 同號碼重複建檔之發票
+    }
 };
 
 window.initTaxDetailTab = function() {
@@ -2399,7 +2544,7 @@ window.initTaxDetailTab = function() {
         const curRocYear = new Date().getFullYear() - 1911;
         let yearOpts = '';
         for (let y = curRocYear - 2; y <= curRocYear + 2; y++) {
-            yearOpts += `<option value="${y}" ${y === window.taxDetailState.rocYear ? 'selected' : ''}>中華民國 ${y} 年 (${y + 1911})</option>`;
+            yearOpts += `<option value="${y}" ${y === window.taxDetailState.rocYear ? 'selected' : ''}>中華民國 ${y} 年 (${y + 111 + 1800})</option>`;
         }
 
         let monthOpts = '';
@@ -2438,7 +2583,7 @@ window.initTaxDetailTab = function() {
                 </div>
             </div>
 
-            <!-- 📊 進階優化 3：本月三聯式＋二聯式 營業稅申報總覽卡片 (401 申報核對神器) -->
+            <!-- 📊 本月三聯式＋二聯式 營業稅申報總覽卡片 (自動排除跨期誤植字軌) -->
             <div class="row g-2 mb-3">
                 <div class="col-12 col-md-4">
                     <div class="p-2 bg-white border rounded shadow-sm h-100" style="border-left: 4px solid #0d6efd !important;">
@@ -2545,12 +2690,16 @@ window.initTaxDetailTab = function() {
                 </div>
             </div>
 
-            <!-- 智慧偵測該月份已開立發票冊別快選列 (依三聯式 / 二聯式自動分流) -->
+            <!-- 智慧偵測該月份已開立發票冊別快選列 (依三聯式 / 二聯式自動分流，並依唯一單號精確計數) -->
             <div class="pt-2 border-top mt-2">
                 <div class="d-flex flex-wrap align-items-center gap-1">
                     <span class="small fw-bold text-secondary me-1" id="td_bookletPromptLabel">✨ 系統自動偵測本月已開立之【三聯式】發票字軌冊別（點擊一鍵帶入）：</span>
                     <div id="td_bookletPills" class="d-flex flex-wrap gap-1"></div>
                 </div>
+
+                <!-- 🩺 新增：跨期字軌 / 疑似打錯前六碼 / 重複單號 智慧診斷與一鍵修正專區 -->
+                <div id="td_anomaliesContainer" class="mt-2"></div>
+
                 <div class="small text-muted mt-1">
                     💡 <strong>互動小提示</strong>：1. 若某張紙本發票為「手寫作廢」，直接點擊下方表格該列即可在「空白 ⇄ 作廢」間切換（自動記憶）；2. 點擊字軌上方「📘三聯字軌 / 📗二聯字軌」小標籤可手動變更該字軌歸屬。
                 </div>
@@ -2631,7 +2780,7 @@ window.toggleCurrentTrackFormType = function() {
     window.setTaxDetailFormType(nextType);
 };
 
-// 當切換中華民國年份、月份或聯式時，自動掃描該月份所有已開立發票，並依字軌分流「三聯式」與「二聯式」冊別
+// 當切換中華民國年份、月份或聯式時，自動掃描該月份所有已開立發票，攔截跨期誤植字軌、去重計算張數並偵測單號打錯異常
 window.onTaxPeriodChange = function() {
     const rocY = parseInt(document.getElementById('td_rocYear')?.value, 10) || (new Date().getFullYear() - 1911);
     const mon = parseInt(document.getElementById('td_month')?.value, 10) || (new Date().getMonth() + 1);
@@ -2642,6 +2791,9 @@ window.onTaxPeriodChange = function() {
     window.taxDetailState.month = mon;
 
     const bookMap = new Map();
+    const crossPeriodList = [];
+    const invOccurrenceMap = new Map(); // fullNo -> array of history records
+
     (globalHistory || []).forEach(h => {
         const d = new Date(h.time);
         if (isNaN(d.getTime())) return;
@@ -2653,15 +2805,52 @@ window.onTaxPeriodChange = function() {
 
         const trk = m[1];
         const pfx = m[2];
-        const sufNum = parseInt(m[3], 10);
+        const suf2 = m[3];
+        const sufNum = parseInt(suf2, 10);
         const half = sufNum < 50 ? '00-49' : '50-99';
-        const key = `${trk}_${pfx}_${half}`;
         const fType = window.getInvoiceFormTypeByTrack(trk, h.taxId);
 
-        if (!bookMap.has(key)) {
-            bookMap.set(key, { track: trk, prefix6: pfx, half: half, count: 0, formType: fType });
+        // 1. 檢查此字軌是否屬於該月份的法定雙月期別 (例如 10 月份不應出現 5-6 月的 ZX 字軌)
+        const periodCheck = window.checkTrackPeriodMatch(trk, westY, mon);
+        if (!periodCheck.isMatch) {
+            const expPair = periodCheck.expectedMonths || [5, 6];
+            const sugMonth = expPair[1] || expPair[0] || 6;
+            const origDay = Math.min(28, d.getDate() || 15);
+            const suggestedDateStr = `${westY}-${String(sugMonth).padStart(2, '0')}-${String(origDay).padStart(2, '0')}`;
+            crossPeriodList.push({
+                record: h,
+                paperNo: h.paperNo || pNo,
+                track: trk,
+                prefix6: pfx,
+                half: half,
+                expectedPeriodStr: `${expPair[0]}~${expPair[1]}月`,
+                currentDateStr: `${westY}-${String(mon).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
+                suggestedDateStr: suggestedDateStr
+            });
+            return; // 自動攔截，不混入當月正式申報冊別與稅額匯總
         }
-        bookMap.get(key).count++;
+
+        // 2. 記錄同號碼出現次數，以偵測重複建檔
+        if (!invOccurrenceMap.has(pNo)) invOccurrenceMap.set(pNo, []);
+        invOccurrenceMap.get(pNo).push(h);
+
+        // 3. 將有效發票歸入發票冊，並以 Set 計算唯一發票號碼張數 (絕不超過 50 張)
+        const key = `${trk}_${pfx}_${half}`;
+        if (!bookMap.has(key)) {
+            bookMap.set(key, {
+                track: trk,
+                prefix6: pfx,
+                half: half,
+                uniqueInvs: new Set(),
+                rawRows: [],
+                count: 0,
+                formType: fType
+            });
+        }
+        const bEntry = bookMap.get(key);
+        bEntry.uniqueInvs.add(pNo);
+        bEntry.rawRows.push(h);
+        bEntry.count = bEntry.uniqueInvs.size;
     });
 
     const allBooklets = Array.from(bookMap.values()).sort((a, b) => {
@@ -2670,15 +2859,60 @@ window.onTaxPeriodChange = function() {
         return ka.localeCompare(kb);
     });
 
-    window.taxDetailState.allMonthBooklets = allBooklets;
+    // 4. 偵測「疑似前六碼打錯之孤立冊別」(例如 EC-528665 僅 2 張，與主冊 EC-525665 只差 1 碼)
+    const typoPrefixesList = [];
+    allBooklets.forEach(bSmall => {
+        if (bSmall.count > 3) return; // 僅針對張數極少 (1~3張) 的孤立冊別進行檢查
+        const mainCandidate = allBooklets.find(bMain =>
+            bMain.track === bSmall.track &&
+            bMain.prefix6 !== bSmall.prefix6 &&
+            bMain.count >= 5 &&
+            window.getPrefixHammingDistance(bSmall.prefix6, bMain.prefix6) === 1
+        );
+        if (mainCandidate) {
+            bSmall.isSuspiciousTypo = true;
+            bSmall.suggestedPrefix6 = mainCandidate.prefix6;
+            bSmall.rawRows.forEach(r => {
+                const cleanNo = String(r.paperNo || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+                const suf = cleanNo.slice(-2);
+                typoPrefixesList.push({
+                    record: r,
+                    wrongPaperNo: r.paperNo,
+                    wrongBookStr: `${bSmall.track}-${bSmall.prefix6} (${bSmall.half})`,
+                    suggestedPaperNo: `${bSmall.track}${mainCandidate.prefix6}${suf}`,
+                    mainBookStr: `${mainCandidate.track}-${mainCandidate.prefix6}`
+                });
+            });
+        }
+    });
 
-    // 過濾出屬於當前聯式 (三聯式或二聯式) 的發票冊
+    // 5. 整理同號碼重複建檔清單
+    const duplicateList = [];
+    invOccurrenceMap.forEach((rows, fullNo) => {
+        const activeRows = rows.filter(r => r.status !== '作廢');
+        if (activeRows.length > 1) {
+            duplicateList.push({
+                fullNo: fullNo,
+                count: activeRows.length,
+                rows: activeRows
+            });
+        }
+    });
+
+    window.taxDetailState.allMonthBooklets = allBooklets;
+    window.taxDetailState.anomalies = {
+        crossPeriod: crossPeriodList,
+        typoPrefixes: typoPrefixesList,
+        duplicates: duplicateList
+    };
+
     const filteredBooklets = allBooklets.filter(b => b.formType === activeFormType);
     window.taxDetailState.detectedBooklets = filteredBooklets;
 
     // 更新頂部三聯＋二聯匯總卡片
     window.updateMonthBothTypesSummaryBanner(rocY, mon);
 
+    // 渲染快選冊別按鈕
     const pillsContainer = document.getElementById('td_bookletPills');
     if (pillsContainer) {
         if (filteredBooklets.length === 0) {
@@ -2688,13 +2922,18 @@ window.onTaxPeriodChange = function() {
             const btnStyle = activeFormType === 'TWO_PART' ? 'btn-outline-success' : 'btn-outline-primary';
             const badgeStyle = activeFormType === 'TWO_PART' ? 'bg-success' : 'bg-primary';
             const icon = activeFormType === 'TWO_PART' ? '📗' : '📘';
-            pillsContainer.innerHTML = filteredBooklets.map((b, idx) => `
-                <button type="button" class="btn btn-sm ${btnStyle} fw-bold py-0 px-2" onclick="window.selectTaxBooklet(${idx})">
-                    ${icon} ${b.track}-${b.prefix6} (${b.half}) <span class="badge ${badgeStyle} ms-1">${b.count}張</span>
-                </button>
-            `).join('');
+            pillsContainer.innerHTML = filteredBooklets.map((b, idx) => {
+                const warnTag = b.isSuspiciousTypo ? `<span class="badge bg-warning text-dark ms-1" title="疑似前六碼打錯 (與 ${b.suggestedPrefix6} 僅差1碼)">⚠️疑似誤植</span>` : '';
+                return `
+                <button type="button" class="btn btn-sm ${b.isSuspiciousTypo ? 'btn-outline-danger' : btnStyle} fw-bold py-0 px-2" onclick="window.selectTaxBooklet(${idx})">
+                    ${icon} ${b.track}-${b.prefix6} (${b.half}) <span class="badge ${badgeStyle} ms-1">${b.count}張</span>${warnTag}
+                </button>`;
+            }).join('');
         }
     }
+
+    // 渲染異常診斷與一鍵修正專區
+    window.renderTaxAnomaliesBox();
 
     if (filteredBooklets.length > 0) {
         window.selectTaxBooklet(0);
@@ -2707,6 +2946,97 @@ window.onTaxPeriodChange = function() {
         window.updateTrackTypeBadgeUI(defaultTrk);
         window.renderTaxDetailPreview();
     }
+};
+
+// 渲染「🩺 本月發票字軌與單號異常診斷與一鍵修正專區」
+window.renderTaxAnomaliesBox = function() {
+    const box = document.getElementById('td_anomaliesContainer');
+    if (!box) return;
+
+    const { crossPeriod, typoPrefixes, duplicates } = window.taxDetailState.anomalies || { crossPeriod: [], typoPrefixes: [], duplicates: [] };
+    if (crossPeriod.length === 0 && typoPrefixes.length === 0 && duplicates.length === 0) {
+        box.innerHTML = '';
+        return;
+    }
+
+    let itemsHtml = '';
+
+    // 1. 跨期字軌日期誤植 (例如 10 月出現 5-6 月的 ZX-529594xx)
+    crossPeriod.forEach(cp => {
+        const r = cp.record;
+        itemsHtml += `
+        <div class="d-flex flex-wrap justify-content-between align-items-center py-1 border-bottom gap-2">
+            <div>
+                <span class="badge bg-danger me-1">🔴 跨期字軌已自動攔截排除</span>
+                發票 <strong class="text-danger">${escapeQuotes(cp.paperNo)}</strong>（客戶：<strong>${escapeQuotes(r.client)}</strong>｜金額：$${Number(r.total || 0).toLocaleString()}）
+                <span class="text-secondary">開立日填為 <code>${cp.currentDateStr}</code>，但字軌 <strong>${cp.track}</strong> 屬於 <strong>${cp.expectedPeriodStr}</strong> 期別！</span>
+            </div>
+            <div class="d-flex gap-1">
+                <button type="button" class="btn btn-sm btn-danger fw-bold py-0 px-2" onclick="window.openEditInv(${r.rowIdx}, '${escapeQuotes(cp.paperNo)}', '${cp.suggestedDateStr}')">
+                    ✏️ 修正日期/單號 (建議改回 ${cp.suggestedDateStr})
+                </button>
+                <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="window.previewAnomalyBooklet('${cp.track}', '${cp.prefix6}', '${cp.half}')">
+                    👁️ 臨時預覽此冊
+                </button>
+            </div>
+        </div>`;
+    });
+
+    // 2. 疑似前六碼打錯 (例如 EC-528665 僅 2 張 vs 主冊 EC-525665)
+    typoPrefixes.forEach(tp => {
+        const r = tp.record;
+        itemsHtml += `
+        <div class="d-flex flex-wrap justify-content-between align-items-center py-1 border-bottom gap-2">
+            <div>
+                <span class="badge bg-warning text-dark me-1">🟡 疑似發票前六碼誤植</span>
+                發票 <strong class="text-danger">${escapeQuotes(tp.wrongPaperNo)}</strong>（客戶：<strong>${escapeQuotes(r.client)}</strong>｜$${Number(r.total || 0).toLocaleString()}）
+                <span class="text-secondary">位於孤立冊別 <code>${tp.wrongBookStr}</code>，與主冊 <strong>${tp.mainBookStr}</strong> 僅差 1 碼，是否應為 <strong class="text-primary">${tp.suggestedPaperNo}</strong>？</span>
+            </div>
+            <div>
+                <button type="button" class="btn btn-sm btn-warning text-dark fw-bold py-0 px-2" onclick="window.openEditInv(${r.rowIdx}, '${escapeQuotes(tp.suggestedPaperNo)}')">
+                    ✏️ 一鍵改為 ${tp.suggestedPaperNo}
+                </button>
+            </div>
+        </div>`;
+    });
+
+    // 3. 同發票號碼重複建檔提醒 (曾導致冊別張數超過 50 張的原因)
+    duplicates.forEach(dup => {
+        const firstRow = dup.rows[0];
+        const secondRow = dup.rows[1];
+        itemsHtml += `
+        <div class="d-flex flex-wrap justify-content-between align-items-center py-1 border-bottom gap-2">
+            <div>
+                <span class="badge bg-dark me-1">🟣 同發票號碼重複建檔 (${dup.count}筆)</span>
+                發票 <strong class="text-primary">${escapeQuotes(dup.fullNo)}</strong>（客戶：<strong>${escapeQuotes(firstRow.client)}</strong>）在系統內重複出現 ${dup.count} 筆有效紀錄（明細表已自動去重只取 1 筆）。
+            </div>
+            <div class="d-flex gap-1">
+                <button type="button" class="btn btn-sm btn-outline-primary fw-bold py-0 px-2" onclick="window.openEditInv(${secondRow.rowIdx})">
+                    ✏️ 檢查/修改第2筆單號
+                </button>
+                <button type="button" class="btn btn-sm btn-outline-danger fw-bold py-0 px-2" onclick="window.voidInv(${secondRow.rowIdx}, '${escapeQuotes(secondRow.paperNo)}')">
+                    🗑️ 作廢多餘紀錄
+                </button>
+            </div>
+        </div>`;
+    });
+
+    box.innerHTML = `
+        <div class="alert alert-warning border-warning py-2 px-3 mb-1 shadow-sm" style="font-size: 0.82rem;">
+            <div class="fw-bold text-dark mb-1">
+                🩺 系統智慧偵測到本月有以下「跨期字軌 / 疑似打錯號碼 / 重複建檔」異常（點擊右側按鈕即可一鍵修正）：
+            </div>
+            ${itemsHtml}
+        </div>
+    `;
+};
+
+window.previewAnomalyBooklet = function(track, prefix6, half) {
+    if (document.getElementById('td_track')) document.getElementById('td_track').value = track;
+    if (document.getElementById('td_prefix6')) document.getElementById('td_prefix6').value = prefix6;
+    if (document.getElementById('td_rangeHalf')) document.getElementById('td_rangeHalf').value = half;
+    window.updateTrackTypeBadgeUI(track);
+    window.renderTaxDetailPreview();
 };
 
 window.selectTaxBooklet = function(idx) {
@@ -2800,9 +3130,9 @@ window.buildSingleTaxDetailSheetHtml = function(params, isPrintMode = false) {
     let sheetTaxableCount = 0;
     let sheetVoidCount = 0;
     let sheetBlankCount = 0;
-    let sheetGrossSum = 0; // 二聯式：發票總金額(1) (含稅總計)
-    let sheetNetSum = 0;   // 三聯式：未稅銷售額合計；二聯式：ROUND(含稅總額 * 100 / 105)
-    let sheetTaxSum = 0;   // 三聯式：稅額合計；二聯式：ROUND(未稅銷售額 * 5%)
+    let sheetGrossSum = 0;
+    let sheetNetSum = 0;
+    let sheetTaxSum = 0;
 
     for (let i = 0; i < 50; i++) {
         const num = startNum + i;
@@ -2861,9 +3191,6 @@ window.buildSingleTaxDetailSheetHtml = function(params, isPrintMode = false) {
         slots.push(slotData);
     }
 
-    // 針對「二聯式發票明細表」，底部銷售額(2) 與 稅額(3) 依稅捐處表頭公式：
-    // (2) = ROUND((1) * 100 / 105)
-    // (3) = ROUND((2) * 5%)
     if (isTwoPart) {
         sheetNetSum = Math.round((sheetGrossSum * 100) / 105);
         sheetTaxSum = Math.round(sheetNetSum * 0.05);
@@ -2929,7 +3256,6 @@ window.buildSingleTaxDetailSheetHtml = function(params, isPrintMode = false) {
         const clickAttrR = !isPrintMode ? `onclick="window.toggleManualVoidOnTaxSheet('${cleanTrack}','${cleanPrefix6}','${rightSlot.suf2}')" style="cursor:pointer;" title="點擊切換空白/作廢"` : '';
 
         if (isTwoPart) {
-            // 📗 二聯式統一發票明細表 25 列結構 (末二位號碼 | 發票總計金額 | 課稅別(應稅/零稅率/免稅) | 備註)
             rows25Html += `
             <tr style="height: 20px;">
                 <!-- 左半欄 (00~24 或 50~74) -->
@@ -2951,7 +3277,6 @@ window.buildSingleTaxDetailSheetHtml = function(params, isPrintMode = false) {
                 <td ${clickAttrR} style="${cellBorder} width: 88px; text-align: center; font-size: 11.5px; color: ${rightSlot.rowType === 'VOID' ? '#c92a2a' : '#000'}; font-weight: bold; padding: 0 2px;">${escapeQuotes(rightSlot.remark)}</td>
             </tr>`;
         } else {
-            // 📘 三聯式統一發票明細表 25 列結構 (末二位號碼 | 買受人統編 | 銷售額 | 課稅別 | 稅額 | 備註)
             rows25Html += `
             <tr style="height: 20px;">
                 <!-- 左半欄 (00~24 或 50~74) -->
@@ -2983,7 +3308,6 @@ window.buildSingleTaxDetailSheetHtml = function(params, isPrintMode = false) {
     const sheetTitleText = isTwoPart ? '營業人使用二聯式統一發票明細表' : '營業人使用三聯式統一發票明細表';
     const footerSheetTypeText = isTwoPart ? '二聯式' : '三聯式';
 
-    // 中間 50 格表格的表頭 HTML (依三聯式 / 二聯式切換)
     const mainTableHeaderHtml = isTwoPart ? `
         <thead>
             <tr style="background-color: #f8f9fa;">
@@ -3038,7 +3362,6 @@ window.buildSingleTaxDetailSheetHtml = function(params, isPrintMode = false) {
         </thead>
     `;
 
-    // 底部統計區 HTML (二聯式含「發票總金額(1)」、「銷售額(2)=(1)×100/105」、「稅額(3)=(2)×5%」三欄結構)
     const bottomSummaryTableHtml = isTwoPart ? `
         <table style="width: 100%; border-collapse: collapse; border: 2px solid #000; border-top: none; font-size: 11px;">
             <tr>
@@ -3275,7 +3598,7 @@ window.buildSingleTaxDetailSheetHtml = function(params, isPrintMode = false) {
     </div>`;
 };
 
-// 計算該月份指定聯式 ('THREE_PART' 或 'TWO_PART') 全部發票冊的「本期(月)總計」統計值
+// 計算該月份指定聯式 ('THREE_PART' 或 'TWO_PART') 全部有效發票冊的「本期(月)總計」統計值
 window.calculateMonthGrandTaxStats = function(rocYear, month, targetFormType) {
     const westY = Number(rocYear) + 1911;
     const fType = targetFormType || window.taxDetailState.formType || 'THREE_PART';
@@ -3384,7 +3707,7 @@ window.printCurrentTaxDetailSheet = function() {
     if (typeof window.showPrintPreview === 'function') window.showPrintPreview('printTaxDetailArea');
 };
 
-// 進階優化 4：一鍵預覽並列印該月份「目前聯式全部冊別」或「三聯＋二聯合併全部冊別」(多頁 A4 直式)
+// 一鍵預覽並列印該月份「目前聯式全部冊別」或「三聯＋二聯合併全部冊別」(多頁 A4 直式)
 window.printAllMonthTaxDetailSheets = function(includeBothTypes = false) {
     const baseParams = window.getCurrentTaxFormParams();
     const allBooks = window.taxDetailState.allMonthBooklets || [];
@@ -3430,7 +3753,7 @@ window.printAllMonthTaxDetailSheets = function(includeBothTypes = false) {
     if (typeof window.showPrintPreview === 'function') window.showPrintPreview('printTaxDetailArea');
 };
 
-// 進階優化 5：一鍵匯出本月「三聯式＋二聯式統一發票明細表」完整 Excel (.xlsx)
+// 一鍵匯出本月「三聯式＋二聯式統一發票明細表」完整 Excel (.xlsx)
 window.exportMonthTaxDetailExcel = function() {
     if (typeof XLSX === 'undefined') return alert("Excel 模組載入中，請稍候！");
     const baseParams = window.getCurrentTaxFormParams();
@@ -3453,7 +3776,6 @@ window.exportMonthTaxDetailExcel = function() {
 
     const wb = XLSX.utils.book_new();
 
-    // 工作表 1：本月營業稅申報總覽 (三聯式 + 二聯式)
     const summaryAoa = [
         [`長固實業股份有限公司 — 中華民國 ${rocY} 年 ${mon} 月份 統一發票明細表申報總覽`],
         ["統一編號", baseParams.companyTaxId, "稅籍編號", baseParams.taxRegNo || "", "申報日期", baseParams.declareDate],
@@ -3486,7 +3808,6 @@ window.exportMonthTaxDetailExcel = function() {
     wsSum['!cols'] = [{ wch: 24 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 20 }, { wch: 20 }, { wch: 16 }];
     XLSX.utils.book_append_sheet(wb, wsSum, "0_本月營業稅申報總覽");
 
-    // 若該月無自動偵測冊別，匯出目前畫面上輸入的那一冊
     const targetBooks = allBooks.length > 0 ? allBooks : [{
         track: baseParams.track,
         prefix6: baseParams.prefix6 || '000000',
