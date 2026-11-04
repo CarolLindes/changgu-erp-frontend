@@ -1,10 +1,10 @@
 /**
  * ============================================================================
  * 模組 1：API 核心、全域狀態與雙軌並行架構 (api_core.js) 
- * 【極速登入 ＆ 真實誰在線上懸浮卡 ＆ 外部客戶代號對照 ＆ 沖帳中樞 ＆ 多表列印升級版】
+ * 【極速登入 ＆ 真實誰在線上懸浮卡 ＆ 長固代號/資材碼自動拆分遷移 ＆ 多表列印升級版】
  * 1. 直連 Supabase 實現 0.1 秒極速登入
  * 2. 內建 Supabase Realtime Presence 真實線上同仁追蹤與輕量懸浮資訊卡 (顯示姓名/所在模組/裝置/活躍狀態)
- * 3. 整合 SheetJS 與 PDF.js 於前端瞬間生成/解析 Excel 與 PDF 報表，交由 GAS 遙控器寄信
+ * 3. 內建「長固代號 / 醫院資材碼」智慧拆分與資料庫自動遷移引擎 (自動拆分如 86-18-00022-4 / 95501008)
  * 4. 內建 customer1.xlsx 客戶代號 (CUSTID) 智慧雙向對照引擎 (含正向與反向查表)
  * 5. 支援跨系統明細補登、5月前歷史帳移轉、批次快速沖帳、撤銷還原(Undo)與未收/已沖帳多表列印
  * ============================================================================
@@ -109,7 +109,6 @@ window.getOnlineUsersArray = function() {
         }
     });
 
-    // 確保當前已登入的操作者本人一定在列表中
     if (myName) {
         const selfKey = `${myName}__${myUid}`;
         map.set(selfKey, {
@@ -122,7 +121,6 @@ window.getOnlineUsersArray = function() {
         });
     }
 
-    // 若同一個人開啟多個分頁，依姓名歸戶並保留最新活躍的分頁狀態
     const byNameMap = new Map();
     map.forEach((u) => {
         const prev = byNameMap.get(u.name);
@@ -221,7 +219,6 @@ window.ensureOnlineUsersPopoverDOM = function() {
     popDiv.onclick = function(e) { e.stopPropagation(); };
     document.body.appendChild(popDiv);
 
-    // 點擊畫面其他區域自動收合懸浮卡片，不佔據工作空間
     document.addEventListener('click', function() {
         const p = document.getElementById('onlineUsersPopover');
         if (p && p.style.display === 'block') {
@@ -229,7 +226,6 @@ window.ensureOnlineUsersPopoverDOM = function() {
         }
     });
 
-    // 監聽使用者互動，每 45 秒自動更新一次活躍時間
     let lastActivityTrack = 0;
     ['click', 'keydown', 'touchstart'].forEach(evtName => {
         document.addEventListener(evtName, function() {
@@ -252,7 +248,6 @@ window.toggleOnlineUsersPopover = function(evt) {
         return;
     }
 
-    // 若點擊來源在螢幕特定高度，微調彈出位置讓視覺更順眼
     if (evt && evt.currentTarget) {
         const rect = evt.currentTarget.getBoundingClientRect();
         const topPos = Math.min(window.innerHeight - 280, Math.max(12, rect.bottom + 8));
@@ -275,7 +270,7 @@ window.renderOnlineUsersPopoverContent = function() {
     const rowsHtml = users.map(u => {
         const isSelf = (u.name === myName);
         const idleMs = now - (Number(u.lastActive) || now);
-        const isIdle = idleMs > 10 * 60 * 1000; // 超過 10 分鐘無動作視為暫離閒置
+        const isIdle = idleMs > 10 * 60 * 1000;
         const dotHtml = isIdle
             ? `<span style="display:inline-block; width:9px; height:9px; border-radius:50%; background:#ffc107; box-shadow: 0 0 6px #ffc107;" title="閒置中"></span>`
             : `<span style="display:inline-block; width:9px; height:9px; border-radius:50%; background:#198754; box-shadow: 0 0 6px #198754;" title="在線活躍中"></span>`;
@@ -439,6 +434,77 @@ window.normalizeInvoiceNo = function(invNo) {
     return String(invNo).trim().toUpperCase().replace(/[\s\-—_]/g, "");
 };
 
+// ============================================================================
+// 【核心新增】長固代號 ＆ 醫院資材碼 智慧拆分引擎
+// 自動將過去填在同一欄位的「86-18-00022-4 / 95501008」拆分為獨立的 internalCode 與 assetCode
+// ============================================================================
+window.isLikelyChangguInternalCode = function(codeStr) {
+    const s = String(codeStr || '').trim();
+    if (!s) return false;
+    // 長固內部代號標準特徵：包含至少 2 個連字號 (如 86-18-00022-4, 8-05-002110-1, 33-A-600449-0, 1-26-5161EL-1)
+    const hyphenCount = (s.match(/\-/g) || []).length;
+    if (hyphenCount >= 2) return true;
+    if (/^(86|8|7|1|33)\-[A-Za-z0-9]+/.test(s)) return true;
+    return false;
+};
+
+window.splitCombinedCodePair = function(rawInternalCode, rawAssetCode) {
+    let intCode = String(rawInternalCode || '').trim();
+    let astCode = String(rawAssetCode || '').trim();
+    let wasSplit = false;
+
+    const sepRegex = /[\/／\|]+/;
+
+    // 情況 1：長固代號欄位內含有斜線分隔 (如 "86-18-00022-4 / 95501008")
+    if (sepRegex.test(intCode)) {
+        const parts = intCode.split(sepRegex).map(s => s.trim()).filter(Boolean);
+        if (parts.length >= 2) {
+            wasSplit = true;
+            const p0IsInt = window.isLikelyChangguInternalCode(parts[0]);
+            const p1IsInt = window.isLikelyChangguInternalCode(parts[1]);
+
+            if (!p0IsInt && p1IsInt) {
+                intCode = parts[1];
+                if (!astCode || astCode === rawInternalCode) {
+                    astCode = parts[0];
+                }
+            } else {
+                intCode = parts[0];
+                const extraAsset = parts.slice(1).join(', ');
+                if (!astCode || astCode === rawInternalCode) {
+                    astCode = extraAsset;
+                } else if (!astCode.includes(extraAsset)) {
+                    astCode = `${astCode}, ${extraAsset}`;
+                }
+            }
+        }
+    }
+
+    // 情況 2：醫院資材碼欄位內含有斜線且混入了長固代號
+    if (sepRegex.test(astCode)) {
+        const parts = astCode.split(sepRegex).map(s => s.trim()).filter(Boolean);
+        if (parts.length >= 2) {
+            const p0IsInt = window.isLikelyChangguInternalCode(parts[0]);
+            const p1IsInt = window.isLikelyChangguInternalCode(parts[1]);
+            if (p0IsInt && !p1IsInt) {
+                wasSplit = true;
+                if (!intCode) intCode = parts[0];
+                astCode = parts.slice(1).join(', ');
+            } else if (!p0IsInt && p1IsInt) {
+                wasSplit = true;
+                if (!intCode) intCode = parts[1];
+                astCode = parts[0];
+            }
+        }
+    }
+
+    return {
+        internalCode: intCode,
+        assetCode: astCode,
+        wasSplit: wasSplit
+    };
+};
+
 // 外部日期字串或 Excel 序列號轉 YYYY-MM-DD 工具
 window.parseExternalDateStr = function(rawVal) {
     if (rawVal === undefined || rawVal === null || rawVal === '') return '';
@@ -451,23 +517,19 @@ window.parseExternalDateStr = function(rawVal) {
     }
     let s = String(rawVal).trim();
     if (!s) return '';
-    // 處理民國年 (如 115/05/12 或 115-05-12 或 115.05.12)
     const rocMatch = s.match(/^(\d{2,3})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})/);
     if (rocMatch && parseInt(rocMatch[1], 10) < 1900) {
         const yr = parseInt(rocMatch[1], 10) + 1911;
         return `${yr}-${String(rocMatch[2]).padStart(2, '0')}-${String(rocMatch[3]).padStart(2, '0')}`;
     }
-    // 處理西元年 (如 2026/05/12 或 2026-05-12)
     const westMatch = s.match(/^(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})/);
     if (westMatch) {
         return `${westMatch[1]}-${String(westMatch[2]).padStart(2, '0')}-${String(westMatch[3]).padStart(2, '0')}`;
     }
-    // 處理美式月/日/年 (如 9/5/2025 或 10/28/2026)
     const usMatch = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})/);
     if (usMatch) {
         return `${usMatch[3]}-${String(usMatch[1]).padStart(2, '0')}-${String(usMatch[2]).padStart(2, '0')}`;
     }
-    // 處理 8 碼數字 (如 20260512)
     const compactMatch = s.match(/^(\d{4})(\d{2})(\d{2})$/);
     if (compactMatch) {
         return `${compactMatch[1]}-${compactMatch[2]}-${compactMatch[3]}`;
@@ -647,24 +709,128 @@ window.findProductNameByCode = function(ispnCode, clientName) {
     return { name: cleanCode, unit: '式', price: 0 };
 };
 
-// 產品目錄去重輔助工具
+// 產品目錄去重與「長固代號 / 資材碼」自動拆分工具
+window.pendingCatalogMigrationRows = [];
+
 function deduplicateCatalogRows(rawRows) {
     const map = new Map();
+    const toMigrate = [];
+
     (rawRows || []).forEach(x => {
+        const splitRes = window.splitCombinedCodePair(x.internal_code || '', x.asset_code || '');
         const item = {
             rowIndex: Number(x.row_index) || 0,
-            assetCode: x.asset_code || '',
-            internalCode: x.internal_code || '',
+            assetCode: splitRes.assetCode,
+            internalCode: splitRes.internalCode,
             clientName: x.client_name || '',
             productName: x.product_name || '',
             unit: x.unit || '式',
             price: Number(x.price) || 0
         };
+
+        if (splitRes.wasSplit && item.rowIndex > 0) {
+            toMigrate.push({
+                row_index: item.rowIndex,
+                asset_code: item.assetCode,
+                internal_code: item.internalCode,
+                client_name: item.clientName,
+                product_name: item.productName,
+                unit: item.unit,
+                price: item.price
+            });
+        }
+
         const key = `${item.clientName.trim()}|${item.productName.trim()}|${item.assetCode.trim()}|${item.internalCode.trim()}|${item.price}`;
         map.set(key, item);
     });
+
+    window.pendingCatalogMigrationRows = toMigrate;
     return Array.from(map.values());
 }
+
+// 自動將過去合併在同一欄位的「長固代號 / 資材碼」拆分結果同步寫回 Supabase (catalog 與 orders)
+window.autoMigrateCombinedCodesInDb = async function(silent = true) {
+    let migratedCatCount = 0;
+    let migratedOrdCount = 0;
+
+    try {
+        // 1. 檢查並遷移 catalog 表中原本帶有 '/' 的品項
+        const catToUpdate = [...(window.pendingCatalogMigrationRows || [])];
+        if (catToUpdate.length > 0) {
+            for (const row of catToUpdate) {
+                const { error } = await supabaseClient
+                    .from('catalog')
+                    .update({
+                        internal_code: row.internal_code,
+                        asset_code: row.asset_code
+                    })
+                    .eq('row_index', row.row_index);
+                if (!error) migratedCatCount++;
+            }
+            window.pendingCatalogMigrationRows = [];
+        }
+
+        // 2. 檢查並遷移 orders 表中品項內帶有 '/' 的長固代號或缺少資材碼的未結案訂單
+        for (const ord of (globalOrders || [])) {
+            if (!ord || !ord.jsonStr || ord.status === '已作廢' || ord.status === '作廢') continue;
+            let items = [];
+            try { items = JSON.parse(ord.jsonStr); } catch (e) { continue; }
+            if (!Array.isArray(items) || items.length === 0) continue;
+
+            let ordChanged = false;
+            items.forEach(itm => {
+                // 若訂單品項內的 internalCode 或 code 含有 '/'，先執行拆分
+                const splitRes = window.splitCombinedCodePair(itm.internalCode || '', itm.code || '');
+                if (splitRes.wasSplit) {
+                    itm.internalCode = splitRes.internalCode;
+                    itm.code = splitRes.assetCode;
+                    ordChanged = true;
+                }
+                // 再與拆分後的 globalCatalog 進行對應，自動補齊缺漏的醫院資材碼 (code) 或長固代號 (internalCode)
+                if (ord.client && (!itm.code || !itm.internalCode)) {
+                    const matchedCat = (typeof window.findProductRobust === 'function')
+                        ? window.findProductRobust(ord.client, itm.code || itm.internalCode, itm.name)
+                        : (globalCatalog || []).find(c => c.clientName === ord.client && c.productName === itm.name);
+                    if (matchedCat) {
+                        if (!itm.code && matchedCat.assetCode) {
+                            itm.code = matchedCat.assetCode;
+                            ordChanged = true;
+                        }
+                        if (!itm.internalCode && matchedCat.internalCode) {
+                            itm.internalCode = matchedCat.internalCode;
+                            ordChanged = true;
+                        }
+                    }
+                }
+            });
+
+            if (ordChanged) {
+                const newJsonStr = JSON.stringify(items);
+                ord.jsonStr = newJsonStr;
+                const { error } = await supabaseClient
+                    .from('orders')
+                    .update({ json_str: newJsonStr })
+                    .eq('row_idx', ord.rowIdx);
+                if (!error) migratedOrdCount++;
+            }
+        }
+
+        if (!silent) {
+            if (migratedCatCount > 0 || migratedOrdCount > 0) {
+                showToast(`✅ 自動拆分完成！已更新 ${migratedCatCount} 筆報價品項、${migratedOrdCount} 筆訂單之資材碼與長固代號`);
+            } else {
+                showToast("✅ 所有品項與訂單之「長固代號」與「醫院資材碼」皆已獨立分開並完成匹配！");
+            }
+            refreshAllUI();
+        } else if (migratedCatCount > 0 || migratedOrdCount > 0) {
+            console.log(`✨ [自動遷移完成] 已將 ${migratedCatCount} 筆報價品項與 ${migratedOrdCount} 筆訂單之「長固代號/資材碼」拆開並同步回雲端！`);
+            refreshAllUI();
+        }
+    } catch (err) {
+        console.warn("自動拆分遷移代碼時發生例外:", err);
+        if (!silent) alert("拆分遷移時發生錯誤：" + err.message);
+    }
+};
 
 window.getNextCatalogRowIndex = function() {
     let maxIdx = 1;
@@ -772,13 +938,14 @@ async function callApi(action, payload = {}) {
                 c.name, c.total
             ]);
         });
-        const wsClient = XLSX.utils.aoa_to_sheet(clientRows);
+        const wsClient = XLSX.utils.book_new();
+        const wsClientSheet = XLSX.utils.aoa_to_sheet(clientRows);
 
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, wsHistory, "發票總表");
         XLSX.utils.book_append_sheet(wb, wsDelivery, "出貨明細");
         XLSX.utils.book_append_sheet(wb, wsInventory, "目前庫存表");
-        XLSX.utils.book_append_sheet(wb, wsClient, "客戶營收分析表");
+        XLSX.utils.book_append_sheet(wb, wsClientSheet, "客戶營收分析表");
 
         const base64Data = XLSX.write(wb, { bookType: 'xlsx', type: 'base64' });
         
@@ -800,6 +967,7 @@ async function callApi(action, payload = {}) {
     }
     
     if (action === 'syncAssetCodesToInventory') {
+        await window.autoMigrateCombinedCodesInDb(true);
         let assetMap = {};
         globalCatalog.forEach(c => {
             if (c.productName && c.assetCode) {
@@ -1287,10 +1455,13 @@ async function executeSupabaseAction(action, payload) {
             ? Number(payload.rowIndex)
             : window.getNextCatalogRowIndex();
 
+        // 若使用者不小心又把兩個代碼用斜線填在一起，儲存時自動幫他拆開
+        const splitRes = window.splitCombinedCodePair(payload.internalCode || '', payload.assetCode || '');
+
         const record = {
             row_index: targetIdx,
-            asset_code: payload.assetCode || '',
-            internal_code: payload.internalCode || '',
+            asset_code: splitRes.assetCode,
+            internal_code: splitRes.internalCode,
             client_name: payload.clientName,
             product_name: payload.productName,
             unit: payload.unit || '式',
@@ -1517,6 +1688,13 @@ async function loadDataFromSupabase() {
     emailSettingsData.selected = emailSettingsData.selected || [];
     
     myLastSyncTime = Date.now();
+
+    // 背景自動檢查並將過去寫在同一欄的「長固代號 / 資材碼」拆分同步回資料庫
+    setTimeout(() => {
+        if (typeof window.autoMigrateCombinedCodesInDb === 'function') {
+            window.autoMigrateCombinedCodesInDb(true);
+        }
+    }, 1200);
 }
 
 // ============================================================================
@@ -1978,7 +2156,12 @@ window.openSearchModal = function(type, callback) {
     else if(type === 'item_adj') { 
         document.getElementById('searchModalTitle').innerText = '選擇盤點品項'; 
         const uniqueProds = [...new Map(globalCatalog.map(item => [(item.productName || '').trim(), item])).values()]; 
-        currentSearchSource = uniqueProds.map(p => ({ text: p.productName, sub: `長固代號: ${p.internalCode||p.assetCode||'無'}`, val: p.productName, ref: p })); 
+        currentSearchSource = uniqueProds.map(p => ({
+            text: p.productName,
+            sub: `長固: ${p.internalCode||'無'}${p.assetCode ? ' | 資材碼: ' + p.assetCode : ''}`,
+            val: p.productName,
+            ref: p
+        })); 
     }
     else if(type.startsWith('item_')) { 
         document.getElementById('searchModalTitle').innerText = '選擇品項'; 
@@ -2095,7 +2278,6 @@ window.onload = function() {
         document.getElementById('authScreen').style.display = 'flex'; 
     }
     
-    // 每 20 秒刷新一次線上人數徽章與活躍秒數顯示
     setInterval(() => { 
         window.updateOnlineBadgesUI();
     }, 20000); 
@@ -2161,7 +2343,6 @@ window.enterSystem = function(modId) {
     if(document.getElementById('sysTitle')) document.getElementById('sysTitle').innerText = currentModTitle; 
     document.getElementById('mainApp').scrollTo(0,0);
 
-    // 廣播目前操作者進入的模組位置
     window.broadcastMyPresence(currentModTitle);
     
     if(modId === 'history') { 
