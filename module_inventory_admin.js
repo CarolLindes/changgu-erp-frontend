@@ -1,7 +1,7 @@
 /**
  * ============================================================================
- * 模組 4：庫存、訂貨與管理員後台 (module_inventory_admin.js) 
- * 【防連點保護、進貨品項後台管理 ＆ A5 橫式訂貨單單頁防裁切升級版】
+ * 模組 4：庫存、訂貨與品項與客戶編輯 (module_inventory_admin.js) 
+ * 【報價品項「長固代號 / 醫院資材碼」雙欄位獨立拆分 ＆ 自動遷移連動訂單升級版】
  * ============================================================================
  */
 
@@ -638,7 +638,6 @@ window.openPurchaseOrderModal = function(salesRowIdx) {
     const remainQty = s.qty - s.shippedQty;
     document.getElementById('poQty').value = remainQty;
 
-    // 強健搜尋合約目錄與「進貨品項 (globalInventory)」取得長固代號與最新進貨成本
     const p = (typeof window.findProductRobust === 'function')
         ? window.findProductRobust(s.client, null, s.name)
         : globalCatalog.find(x => x.clientName === s.client && x.productName === s.name);
@@ -758,7 +757,6 @@ window.reprintPurchaseOrderFast = function(idx) {
     }
 };
 
-// 【項目 6 關鍵修復】優化 A5 橫式 (210mm x 148mm) 訂貨單高度與間距，鎖定單頁絕不裁切成兩張
 window.printPurchaseOrder = function(data) {
     const totalAmount = parseFloat(data.poQty) * parseFloat(data.poUnitPrice || 0);
     const dateStr = data.poDate ? data.poDate.replace(/-/g, '/') : getTodayStr().replace(/-/g, '/');
@@ -824,7 +822,7 @@ window.printPurchaseOrder = function(data) {
 };
 
 // ============================================================================
-// 管理員後台 (Admin) 模組：1. 報價品項 ｜ 2. 進貨品項 ｜ 3. 客戶
+// 品項與客戶編輯 (Admin) 模組：1. 報價品項 ｜ 2. 進貨品項 ｜ 3. 客戶
 // ============================================================================
 window.populateAdminClientFilter = function() { 
     if(document.getElementById('admItemFilterSelect')) {
@@ -914,10 +912,76 @@ window.submitEditClientOptimistic = function() {
     pushToSyncQueue('updateClientData', {oldName: old, newName: name, newTaxId: tax, custId: custId, address, receiveDept}, null); 
 };
 
+// ============================================================================
+// 【核心升級】將「📝 編輯品項」彈跳視窗動態升級為「長固代號」與「醫院資材碼」兩個獨立欄位
+// ============================================================================
+window.ensureSplitItemCodeInputs = function() {
+    if (document.getElementById('editItemAssetCode')) return;
+    const intCodeInput = document.getElementById('editItemInternalCode');
+    if (!intCodeInput) return;
+
+    const wrapperDiv = intCodeInput.parentElement;
+    if (!wrapperDiv) return;
+
+    wrapperDiv.className = 'row g-2 mb-2';
+    wrapperDiv.innerHTML = `
+        <div class="col-6">
+            <label class="small text-muted fw-bold">長固代號 (內部代號)</label>
+            <input type="text" class="form-control fw-bold" id="editItemInternalCode" placeholder="如: 86-18-00022-4" oninput="window.autoSplitAdminItemCodeInputs()">
+        </div>
+        <div class="col-6">
+            <label class="small text-primary fw-bold">醫院資材碼 (訂單自動匹配)</label>
+            <input type="text" class="form-control fw-bold text-primary border-primary" id="editItemAssetCode" placeholder="如: 95501008">
+        </div>
+    `;
+};
+
+// 當使用者在「長固代號」貼上含有 `/` 的字串 (如 86-18-00022-4 / 95501008) 時，即時自動將資材碼切分到右欄
+window.autoSplitAdminItemCodeInputs = function() {
+    const intInput = document.getElementById('editItemInternalCode');
+    const astInput = document.getElementById('editItemAssetCode');
+    if (!intInput || !astInput) return;
+
+    const val = intInput.value || '';
+    if (/[\/／\|]/.test(val) && typeof window.splitCombinedCodePair === 'function') {
+        const res = window.splitCombinedCodePair(val, astInput.value || '');
+        if (res.wasSplit) {
+            intInput.value = res.internalCode;
+            astInput.value = res.assetCode;
+            showToast(`✨ 已自動將長固代號「${res.internalCode}」與資材碼「${res.assetCode}」分開填入！`);
+        }
+    }
+};
+
+// 手動觸發一鍵拆分整理並同步至訂單
+window.manualTriggerSplitCodeMigration = async function() {
+    showLoading("🔄 正在掃描並拆分整理所有報價品項與訂單之「長固代號 / 醫院資材碼」...");
+    try {
+        if (typeof window.autoMigrateCombinedCodesInDb === 'function') {
+            await window.autoMigrateCombinedCodesInDb(false);
+        }
+        hideLoading();
+    } catch (e) {
+        hideLoading();
+        alert("整理失敗：" + e.message);
+    }
+};
+
 window.renderAdminItems = debounce(function() { 
-    const f = document.getElementById('admItemFilterSelect').value; 
-    const t = (document.getElementById('admItemSearch').value || '').toLowerCase(); 
-    let arr = globalCatalog; 
+    window.ensureSplitItemCodeInputs();
+
+    const f = document.getElementById('admItemFilterSelect')?.value || ''; 
+    const t = (document.getElementById('admItemSearch')?.value || '').toLowerCase(); 
+    let arr = globalCatalog || []; 
+
+    // 確保記憶體中若仍有未拆分的代碼立即拆分
+    arr.forEach(p => {
+        if (typeof window.splitCombinedCodePair === 'function' && (/[\/／\|]/.test(p.internalCode || '') || /[\/／\|]/.test(p.assetCode || ''))) {
+            const sr = window.splitCombinedCodePair(p.internalCode, p.assetCode);
+            p.internalCode = sr.internalCode;
+            p.assetCode = sr.assetCode;
+        }
+    });
     
     if(f) arr = arr.filter(p => p.clientName === f); 
     if(t) arr = arr.filter(p =>
@@ -927,21 +991,65 @@ window.renderAdminItems = debounce(function() {
         String(p.assetCode||'').toLowerCase().includes(t)
     ); 
     
-    document.getElementById('admItemList').innerHTML = arr.length ? arr.map(p => `<div class="item-row bg-white d-flex justify-content-between align-items-center shadow-sm"><div><div class="fw-bold text-dark fs-6 mb-2">${p.productName} <span class="badge bg-secondary ms-1">${p.internalCode||''}</span></div><div class="d-flex align-items-center"><span class="badge bg-light text-dark border me-2 align-self-center">${p.clientName}</span><div class="bg-success text-white px-2 py-1 rounded shadow-sm d-inline-block"><span class="fw-bold">NT$ ${p.price}</span></div><span class="text-muted small fw-bold ms-1">/ ${p.unit}</span></div></div><button class="btn btn-outline-primary btn-sm fw-bold px-3 ms-2" onclick="openAdminItemModal(${p.rowIndex})">📝</button></div>`).join('') : '<div class="text-center text-muted py-4">查無對應品項</div>'; 
+    const listEl = document.getElementById('admItemList');
+    if (!listEl) return;
+
+    listEl.innerHTML = arr.length ? arr.map(p => {
+        const intBadge = p.internalCode
+            ? `<span class="badge bg-secondary ms-1">長固: ${escapeQuotes(p.internalCode)}</span>`
+            : '';
+        const astBadge = p.assetCode
+            ? `<span class="badge bg-info text-dark ms-1">資材碼: ${escapeQuotes(p.assetCode)}</span>`
+            : `<span class="badge bg-light text-muted border ms-1">未設資材碼</span>`;
+
+        return `
+        <div class="item-row bg-white d-flex justify-content-between align-items-center shadow-sm">
+            <div>
+                <div class="fw-bold text-dark fs-6 mb-2">
+                    ${escapeQuotes(p.productName)} ${intBadge} ${astBadge}
+                </div>
+                <div class="d-flex align-items-center flex-wrap gap-1">
+                    <span class="badge bg-light text-dark border me-1 align-self-center">${escapeQuotes(p.clientName)}</span>
+                    <div class="bg-success text-white px-2 py-1 rounded shadow-sm d-inline-block">
+                        <span class="fw-bold">NT$ ${p.price}</span>
+                    </div>
+                    <span class="text-muted small fw-bold ms-1">/ ${escapeQuotes(p.unit)}</span>
+                </div>
+            </div>
+            <button class="btn btn-outline-primary btn-sm fw-bold px-3 ms-2" onclick="openAdminItemModal(${p.rowIndex})">📝</button>
+        </div>`;
+    }).join('') : '<div class="text-center text-muted py-4">查無對應品項</div>'; 
 }, 300);
 
 window.openAdminItemModal = function(idx) { 
+    window.ensureSplitItemCodeInputs();
+
     const m = document.getElementById('editItemModal'); 
     const ipt = document.getElementById('editItemClientDisplay'); 
+    const astInput = document.getElementById('editItemAssetCode');
+
     if(idx) { 
         const p = globalCatalog.find(x => x.rowIndex === idx); 
         if (!p) return;
+
+        // 自動拆分舊有合併代碼，確保兩個欄位各自填入乾淨的值
+        let cleanInt = p.internalCode || '';
+        let cleanAst = p.assetCode || '';
+        if (typeof window.splitCombinedCodePair === 'function') {
+            const sr = window.splitCombinedCodePair(cleanInt, cleanAst);
+            cleanInt = sr.internalCode;
+            cleanAst = sr.assetCode;
+            p.internalCode = cleanInt;
+            p.assetCode = cleanAst;
+        }
+
         document.getElementById('editItemRowIndex').value = idx; 
         ipt.value = p.clientName; 
         document.getElementById('editItemClientVal').value = p.clientName; 
         ipt.onclick = null; ipt.classList.remove('fake-input-btn'); 
         document.getElementById('editItemName').value = p.productName; 
-        document.getElementById('editItemInternalCode').value = p.internalCode || ''; 
+        document.getElementById('editItemInternalCode').value = cleanInt; 
+        if (astInput) astInput.value = cleanAst;
         document.getElementById('editItemUnit').value = p.unit; 
         document.getElementById('editItemPrice').value = p.price; 
     } else { 
@@ -951,6 +1059,7 @@ window.openAdminItemModal = function(idx) {
         ipt.onclick = triggerItemClientSelect; ipt.classList.add('fake-input-btn'); 
         document.getElementById('editItemName').value = ''; 
         document.getElementById('editItemInternalCode').value = ''; 
+        if (astInput) astInput.value = '';
         document.getElementById('editItemUnit').value = '式'; 
         document.getElementById('editItemPrice').value = ''; 
     } 
@@ -968,16 +1077,24 @@ window.triggerItemClientSelect = function() {
 
 window.submitEditItemOptimistic = function() { 
     const btn = event ? event.currentTarget : null;
+    window.ensureSplitItemCodeInputs();
 
     const idx = document.getElementById('editItemRowIndex').value; 
     const client = (document.getElementById('editItemClientVal').value || document.getElementById('editItemClientDisplay').value || '').trim(); 
     const name = document.getElementById('editItemName').value.trim(); 
-    const internalCode = document.getElementById('editItemInternalCode').value.trim(); 
+    let internalCode = (document.getElementById('editItemInternalCode')?.value || '').trim(); 
+    let assetCode = (document.getElementById('editItemAssetCode')?.value || '').trim();
     const unit = document.getElementById('editItemUnit').value.trim() || '式'; 
     const priceStr = String(document.getElementById('editItemPrice').value || '').replace(/[^0-9.-]/g, ''); 
     
     if(!client || !name || priceStr === '' || isNaN(Number(priceStr))) return alert('客戶名稱、品名與單價皆為必填！'); 
     if(window.lockButton(btn)) return; // 防連點保護
+
+    if (typeof window.splitCombinedCodePair === 'function') {
+        const sr = window.splitCombinedCodePair(internalCode, assetCode);
+        internalCode = sr.internalCode;
+        assetCode = sr.assetCode;
+    }
 
     const isEdit = !!idx;
     const targetRowIndex = isEdit 
@@ -985,7 +1102,6 @@ window.submitEditItemOptimistic = function() {
         : (typeof window.getNextCatalogRowIndex === 'function' ? window.getNextCatalogRowIndex() : (globalCatalog.length + 2));
 
     const existingItem = isEdit ? globalCatalog.find(x => x.rowIndex === targetRowIndex) : null;
-    const assetCode = existingItem ? (existingItem.assetCode || '') : '';
 
     const payload = { 
         isEdit: isEdit,
@@ -1011,17 +1127,48 @@ window.submitEditItemOptimistic = function() {
             price: Number(priceStr) 
         }); 
     } 
+
+    // 同步將最新設定的「醫院資材碼」與「長固代號」回填至該客戶目前未結案的訂單中
+    const normTargetName = String(name).replace(/\s+/g, '').toLowerCase();
+    (globalOrders || []).forEach(ord => {
+        if (!ord || ord.client !== client || ord.status === '已作廢' || ord.status === '作廢' || ord.status === '已結案') return;
+        let items = [];
+        try { items = JSON.parse(ord.jsonStr || '[]'); } catch (e) { return; }
+        let changed = false;
+        items.forEach(itm => {
+            const normItmName = String(itm.name || '').replace(/\s+/g, '').toLowerCase();
+            if (normItmName === normTargetName) {
+                if (assetCode && itm.code !== assetCode) {
+                    itm.code = assetCode;
+                    changed = true;
+                }
+                if (internalCode && itm.internalCode !== internalCode) {
+                    itm.internalCode = internalCode;
+                    changed = true;
+                }
+            }
+        });
+        if (changed) {
+            ord.jsonStr = JSON.stringify(items);
+            try {
+                if (typeof supabaseClient !== 'undefined') {
+                    supabaseClient.from('orders').update({ json_str: ord.jsonStr }).eq('row_idx', ord.rowIdx).then();
+                }
+            } catch (e) {}
+        }
+    });
     
     window.renderAdminItems(); 
+    if (typeof window.renderOrderList === 'function') window.renderOrderList();
     bootstrap.Modal.getOrCreateInstance(document.getElementById('editItemModal')).hide(); 
     
     pushToSyncQueue('saveAdminItem', payload, () => {
-        showToast("✅ 合約報價品項已成功儲存至資料庫");
+        showToast("✅ 報價品項（長固代號 ＆ 醫院資材碼）已獨立儲存並同步更新訂單！");
     }); 
 };
 
 // ============================================================================
-// 【項目 1 全新子模組】管理員後台 ＞ 🏭 進貨品項 (直接管理「庫存管理」工作表與 Supabase inventory)
+// 品項與客戶編輯 ＞ 🏭 進貨品項 (直接管理「庫存管理」工作表與 Supabase inventory)
 // ============================================================================
 window.populateAdminPurchaseSupplierFilter = function() {
     const supSet = new Set();
@@ -1168,14 +1315,12 @@ window.submitAdminPurchaseItemOptimistic = function() {
     const cost = costStr === '' ? 0 : Number(costStr);
     if (isNaN(cost)) return alert("進貨成本格式不正確！");
 
-    // 若新增時名稱已存在於庫存表，提醒使用者
     if (!oldName && (globalInventory || []).some(x => x.name === name)) {
         if (!confirm(`品名「${name}」已存在於進貨品項清單中，確定要直接覆蓋更新其資料嗎？`)) return;
     }
 
     if (window.lockButton(btn)) return;
 
-    // 若未手填資材碼，自動從報價品項 (globalCatalog) 收集同名商品的資材碼
     if (!assetCodeCombined) {
         const matchedAssets = [...new Set(
             (globalCatalog || [])
