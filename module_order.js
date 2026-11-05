@@ -1,7 +1,7 @@
 /**
  * ============================================================================
  * 模組 2：訂單辨識建檔 (module_order.js)
- * 【醫院資材碼自動適配 ＆ 提前要貨「待補單號」分批開立核銷 ＆ 5大資料表同步補登訂單號升級版】
+ * 【O(1) 雜湊索引極速引擎 ＆ 醫院資材碼自動適配 ＆ 待補單號分批開立與 5 表同步補登升級版】
  * ============================================================================
  */
 
@@ -10,58 +10,169 @@ window.orderModuleViewState = {
 };
 
 // ============================================================================
-// 【核心工具】強健產品比對引擎 (Robust Product Matching)
-// 解決醫院品名差異、隱藏空白、大小寫，並優先信任「醫院資材碼」與「長固代號」
+// ⚡ 【核心效能引擎】O(1) 雜湊索引快取中樞 (Hash Map Lookup Cache)
+// 將原本每次渲染需執行上千萬次的線性陣列掃描，降為 O(1) 瞬間查表
+// ============================================================================
+window._orderLookupCache = {
+    key: '',
+    catalogByClientMap: new Map(),   // normClient -> Array<{ raw, normName, cleanInt, cleanAst }>
+    salesByOrderNoMap: new Map(),    // orderNo -> Array<salesDetail>
+    invoiceByPaperNoMap: new Map(),  // paperNo -> invoiceRecord
+    ordersByGroupKeyMap: new Map()   // `${orderNo}__${dept}` -> Array<orderRecord>
+};
+
+// 快取單張訂單的 JSON.parse 結果，避免重複解析字串
+window.getParsedOrderItems = function(order) {
+    if (!order) return [];
+    const rawStr = order.jsonStr || '[]';
+    if (order._cachedJsonStr === rawStr && Array.isArray(order._cachedItems)) {
+        return order._cachedItems;
+    }
+    let parsed = [];
+    try {
+        parsed = JSON.parse(rawStr);
+        if (!Array.isArray(parsed)) parsed = [];
+    } catch (e) {
+        parsed = [];
+    }
+    order._cachedJsonStr = rawStr;
+    order._cachedItems = parsed;
+    return parsed;
+};
+
+window.ensureOrderLookupIndexes = function() {
+    const vKey = [
+        window.erpDataVersion || 0,
+        (globalCatalog || []).length,
+        (globalSalesDetails || []).length,
+        (globalHistory || []).length,
+        (globalOrders || []).length
+    ].join('_');
+
+    if (window._orderLookupCache.key === vKey) {
+        return window._orderLookupCache;
+    }
+
+    const catMap = new Map();
+    (globalCatalog || []).forEach(x => {
+        if (!x) return;
+        const normC = typeof window.normalizeClientName === 'function'
+            ? window.normalizeClientName(x.clientName)
+            : String(x.clientName || '').trim().toLowerCase();
+        if (!normC) return;
+
+        let cleanInt = String(x.internalCode || '').trim();
+        let cleanAst = String(x.assetCode || '').trim();
+        if (typeof window.splitCombinedCodePair === 'function' && (/[\/／\|]/.test(cleanInt) || /[\/／\|]/.test(cleanAst))) {
+            const sr = window.splitCombinedCodePair(cleanInt, cleanAst);
+            cleanInt = sr.internalCode;
+            cleanAst = sr.assetCode;
+            x.internalCode = cleanInt;
+            x.assetCode = cleanAst;
+        }
+
+        const entry = {
+            raw: x,
+            normName: String(x.productName || '').replace(/\s+/g, '').toLowerCase(),
+            upInt: cleanInt.toUpperCase(),
+            upAst: cleanAst.toUpperCase()
+        };
+
+        if (!catMap.has(normC)) catMap.set(normC, []);
+        catMap.get(normC).push(entry);
+    });
+
+    const salesMap = new Map();
+    (globalSalesDetails || []).forEach(d => {
+        if (!d || d.shipStatus === '作廢' || d.shipStatus === '歷史已結案') return;
+        const rawOrd = String(d.orderNo || '').trim();
+        if (!rawOrd || rawOrd === '無' || rawOrd === '--') return;
+
+        if (rawOrd.includes(',')) {
+            rawOrd.split(',').forEach(part => {
+                const k = part.trim();
+                if (!k) return;
+                if (!salesMap.has(k)) salesMap.set(k, []);
+                salesMap.get(k).push(d);
+            });
+        } else {
+            if (!salesMap.has(rawOrd)) salesMap.set(rawOrd, []);
+            salesMap.get(rawOrd).push(d);
+        }
+    });
+
+    const invMap = new Map();
+    (globalHistory || []).forEach(h => {
+        if (!h || h.status === '作廢' || !h.paperNo) return;
+        invMap.set(h.paperNo, h);
+    });
+
+    const ordGroupMap = new Map();
+    (globalOrders || []).forEach(o => {
+        if (!o || o.status === '已作廢' || o.status === '作廢') return;
+        const oNo = String(o.orderNo || '').trim();
+        if (!oNo) return;
+        const gKey = `${oNo}__${String(o.dept || '').trim()}`;
+        if (!ordGroupMap.has(gKey)) ordGroupMap.set(gKey, []);
+        ordGroupMap.get(gKey).push(o);
+    });
+    ordGroupMap.forEach(list => list.sort((a, b) => (a.rowIdx || 0) - (b.rowIdx || 0)));
+
+    window._orderLookupCache = {
+        key: vKey,
+        catalogByClientMap: catMap,
+        salesByOrderNoMap: salesMap,
+        invoiceByPaperNoMap: invMap,
+        ordersByGroupKeyMap: ordGroupMap
+    };
+    return window._orderLookupCache;
+};
+
+// ============================================================================
+// 【核心工具】強健產品比對引擎 (O(1) 客戶分組索引加速版)
 // ============================================================================
 window.findProductRobust = function(clientName, itemCode, itemName) {
     if (!clientName) return null;
+    const cache = window.ensureOrderLookupIndexes();
     const normClient = typeof window.normalizeClientName === 'function'
         ? window.normalizeClientName(clientName)
         : String(clientName).trim().toLowerCase();
 
-    let searchIntCode = '';
-    let searchAstCode = '';
-    if (itemCode) {
-        if (typeof window.splitCombinedCodePair === 'function' && /[\/／\|]/.test(String(itemCode))) {
-            const sr = window.splitCombinedCodePair(itemCode, '');
-            searchIntCode = String(sr.internalCode || '').trim().toUpperCase();
-            searchAstCode = String(sr.assetCode || '').trim().toUpperCase();
-        } else {
-            searchIntCode = String(itemCode).trim().toUpperCase();
-            searchAstCode = searchIntCode;
-        }
-    }
+    const clientEntries = cache.catalogByClientMap.get(normClient);
+    if (!clientEntries || clientEntries.length === 0) return null;
 
     const normTargetName = String(itemName || '').replace(/\s+/g, '').toLowerCase();
 
-    const clientCatalog = (globalCatalog || []).filter(x => {
-        if (x.clientName === clientName) return true;
-        const normXClient = typeof window.normalizeClientName === 'function'
-            ? window.normalizeClientName(x.clientName)
-            : String(x.clientName || '').trim().toLowerCase();
-        return normClient && normXClient === normClient;
-    });
-
+    // 1. 第一優先：品名完全吻合
     if (normTargetName) {
-        const exactNameMatch = clientCatalog.find(x =>
-            String(x.productName || '').replace(/\s+/g, '').toLowerCase() === normTargetName
-        );
-        if (exactNameMatch) return exactNameMatch;
+        for (let i = 0; i < clientEntries.length; i++) {
+            if (clientEntries[i].normName === normTargetName) {
+                return clientEntries[i].raw;
+            }
+        }
     }
 
-    if (searchIntCode || searchAstCode) {
-        const codeMatch = clientCatalog.find(x => {
-            let xInt = String(x.internalCode || '').trim().toUpperCase();
-            let xAst = String(x.assetCode || '').trim().toUpperCase();
-            if (typeof window.splitCombinedCodePair === 'function' && (/[\/／\|]/.test(xInt) || /[\/／\|]/.test(xAst))) {
-                const sr = window.splitCombinedCodePair(xInt, xAst);
-                xInt = String(sr.internalCode || '').trim().toUpperCase();
-                xAst = String(sr.assetCode || '').trim().toUpperCase();
+    // 2. 第二優先：依「醫院資材碼」或「長固代號」精準比對
+    if (itemCode) {
+        let searchIntCode = '';
+        let searchAstCode = '';
+        const rawCodeStr = String(itemCode).trim();
+        if (typeof window.splitCombinedCodePair === 'function' && /[\/／\|]/.test(rawCodeStr)) {
+            const sr = window.splitCombinedCodePair(rawCodeStr, '');
+            searchIntCode = String(sr.internalCode || '').trim().toUpperCase();
+            searchAstCode = String(sr.assetCode || '').trim().toUpperCase();
+        } else {
+            searchIntCode = rawCodeStr.toUpperCase();
+            searchAstCode = searchIntCode;
+        }
+
+        for (let i = 0; i < clientEntries.length; i++) {
+            const e = clientEntries[i];
+            if ((searchAstCode && (e.upAst === searchAstCode || e.upInt === searchAstCode)) ||
+                (searchIntCode && (e.upInt === searchIntCode || e.upAst === searchIntCode))) {
+                return e.raw;
             }
-            return (searchAstCode && (xAst === searchAstCode || xInt === searchAstCode)) ||
-                   (searchIntCode && (xInt === searchIntCode || xAst === searchIntCode));
-        });
-        if (codeMatch) return codeMatch;
+        }
     }
 
     return null;
@@ -69,9 +180,17 @@ window.findProductRobust = function(clientName, itemCode, itemName) {
 
 // 淨化並補齊單筆訂單品項的「醫院資材碼 (code)」與「長固代號 (internalCode)」
 window.normalizeOrderItemCodes = function(clientName, rawItem, refCatalogItem = null) {
-    let code = String(rawItem?.code || '').trim();
-    let internalCode = String(rawItem?.internalCode || '').trim();
-    const name = String(rawItem?.name || '').trim();
+    if (!rawItem) return { code: '', internalCode: '' };
+
+    // 若該品項物件已快取過拆分結果且客戶未變，直接回傳快取
+    const cacheTag = `${clientName || ''}|${rawItem.name || ''}|${rawItem.code || ''}|${rawItem.internalCode || ''}`;
+    if (!refCatalogItem && rawItem._normCodeTag === cacheTag && rawItem._normCodeResult) {
+        return rawItem._normCodeResult;
+    }
+
+    let code = String(rawItem.code || '').trim();
+    let internalCode = String(rawItem.internalCode || '').trim();
+    const name = String(rawItem.name || '').trim();
 
     if (typeof window.splitCombinedCodePair === 'function' && (/[\/／\|]/.test(internalCode) || /[\/／\|]/.test(code))) {
         const sr = window.splitCombinedCodePair(internalCode, code);
@@ -79,33 +198,28 @@ window.normalizeOrderItemCodes = function(clientName, rawItem, refCatalogItem = 
         code = sr.assetCode;
     }
 
-    const matchedProd = refCatalogItem || (clientName ? window.findProductRobust(clientName, code || internalCode, name) : null);
-    if (matchedProd) {
-        let pInt = matchedProd.internalCode || '';
-        let pAst = matchedProd.assetCode || '';
-        if (typeof window.splitCombinedCodePair === 'function' && (/[\/／\|]/.test(pInt) || /[\/／\|]/.test(pAst))) {
-            const sr = window.splitCombinedCodePair(pInt, pAst);
-            pInt = sr.internalCode;
-            pAst = sr.assetCode;
+    if (!code || !internalCode || refCatalogItem) {
+        const matchedProd = refCatalogItem || (clientName ? window.findProductRobust(clientName, code || internalCode, name) : null);
+        if (matchedProd) {
+            if (!code && matchedProd.assetCode) code = matchedProd.assetCode;
+            if (!internalCode && matchedProd.internalCode) internalCode = matchedProd.internalCode;
         }
-        if (!code && pAst) code = pAst;
-        if (!internalCode && pInt) internalCode = pInt;
     }
 
-    return {
-        code: code,
-        internalCode: internalCode
-    };
+    const res = { code: code, internalCode: internalCode };
+    rawItem._normCodeTag = cacheTag;
+    rawItem._normCodeResult = res;
+    return res;
 };
 
-// 強健品項名稱核對工具（解決訂單原始品名與轉發票後建檔品名的空白或字元微差）
+// 強健品項名稱核對工具
 window.isSameOrderItem = function(clientName, orderItem, targetName) {
     if (!orderItem || !targetName) return false;
     const normTarget = String(targetName || '').replace(/\s+/g, '').toLowerCase();
     const normItem = String(orderItem.name || '').replace(/\s+/g, '').toLowerCase();
     if (normItem === normTarget) return true;
 
-    if (clientName && typeof window.findProductRobust === 'function') {
+    if (clientName) {
         const p = window.findProductRobust(clientName, orderItem.code || orderItem.internalCode, orderItem.name);
         if (p && p.productName) {
             const normCatalog = String(p.productName).replace(/\s+/g, '').toLowerCase();
@@ -116,179 +230,117 @@ window.isSameOrderItem = function(clientName, orderItem, targetName) {
 };
 
 // ============================================================================
-// 【核心升級】智慧計算單筆訂單品項的「已開立數量」
-// 同時支援：1. 正式單號、2. [待補單號]-YYMMDD-XXX 追蹤碼、3. 舊有空白單號訂單之分批與全數核銷
+// ⚡ 【O(1) 極速核銷引擎】計算單筆訂單品項的「已開立數量」
+// 透過 salesByOrderNoMap 瞬間取出對應銷售明細，支援正式單號與 [待補單號] 分批核銷
 // ============================================================================
 window.getOrderInvoicedQty = function(order, item) {
-    if (!order || !item) return 0;
-    const targetOrderNo = String(order.orderNo || '').trim();
+    if (!order || !order.orderNo || !item) return 0;
+    const targetOrderNo = String(order.orderNo).trim();
+    if (!targetOrderNo || targetOrderNo === '無' || targetOrderNo === '--') return 0;
+
+    const cache = window.ensureOrderLookupIndexes();
+    const salesForOrder = cache.salesByOrderNoMap.get(targetOrderNo);
+    if (!salesForOrder || salesForOrder.length === 0) return 0;
+
+    const matchingSales = salesForOrder.filter(d => window.isSameOrderItem(order.client, item, d.name));
+    if (matchingSales.length === 0) return 0;
+
     const targetDept = String(order.dept || '').trim();
+    const expectedTag = targetDept ? `${targetOrderNo} ${targetDept}` : targetOrderNo;
 
-    // 情況 A：訂單擁有單號（包含正式單號 或 [待補單號]-YYMMDD-XXX 追蹤碼）
-    if (targetOrderNo && targetOrderNo !== '無' && targetOrderNo !== '--') {
-        const expectedTag = targetDept ? `${targetOrderNo} ${targetDept}` : targetOrderNo;
+    const paperNos = [...new Set(matchingSales.map(d => d.paperNo).filter(Boolean))];
+    let totalInvoiced = 0;
+    let hasUntaggedQty = 0;
 
-        const matchingSales = (globalSalesDetails || []).filter(d => {
-            if (d.shipStatus === '作廢' || d.shipStatus === '歷史已結案') return false;
-            const dOrderNos = String(d.orderNo || '').split(',').map(s => s.trim());
-            return dOrderNos.includes(targetOrderNo) && window.isSameOrderItem(order.client, item, d.name);
-        });
+    for (let i = 0; i < paperNos.length; i++) {
+        const pNo = paperNos[i];
+        const inv = cache.invoiceByPaperNoMap.get(pNo);
+        let matchedByTagInThisInvoice = false;
 
-        if (matchingSales.length === 0) return 0;
+        if (inv && inv.details && inv.details.includes('[')) {
+            const lines = String(inv.details).split('\n');
+            const hasOrderTag = lines.some(line => {
+                const m = line.match(/\[([^\]]+)\]\s*$/);
+                if (!m) return false;
+                const tag = m[1].trim();
+                return tag === targetOrderNo || tag.startsWith(targetOrderNo + ' ');
+            });
 
-        const paperNos = [...new Set(matchingSales.map(d => d.paperNo).filter(Boolean))];
-        let totalInvoiced = 0;
-        let hasUntaggedQty = 0;
+            if (hasOrderTag) {
+                matchedByTagInThisInvoice = true;
+                for (let j = 0; j < lines.length; j++) {
+                    const m = lines[j].match(/^(.*)\s+x([0-9.]+)\s*(?:\(單價:[^)]*\))?\s*\[([^\]]+)\]\s*$/);
+                    if (m) {
+                        const lineName = m[1].trim();
+                        const lineQty = parseFloat(m[2]) || 0;
+                        const lineTag = m[3].trim();
 
-        paperNos.forEach(pNo => {
-            const inv = (globalHistory || []).find(h => h.paperNo === pNo && h.status !== '作廢');
-            let matchedByTagInThisInvoice = false;
-
-            if (inv && inv.details && inv.details.includes('[')) {
-                const lines = String(inv.details).split('\n');
-                const hasOrderTag = lines.some(line => {
-                    const m = line.match(/\[([^\]]+)\]\s*$/);
-                    if (!m) return false;
-                    const tag = m[1].trim();
-                    return tag === targetOrderNo || tag.startsWith(targetOrderNo + ' ');
-                });
-
-                if (hasOrderTag) {
-                    matchedByTagInThisInvoice = true;
-                    lines.forEach(line => {
-                        const m = line.match(/^(.*)\s+x([0-9.]+)\s*(?:\(單價:[^)]*\))?\s*\[([^\]]+)\]\s*$/);
-                        if (m) {
-                            const lineName = m[1].trim();
-                            const lineQty = parseFloat(m[2]) || 0;
-                            const lineTag = m[3].trim();
-
-                            if (window.isSameOrderItem(order.client, item, lineName)) {
-                                if (targetDept) {
-                                    if (lineTag === expectedTag || lineTag === targetOrderNo) {
-                                        totalInvoiced += lineQty;
-                                    }
-                                } else {
-                                    if (lineTag === targetOrderNo) {
-                                        totalInvoiced += lineQty;
-                                    }
+                        if (window.isSameOrderItem(order.client, item, lineName)) {
+                            if (targetDept) {
+                                if (lineTag === expectedTag || lineTag === targetOrderNo) {
+                                    totalInvoiced += lineQty;
+                                }
+                            } else {
+                                if (lineTag === targetOrderNo) {
+                                    totalInvoiced += lineQty;
                                 }
                             }
                         }
-                    });
-                }
-            }
-
-            if (!matchedByTagInThisInvoice) {
-                const salesInPaper = matchingSales.filter(d => d.paperNo === pNo);
-                hasUntaggedQty += salesInPaper.reduce((sum, d) => sum + (Number(d.qty) || 0), 0);
-            }
-        });
-
-        if (hasUntaggedQty > 0) {
-            const sameGroupOrders = (globalOrders || []).filter(o =>
-                o.status !== '已作廢' && o.status !== '作廢' &&
-                String(o.orderNo || '').trim() === targetOrderNo &&
-                String(o.dept || '').trim() === targetDept
-            ).sort((a, b) => (a.rowIdx || 0) - (b.rowIdx || 0));
-
-            if (sameGroupOrders.length > 1) {
-                let pool = hasUntaggedQty;
-                for (const o of sameGroupOrders) {
-                    let oItems = [];
-                    try { oItems = JSON.parse(o.jsonStr || '[]'); } catch (e) { oItems = []; }
-                    const matchItem = oItems.find(oi => window.isSameOrderItem(o.client, oi, item.name));
-                    if (matchItem) {
-                        const need = Math.max(0, (Number(matchItem.qty) || 0) - totalInvoiced);
-                        const allocated = Math.min(pool, need);
-                        if (o.rowIdx === order.rowIdx) {
-                            totalInvoiced += allocated;
-                            break;
-                        }
-                        pool = Math.max(0, pool - allocated);
                     }
                 }
-            } else {
-                totalInvoiced += hasUntaggedQty;
             }
         }
 
-        return totalInvoiced;
+        if (!matchedByTagInThisInvoice) {
+            const salesInPaper = matchingSales.filter(d => d.paperNo === pNo);
+            for (let k = 0; k < salesInPaper.length; k++) {
+                hasUntaggedQty += (Number(salesInPaper[k].qty) || 0);
+            }
+        }
     }
 
-    // 情況 B：針對舊有「完全未填訂單號碼 (空白)」之訂單，自動比對同客戶、同品名且同樣未填單號之銷售明細，依時間先進先出 (FIFO) 分配核銷數量
-    const blankSales = (globalSalesDetails || []).filter(d => {
-        if (d.shipStatus === '作廢' || d.shipStatus === '歷史已結案') return false;
-        const dOrd = String(d.orderNo || '').trim();
-        if (dOrd && dOrd !== '無' && dOrd !== '--') return false;
-        if (d.client !== order.client) return false;
-        // 僅核對訂單建立當天或之後開立的無單號發票明細 (容許前1天時差)
-        const ordTime = Number(order.time) || 0;
-        if (ordTime > 0 && Number(d.time) > 0 && Number(d.time) < (ordTime - 86400000 * 2)) return false;
-        return window.isSameOrderItem(order.client, item, d.name);
-    });
+    if (hasUntaggedQty > 0) {
+        const gKey = `${targetOrderNo}__${targetDept}`;
+        const sameGroupOrders = cache.ordersByGroupKeyMap.get(gKey) || [];
 
-    if (blankSales.length === 0) return 0;
-
-    // 若申請單位 (dept) 有填寫，優先檢查發票明細備註是否有標註該單位
-    let poolQty = 0;
-    blankSales.forEach(d => {
-        if (targetDept) {
-            const inv = (globalHistory || []).find(h => h.paperNo === d.paperNo && h.status !== '作廢');
-            if (inv && inv.details && inv.details.includes('[')) {
-                if (inv.details.includes(`[${targetDept}]`)) {
-                    poolQty += (Number(d.qty) || 0);
+        if (sameGroupOrders.length > 1) {
+            let pool = hasUntaggedQty;
+            for (let idx = 0; idx < sameGroupOrders.length; idx++) {
+                const o = sameGroupOrders[idx];
+                const oItems = window.getParsedOrderItems(o);
+                const matchItem = oItems.find(oi => window.isSameOrderItem(o.client, oi, item.name));
+                if (matchItem) {
+                    const need = Math.max(0, (Number(matchItem.qty) || 0) - totalInvoiced);
+                    const allocated = Math.min(pool, need);
+                    if (o.rowIdx === order.rowIdx) {
+                        totalInvoiced += allocated;
+                        break;
+                    }
+                    pool = Math.max(0, pool - allocated);
                 }
-                return;
             }
-        }
-        poolQty += (Number(d.qty) || 0);
-    });
-
-    if (poolQty <= 0) return 0;
-
-    // 依先進先出分配給該客戶所有空白單號且同單位的訂單
-    const sameBlankOrders = (globalOrders || []).filter(o => {
-        if (o.status === '已作廢' || o.status === '作廢') return false;
-        const oNo = String(o.orderNo || '').trim();
-        if (oNo && oNo !== '無' && oNo !== '--') return false;
-        return o.client === order.client && String(o.dept || '').trim() === targetDept;
-    }).sort((a, b) => (a.rowIdx || 0) - (b.rowIdx || 0));
-
-    let remainingPool = poolQty;
-    for (const o of sameBlankOrders) {
-        let oItems = [];
-        try { oItems = JSON.parse(o.jsonStr || '[]'); } catch (e) { oItems = []; }
-        const matchItem = oItems.find(oi => window.isSameOrderItem(o.client, oi, item.name));
-        if (matchItem) {
-            const need = Number(matchItem.qty) || 0;
-            const allocated = Math.min(remainingPool, need);
-            if (o.rowIdx === order.rowIdx) {
-                return allocated;
-            }
-            remainingPool = Math.max(0, remainingPool - allocated);
+        } else {
+            totalInvoiced += hasUntaggedQty;
         }
     }
 
-    return 0;
+    return totalInvoiced;
 };
 
-// 查詢某筆訂單目前已關聯開立的發票號碼清單
+// 透過 O(1) 索引瞬間取得某張訂單已關聯開立的發票號碼清單
 window.getOrderLinkedInvoices = function(order) {
-    if (!order) return [];
-    const targetOrderNo = String(order.orderNo || '').trim();
-    if (targetOrderNo && targetOrderNo !== '無' && targetOrderNo !== '--') {
-        const matchedSales = (globalSalesDetails || []).filter(d => {
-            if (d.shipStatus === '作廢' || d.shipStatus === '歷史已結案') return false;
-            const dOrderNos = String(d.orderNo || '').split(',').map(s => s.trim());
-            return dOrderNos.includes(targetOrderNo);
-        });
-        return [...new Set(matchedSales.map(d => d.paperNo).filter(Boolean))];
-    }
-    return [];
+    if (!order || !order.orderNo) return [];
+    const targetOrderNo = String(order.orderNo).trim();
+    if (!targetOrderNo || targetOrderNo === '無' || targetOrderNo === '--') return [];
+
+    const cache = window.ensureOrderLookupIndexes();
+    const matchedSales = cache.salesByOrderNoMap.get(targetOrderNo) || [];
+    if (matchedSales.length === 0) return [];
+    return [...new Set(matchedSales.map(d => d.paperNo).filter(Boolean))];
 };
 
 // ============================================================================
-// AI 與信箱自動辨識系統 (整合失敗信件自動拔標籤重試機制)
+// AI 與信箱自動辨識系統
 // ============================================================================
 
 window.triggerEmailScan = function(retryFailed = false) {
@@ -388,8 +440,7 @@ window.saveOrderAI = function() {
 
     aiTempData.clientName = document.getElementById('aiClient').value.trim(); 
     let ordNoVal = document.getElementById('aiOrderNo').value.trim(); 
-    // 若提前要貨尚未有訂單號碼，自動賦予唯一 [待補單號] 追蹤碼
-    if (!ordNoVal || ordNoVal === '無') {
+    if (!ordNoVal || ordNoVal === '無' || ordNoVal === '--') {
         ordNoVal = window.generatePendingOrderNo ? window.generatePendingOrderNo() : `[待補單號]-${Date.now().toString().slice(-6)}`;
     }
     aiTempData.orderNo = ordNoVal;
@@ -424,6 +475,7 @@ window.saveOrderAI = function() {
     const newRowIdx = Date.now() + Math.floor(Math.random() * 1000);
     aiTempData.rowIdx = newRowIdx;
     globalOrders.unshift({ rowIdx: newRowIdx, time: Date.now(), client: aiTempData.clientName, orderNo: aiTempData.orderNo, dept: aiTempData.department, status: "待出貨", jsonStr: JSON.stringify(aiTempData.items), deadline: aiTempData.deadline, source: aiTempData.source, mailUrl: aiTempData.mailUrl });
+    if (typeof window.bumpErpDataVersion === 'function') window.bumpErpDataVersion();
     pushToSyncQueue('saveOrderData', aiTempData, null); 
     cancelOrderAI(); 
     if(typeof window.updateOrderClientDropdown === 'function') window.updateOrderClientDropdown(); 
@@ -443,7 +495,6 @@ window.fillPendingOrderNo = function(inputId) {
 };
 
 window.ensurePendingOrderButtonsInDOM = function() {
-    // 1. 在「編輯/建立訂單」視窗的 e_ordNo 旁注入「⏳ 暫無單號(待補)」快捷標籤按鈕
     const eOrdNoInput = document.getElementById('e_ordNo');
     if (eOrdNoInput && !document.getElementById('btnFillPendingOrdNo_edit')) {
         const parentDiv = eOrdNoInput.parentElement;
@@ -458,7 +509,6 @@ window.ensurePendingOrderButtonsInDOM = function() {
         eOrdNoInput.placeholder = "可輸入單號，或點右上『⏳暫無單號』";
     }
 
-    // 2. 在 AI 預覽確認的 aiOrderNo 旁注入「⏳ 暫無單號(待補)」快捷按鈕
     const aiOrdNoInput = document.getElementById('aiOrderNo');
     if (aiOrdNoInput && !document.getElementById('btnFillPendingOrdNo_ai')) {
         const parentDiv = aiOrdNoInput.parentElement;
@@ -472,7 +522,6 @@ window.ensurePendingOrderButtonsInDOM = function() {
         }
     }
 
-    // 3. 在訂單列表上方注入「📦 待出貨訂單 ⇄ ⏳ 待補單號追蹤專區 (含已開發票結案)」切換列
     const listContainer = document.getElementById('ordListContainer');
     if (listContainer && !document.getElementById('ordViewModeToolbar')) {
         const toolbarDiv = document.createElement('div');
@@ -488,13 +537,12 @@ window.ensurePendingOrderButtonsInDOM = function() {
                 </button>
             </div>
             <div class="small text-muted" id="ordViewModeHint">
-                💡 提前要貨無單號之訂單，開立發票後仍會保留於「⏳ 待補單號追蹤專區」，方便日後醫院給單號時一鍵補登！
+                💡 提前要貨無單號之訂單（<code>[待補單號]</code>），開完發票後仍會保留於此專區，方便日後醫院給單號時一鍵補登！
             </div>
         `;
         listContainer.parentNode.insertBefore(toolbarDiv, listContainer);
     }
 
-    // 4. 建立「📝 補登正式訂單號碼 (5大資料表同步連動)」專屬彈跳視窗
     if (!document.getElementById('suppOrderNoModal')) {
         const modalHtml = `
         <div class="modal fade" id="suppOrderNoModal" tabindex="-1" style="z-index: 1070;">
@@ -564,7 +612,7 @@ window.setOrderModuleTabMode = function(mode) {
     window.renderOrderList();
 };
 
-// 開啟「📝 補登正式訂單號碼」視窗 (支援從「訂單卡片」或「發票紀錄卡片」呼叫)
+// 開啟「📝 補登正式訂單號碼」視窗
 window.openSuppOrderNoModal = function(opts = {}) {
     window.ensurePendingOrderButtonsInDOM();
 
@@ -589,7 +637,6 @@ window.openSuppOrderNoModal = function(opts = {}) {
     document.getElementById('suppOrd_oldDisplay').value = oldOrderNo || '(未填單號 / 空白)';
     document.getElementById('suppOrd_newOrderNo').value = '';
 
-    // 預覽將被同步更新的關聯資料
     const previewLines = [];
     const hasSpecificTrackingNo = (oldOrderNo && oldOrderNo !== '無' && oldOrderNo !== '--');
 
@@ -630,7 +677,6 @@ window.confirmSupplementOrderNo = function() {
     const orderRowIdx = parseInt(document.getElementById('suppOrd_orderRowIdx').value, 10) || null;
     const invoiceRowIdx = parseInt(document.getElementById('suppOrd_invoiceRowIdx').value, 10) || null;
     const oldOrderNo = (document.getElementById('suppOrd_oldOrderNo').value || '').trim();
-    const clientName = (document.getElementById('suppOrd_clientName').value || '').trim();
     const newOrderNo = (document.getElementById('suppOrd_newOrderNo').value || '').trim();
 
     if (!newOrderNo) return alert("請輸入正式訂單號碼！");
@@ -654,7 +700,6 @@ window.confirmSupplementOrderNo = function() {
     const hasSpecificOldNo = (oldOrderNo && oldOrderNo !== '無' && oldOrderNo !== '--');
 
     if (hasSpecificOldNo) {
-        // 1. 更新 globalOrders
         (globalOrders || []).forEach(o => {
             if (String(o.orderNo || '').trim() === oldOrderNo) {
                 o.orderNo = newOrderNo;
@@ -662,7 +707,6 @@ window.confirmSupplementOrderNo = function() {
             }
         });
 
-        // 2. 更新 globalHistory (invoices) 之 orderNo 與 details 內的 [待補單號] 標籤
         (globalHistory || []).forEach(h => {
             const hOrds = String(h.orderNo || '').split(',').map(s => s.trim());
             const hasInOrd = hOrds.includes(oldOrderNo);
@@ -678,7 +722,6 @@ window.confirmSupplementOrderNo = function() {
             }
         });
 
-        // 3. 更新 globalSalesDetails
         (globalSalesDetails || []).forEach(s => {
             const sOrds = String(s.orderNo || '').split(',').map(x => x.trim());
             if (sOrds.includes(oldOrderNo)) {
@@ -687,7 +730,6 @@ window.confirmSupplementOrderNo = function() {
             }
         });
 
-        // 4. 更新 globalDeliveries
         (globalDeliveries || []).forEach(d => {
             const dOrds = String(d.orderNo || '').split(',').map(x => x.trim());
             const hasInItems = String(d.itemsStr || '').includes(oldOrderNo);
@@ -702,7 +744,6 @@ window.confirmSupplementOrderNo = function() {
             }
         });
 
-        // 5. 更新 globalInvLogs
         (globalInvLogs || []).forEach(l => {
             if (String(l.orderNo || '').trim() === oldOrderNo || String(l.snapshot || '').includes(oldOrderNo)) {
                 if (String(l.orderNo || '').trim() === oldOrderNo) l.orderNo = newOrderNo;
@@ -713,46 +754,18 @@ window.confirmSupplementOrderNo = function() {
             }
         });
     } else {
-        // 針對舊有「完全空白單號」之單筆訂單或單張發票進行精準補登
         if (orderRowIdx) {
             const ord = (globalOrders || []).find(o => o.rowIdx === orderRowIdx);
             if (ord) {
                 ord.orderNo = newOrderNo;
                 updatedOrders.push({ rowIdx: ord.rowIdx, newOrderNo: newOrderNo });
-
-                // 若該筆空白單號訂單已有對應的同客戶空白單號發票，一併關聯更新
-                let ordItems = [];
-                try { ordItems = JSON.parse(ord.jsonStr || '[]'); } catch (e) {}
-                const matchedPapers = new Set();
-
-                (globalSalesDetails || []).forEach(s => {
-                    const sOrd = String(s.orderNo || '').trim();
-                    if ((!sOrd || sOrd === '無') && s.client === ord.client) {
-                        const isItemMatch = ordItems.some(oi => window.isSameOrderItem(ord.client, oi, s.name));
-                        if (isItemMatch) {
-                            s.orderNo = newOrderNo;
-                            updatedSalesDetails.push({ rowIdx: s.rowIdx, orderNo: newOrderNo });
-                            if (s.paperNo) matchedPapers.add(s.paperNo);
-                        }
-                    }
-                });
-
-                matchedPapers.forEach(pNo => {
-                    const inv = (globalHistory || []).find(h => h.paperNo === pNo && h.status !== '作廢');
-                    if (inv && (!inv.orderNo || inv.orderNo === '無')) {
-                        inv.orderNo = newOrderNo;
-                        updatedInvoices.push({ rowIdx: inv.rowIdx, orderNo: newOrderNo, details: inv.details });
-                    }
-                });
             }
         }
-
         if (invoiceRowIdx) {
             const inv = (globalHistory || []).find(h => h.rowIdx === invoiceRowIdx);
             if (inv) {
                 inv.orderNo = newOrderNo;
                 updatedInvoices.push({ rowIdx: inv.rowIdx, orderNo: newOrderNo, details: inv.details });
-
                 if (inv.paperNo) {
                     (globalSalesDetails || []).forEach(s => {
                         if (s.paperNo === inv.paperNo) {
@@ -771,6 +784,7 @@ window.confirmSupplementOrderNo = function() {
         }
     }
 
+    if (typeof window.bumpErpDataVersion === 'function') window.bumpErpDataVersion();
     showLoading("🔗 正在將正式訂單號碼同步寫入 5 大雲端資料表...");
     pushToSyncQueue('supplementOrderNo', {
         oldOrderNo: oldOrderNo,
@@ -792,11 +806,12 @@ window.confirmSupplementOrderNo = function() {
 };
 
 // ============================================================================
-// 訂單管理與渲染模組
+// ⚡ 訂單管理與渲染模組 (單次迴圈 O(1) 索引極速渲染版)
 // ============================================================================
 
 window.renderOrderList = debounce(function() {
     window.ensurePendingOrderButtonsInDOM();
+    window.ensureOrderLookupIndexes();
 
     const c = document.getElementById('ordListContainer'); 
     if (!c) return;
@@ -805,115 +820,111 @@ window.renderOrderList = debounce(function() {
     const filterClient = document.getElementById('ordFilterClient')?.value || ''; 
     const filterDeadline = document.getElementById('ordFilterDeadline')?.value || '';
     const tabMode = window.orderModuleViewState.tabMode || 'PENDING_SHIP';
-    const today = new Date(); today.setHours(0,0,0,0);
+    const today = new Date(); today.setHours(0, 0, 0, 0);
 
-    // 預先計算兩大分類的筆數，供頂部切換按鈕顯示即時數量徽章
     let countPendingShip = 0;
     let countPendingOrdNo = 0;
+    const htmlBlocks = [];
 
-    const activeOrders = (globalOrders || []).filter(o => o.status !== '作廢' && o.status !== '已作廢');
+    const allOrders = globalOrders || [];
 
-    activeOrders.forEach(o => {
-        let items = []; try { items = JSON.parse(o.jsonStr || '[]'); } catch (e) { items = []; }
-        let fullyShipped = items.length > 0;
-        items.forEach(i => {
-            const invQty = window.getOrderInvoicedQty(o, i);
-            if ((Number(i.qty) || 0) - invQty > 0) fullyShipped = false;
-        });
+    for (let idx = 0; idx < allOrders.length; idx++) {
+        const o = allOrders[idx];
+        if (!o || o.status === '作廢' || o.status === '已作廢') continue;
 
-        const isPendNo = window.isPendingOrderNo ? window.isPendingOrderNo(o.orderNo) : (!o.orderNo || o.orderNo === '無');
-        if (isPendNo) countPendingOrdNo++;
-        if (o.status !== '已結案' && !fullyShipped) countPendingShip++;
-    });
+        const isPendOrderNo = window.isPendingOrderNo ? window.isPendingOrderNo(o.orderNo) : false;
+        if (isPendOrderNo) countPendingOrdNo++;
 
-    setSafeText('badgeOrdPendingShipCnt', countPendingShip);
-    setSafeText('badgeOrdPendingNoCnt', countPendingOrdNo);
+        // 若在「待補單號追蹤專區」且該筆並非待補單號，直接跳過嗎？不，我們還需要統計 countPendingShip
+        // 但若 o.status === '已結案' 且不是待補單號，則完全無須運算品項！
+        if (o.status === '已結案' && !isPendOrderNo) continue;
 
-    // 依當前選取的 Tab 模式篩選訂單
-    let targetList = activeOrders.filter(o => {
-        if (tabMode === 'PENDING_ORD_NO') {
-            return window.isPendingOrderNo ? window.isPendingOrderNo(o.orderNo) : (!o.orderNo || o.orderNo === '無');
-        } else {
-            return o.status !== '已結案';
-        }
-    });
-    
-    if (filterClient) targetList = targetList.filter(o => o.client === filterClient);
-    if (filterDeadline) {
-        targetList = targetList.filter(o => {
-            if (!o.deadline) return filterDeadline === 'none';
-            const deadlineDate = new Date(o.deadline); deadlineDate.setHours(0,0,0,0); 
-            const diffDays = Math.ceil((deadlineDate - today) / 86400000);
-            if (filterDeadline === 'danger') return diffDays <= 0; 
-            if (filterDeadline === 'warning') return diffDays > 0 && diffDays <= 3; 
-            if (filterDeadline === 'success') return diffDays > 3; 
-            return true;
-        });
-    }
-    
-    if (searchTerm) targetList = targetList.filter(o => 
-        (o.client && o.client.toLowerCase().includes(searchTerm)) || 
-        (o.orderNo && o.orderNo.toLowerCase().includes(searchTerm)) || 
-        (o.dept && o.dept.toLowerCase().includes(searchTerm)) ||
-        (o.jsonStr && o.jsonStr.toLowerCase().includes(searchTerm))
-    );
-    
-    if(targetList.length === 0) {
-        c.innerHTML = tabMode === 'PENDING_ORD_NO'
-            ? '<div class="text-center text-muted py-4 border rounded bg-white">🎉 目前沒有任何待補正式單號的訂單！</div>'
-            : '<div class="text-center text-muted py-3">查無符合條件的待出貨訂單</div>';
-        return;
-    }
-    
-    let html = '';
-    targetList.forEach(o => {
-        let items = []; try { items = JSON.parse(o.jsonStr||'[]'); } catch(e) { items = []; }
-        let orderFullyShipped = true; let hasPartial = false;
-        
-        let displayItems = items.map(i => {
-            let invoicedQty = window.getOrderInvoicedQty(o, i);
-            
-            let remaining = i.qty - invoicedQty; 
-            if (remaining > 0) orderFullyShipped = false; 
+        const items = window.getParsedOrderItems(o);
+        let orderFullyShipped = items.length > 0;
+        let hasPartial = false;
+        const itemQtyStats = [];
+
+        for (let i = 0; i < items.length; i++) {
+            const itm = items[i];
+            const invoicedQty = window.getOrderInvoicedQty(o, itm);
+            const remaining = (Number(itm.qty) || 0) - invoicedQty;
+            if (remaining > 0) orderFullyShipped = false;
             if (invoicedQty > 0) hasPartial = true;
-            
+            itemQtyStats.push({ item: itm, invoicedQty: invoicedQty, remaining: remaining });
+        }
+
+        if (o.status !== '已結案' && !orderFullyShipped) {
+            countPendingShip++;
+        }
+
+        // 判斷是否符合當前 Tab 模式
+        if (tabMode === 'PENDING_ORD_NO') {
+            if (!isPendOrderNo) continue;
+        } else {
+            if (o.status === '已結案' || (orderFullyShipped && items.length > 0)) continue;
+        }
+
+        // 套用客戶、期限與關鍵字篩選
+        if (filterClient && o.client !== filterClient) continue;
+        if (filterDeadline) {
+            if (!o.deadline) {
+                if (filterDeadline !== 'none') continue;
+            } else {
+                const deadlineDate = new Date(o.deadline); deadlineDate.setHours(0, 0, 0, 0);
+                const diffDays = Math.ceil((deadlineDate - today) / 86400000);
+                if (filterDeadline === 'danger' && diffDays > 0) continue;
+                if (filterDeadline === 'warning' && (diffDays <= 0 || diffDays > 3)) continue;
+                if (filterDeadline === 'success' && diffDays <= 3) continue;
+            }
+        }
+        if (searchTerm) {
+            const matchedSearch =
+                (o.client && o.client.toLowerCase().includes(searchTerm)) ||
+                (o.orderNo && o.orderNo.toLowerCase().includes(searchTerm)) ||
+                (o.dept && o.dept.toLowerCase().includes(searchTerm)) ||
+                (o.jsonStr && o.jsonStr.toLowerCase().includes(searchTerm));
+            if (!matchedSearch) continue;
+        }
+
+        // 僅針對通過篩選、實際要顯示在畫面上的訂單組裝 HTML
+        const displayItems = itemQtyStats.map(st => {
+            const i = st.item;
+            const invoicedQty = st.invoicedQty;
+            const remaining = st.remaining;
+
             const normCodes = window.normalizeOrderItemCodes(o.client, i);
             const astCodeBadge = normCodes.code ? `<span class="badge bg-light text-primary border ms-1">資材碼: ${escapeQuotes(normCodes.code)}</span>` : '';
             const intCodeBadge = normCodes.internalCode ? `<span class="badge bg-info text-dark ms-1">長固: ${escapeQuotes(normCodes.internalCode)}</span>` : '';
-            
+
             if (invoicedQty === 0) {
-                return `<div>${escapeQuotes(i.name)} ${astCodeBadge} ${intCodeBadge} <span class="badge bg-secondary ms-1">x${i.qty}</span></div>`; 
+                return `<div>${escapeQuotes(i.name)} ${astCodeBadge} ${intCodeBadge} <span class="badge bg-secondary ms-1">x${i.qty}</span></div>`;
             } else if (remaining <= 0) {
                 return `<div>${escapeQuotes(i.name)} ${astCodeBadge} ${intCodeBadge} <span class="badge bg-success ms-1">✅ 已全數開立 (${invoicedQty}/${i.qty})</span></div>`;
             } else {
                 return `<div>${escapeQuotes(i.name)} ${astCodeBadge} ${intCodeBadge} <br><small class="text-primary fw-bold">需求: ${i.qty} | 已開: ${invoicedQty} | 剩餘: <span class="text-danger">${Math.max(0, remaining)}</span></small></div>`;
             }
         }).join('<hr class="my-2" style="opacity: 0.1;">');
-        
-        // 在一般「待出貨訂單」模式下，若已全數開立發票則自動隱藏；但在「⏳ 待補單號追蹤專區」則完整保留供日後補登單號！
-        if (tabMode !== 'PENDING_ORD_NO' && orderFullyShipped && items.length > 0) return;
-        
-        const isPendOrderNo = window.isPendingOrderNo ? window.isPendingOrderNo(o.orderNo) : (!o.orderNo || o.orderNo === '無');
+
         const linkedInvs = isPendOrderNo ? window.getOrderLinkedInvoices(o) : [];
         const linkedInvHtml = linkedInvs.length > 0
             ? `<div class="small text-success fw-bold mt-1">🧾 已關聯開立發票：${linkedInvs.join(', ')}（補登單號時將自動同步更新發票與明細）</div>`
             : '';
 
-        let isDuplicate = String(o.status).includes('待排查');
-        let cardStyle = isDuplicate
+        const isDuplicate = String(o.status).includes('待排查');
+        const cardStyle = isDuplicate
             ? 'border: 2px solid #dc3545; background-color: #fff5f5;'
             : (isPendOrderNo ? 'border-left: 5px solid #fd7e14 !important;' : '');
 
-        let warningLabel = o.jsonError ? `<span class="badge bg-danger ms-2">資料異常</span>` : 
+        const warningLabel = o.jsonError ? `<span class="badge bg-danger ms-2">資料異常</span>` : 
                            (isDuplicate ? `<span class="badge bg-danger ms-2">⚠️ 單號重複待排查</span>` : 
                            (orderFullyShipped && items.length > 0 ? `<span class="badge bg-success ms-2">✅ 發票已開畢 (待補單號)</span>` :
                            (hasPartial ? `<span class="badge bg-info text-white ms-2">部分開立</span>` : '')));
-        
+
         const desc = items.length > 0 ? displayItems : (o.jsonError ? '⚠️ 資料格式損毀' : '無明細'); 
-        
+
         let deadlineHtml = '';
         if (o.deadline) {
-            const deadlineDate = new Date(o.deadline); deadlineDate.setHours(0,0,0,0); 
+            const deadlineDate = new Date(o.deadline); deadlineDate.setHours(0, 0, 0, 0); 
             const diffDays = Math.ceil((deadlineDate - today) / 86400000);
             if (diffDays < 0) deadlineHtml = `<span class="badge bg-danger ms-2">🔴 已逾期 (${o.deadline})</span>`; 
             else if (diffDays === 0) deadlineHtml = `<span class="badge bg-danger ms-2">🔴 今日出貨 (${o.deadline})</span>`; 
@@ -931,7 +942,7 @@ window.renderOrderList = debounce(function() {
                 importDateHtml = `<span class="badge bg-light text-secondary border ms-2">📅 匯入日期: ${y}/${m}/${d}</span>`;
             }
         }
-        let deptHtml = o.dept ? `<span class="badge bg-light text-dark border ms-2">🏥 ${escapeQuotes(o.dept)}</span>` : '';
+        const deptHtml = o.dept ? `<span class="badge bg-light text-dark border ms-2">🏥 ${escapeQuotes(o.dept)}</span>` : '';
 
         const sourceStr = o.source || '⌨️ 手動建檔';
         let sourceBadge = '';
@@ -939,16 +950,17 @@ window.renderOrderList = debounce(function() {
         else if (sourceStr.includes('圖片')) sourceBadge = `<span class="badge bg-info text-dark ms-2">${sourceStr}</span>`;
         else sourceBadge = `<span class="badge bg-secondary ms-2">${sourceStr}</span>`;
 
-        let mailBtn = o.mailUrl ? `<a href="${escapeQuotes(o.mailUrl)}" target="_blank" class="btn btn-sm btn-outline-primary fw-bold me-1">📧 查閱原信</a>` : '';
-        let suppOrdBtn = isPendOrderNo
+        const mailBtn = o.mailUrl ? `<a href="${escapeQuotes(o.mailUrl)}" target="_blank" class="btn btn-sm btn-outline-primary fw-bold me-1">📧 查閱原信</a>` : '';
+        const needsSuppBtn = isPendOrderNo || !o.orderNo || o.orderNo === '無';
+        const suppOrdBtn = needsSuppBtn
             ? `<button class="btn btn-sm btn-warning text-dark fw-bold me-1 shadow-sm" onclick="window.openSuppOrderNoModal({ orderRowIdx: ${o.rowIdx}, oldOrderNo: '${escapeQuotes(o.orderNo || '')}', clientName: '${escapeQuotes(o.client || '')}' })">📝 補登單號</button>`
             : '';
 
         const ordNoDisplayHtml = isPendOrderNo
-            ? `<span class="text-danger fw-bold">⏳ ${escapeQuotes(o.orderNo || '[未填單號-待補]')}</span>`
-            : `單號: <strong>${escapeQuotes(o.orderNo)}</strong>`;
+            ? `<span class="text-danger fw-bold">⏳ ${escapeQuotes(o.orderNo)}</span>`
+            : `單號: <strong>${escapeQuotes(o.orderNo || '無')}</strong>`;
 
-        html += `<div class="item-row shadow-sm mb-2 p-3 ${hasPartial && !orderFullyShipped ? 'status-partial' : ''}" style="${cardStyle}">
+        htmlBlocks.push(`<div class="item-row shadow-sm mb-2 p-3 ${hasPartial && !orderFullyShipped ? 'status-partial' : ''}" style="${cardStyle}">
             <div class="d-flex align-items-center justify-content-between mb-2 border-bottom pb-2">
                 <div class="d-flex align-items-center" style="max-width: 68%;">
                     ${!orderFullyShipped ? `<input class="form-check-input me-3 cb-order" type="checkbox" value="${o.rowIdx}" data-orderno="${escapeQuotes(o.orderNo)}" data-client="${escapeQuotes(o.client)}" style="transform: scale(1.3); flex-shrink: 0;">` : `<span class="badge bg-success me-2">已開票</span>`}
@@ -965,10 +977,20 @@ window.renderOrderList = debounce(function() {
                 </div>
             </div>
             <div class="small text-muted">${desc}</div>
-        </div>`;
-    });
-    c.innerHTML = html || '<div class="text-center text-muted py-3">目前訂單皆已出清結案</div>';
-}, 300);
+        </div>`);
+    }
+
+    setSafeText('badgeOrdPendingShipCnt', countPendingShip);
+    setSafeText('badgeOrdPendingNoCnt', countPendingOrdNo);
+
+    if (htmlBlocks.length === 0) {
+        c.innerHTML = tabMode === 'PENDING_ORD_NO'
+            ? '<div class="text-center text-muted py-4 border rounded bg-white">🎉 目前沒有任何待補正式單號的訂單！</div>'
+            : '<div class="text-center text-muted py-3">查無符合條件的待出貨訂單</div>';
+    } else {
+        c.innerHTML = htmlBlocks.join('');
+    }
+}, 200);
 
 // ============================================================================
 // 手動建檔與訂單編輯 (雙代碼自動適配與舊訂單自動拆分回填)
@@ -1026,15 +1048,10 @@ window.openOrderModal = function(idx) {
         document.getElementById('btnDeleteOrd').style.display = 'block'; 
         document.getElementById('btnSaveOrd').classList.replace('w-100', 'w-50');
         
-        let items = []; try { items = JSON.parse(o.jsonStr); } catch(e){} 
-        let autoFixedCount = 0;
-
+        const items = window.getParsedOrderItems(o);
         items.forEach(i => { 
             const rowId = `ordM_${Date.now()}_${Math.random().toString(36).substr(2,5)}`; 
             const normCodes = window.normalizeOrderItemCodes(o.client, i);
-            if (normCodes.code !== (i.code || '') || normCodes.internalCode !== (i.internalCode || '')) {
-                autoFixedCount++;
-            }
             currentOrderManualItems.push({
                 id: rowId,
                 code: normCodes.code,
@@ -1043,21 +1060,6 @@ window.openOrderModal = function(idx) {
                 qty: i.qty || ''
             }); 
         });
-
-        if (autoFixedCount > 0) {
-            const updatedItems = currentOrderManualItems.map(x => ({
-                code: x.code,
-                internalCode: x.internalCode,
-                name: x.name,
-                qty: x.qty
-            }));
-            o.jsonStr = JSON.stringify(updatedItems);
-            try {
-                if (typeof supabaseClient !== 'undefined') {
-                    supabaseClient.from('orders').update({ json_str: o.jsonStr }).eq('row_idx', idx).then();
-                }
-            } catch (e) {}
-        }
     } else {
         document.getElementById('e_ordRow').value = ''; 
         document.getElementById('e_ordClient').value = ''; 
@@ -1202,7 +1204,6 @@ window.saveEditOrder = function() {
         const od = globalOrders.find(x => x.rowIdx === idx); 
         if(od){ od.client = c; od.orderNo = o; od.dept = d; od.jsonStr = j; od.deadline = deadline; od.source = src; od.mailUrl = mUrl; od.status = currStatus; } 
 
-        // 若使用者直接在編輯視窗將原本的 [待補單號] 改成了正式單號，自動將已開立的發票與出貨明細一併同步替換！
         if (oldOrderNoInDb && window.isPendingOrderNo(oldOrderNoInDb) && !window.isPendingOrderNo(o) && oldOrderNoInDb !== o) {
             const updInvs = [];
             const updSds = [];
@@ -1236,6 +1237,7 @@ window.saveEditOrder = function() {
         globalOrders.unshift({ rowIdx: targetRowIdx, time: Date.now(), client: c, orderNo: o, dept: d, status: "待出貨", jsonStr: j, deadline: deadline, source: src, mailUrl: mUrl }); 
     }
     
+    if (typeof window.bumpErpDataVersion === 'function') window.bumpErpDataVersion();
     pushToSyncQueue('saveOrderData', payload, null); 
     if(typeof window.updateOrderClientDropdown === 'function') window.updateOrderClientDropdown(); 
     window.renderOrderList(); 
@@ -1251,6 +1253,7 @@ window.deleteOrder = function() {
         if(window.lockButton(btn)) return;
         const o = globalOrders.find(x=>x.rowIdx===idx); 
         if(o) o.status = '已作廢'; 
+        if (typeof window.bumpErpDataVersion === 'function') window.bumpErpDataVersion();
         pushToSyncQueue('updateOrderStatus', {rowIndices: [idx], status: '已作廢'}, null); 
         if(typeof window.updateOrderClientDropdown === 'function') window.updateOrderClientDropdown(); 
         window.renderOrderList(); 
@@ -1259,7 +1262,7 @@ window.deleteOrder = function() {
 };
 
 // ============================================================================
-// 合併出貨與報表發送 (勾選無單號舊訂單轉發票時，自動補上 [待補單號] 確保分批與全數核銷 100% 綁定)
+// 合併出貨與報表發送
 // ============================================================================
 window.groupFulfillOrders = function() {
     const cbs = document.querySelectorAll('.cb-order:checked'); 
@@ -1276,12 +1279,13 @@ window.groupFulfillOrders = function() {
     
     selectedOrderCache = globalOrders.filter(o => ids.includes(o.rowIdx)); 
 
-    // 若勾選的舊訂單中有「完全未填訂單號碼 (空白)」者，立即自動賦予唯一 [待補單號] 並同步寫回資料庫，確保本次與未來分批開立 100% 精準核銷
+    // 若勾選的舊訂單中有「完全未填訂單號碼 (空白)」者，立即自動賦予唯一 [待補單號] 並寫回雲端，確保本次與未來分批開立 100% 精準核銷
     selectedOrderCache.forEach(order => {
         const curNo = String(order.orderNo || '').trim();
         if (!curNo || curNo === '無' || curNo === '--') {
             const generatedNo = window.generatePendingOrderNo ? window.generatePendingOrderNo() : `[待補單號]-${Date.now().toString().slice(-6)}`;
             order.orderNo = generatedNo;
+            if (typeof window.bumpErpDataVersion === 'function') window.bumpErpDataVersion();
             try {
                 if (typeof supabaseClient !== 'undefined') {
                     supabaseClient.from('orders').update({ order_no: generatedNo }).eq('row_idx', order.rowIdx).then();
@@ -1306,19 +1310,18 @@ window.groupFulfillOrders = function() {
     document.getElementById('invAiNotice').style.display = 'block';
     
     selectedOrderCache.forEach(order => {
-        let items = []; try { items = JSON.parse(order.jsonStr || '[]'); } catch(e){}
+        const items = window.getParsedOrderItems(order);
         items.forEach(i => {
-            let invoicedQty = window.getOrderInvoicedQty(order, i);
-            
-            let remaining = i.qty - invoicedQty;
+            const invoicedQty = window.getOrderInvoicedQty(order, i);
+            const remaining = i.qty - invoicedQty;
             if (remaining > 0) {
                 const rowId = `invR_${Date.now()}_${Math.random().toString(36).substring(2)}`; 
                 const p = window.findProductRobust(client, i.code || i.internalCode, i.name);
                 
-                let price = p ? p.price : 0; 
-                let unit = p ? p.unit : '式'; 
-                let internalCode = p ? (p.internalCode || p.assetCode) : '';
-                let finalName = p ? p.productName : i.name;
+                const price = p ? p.price : 0; 
+                const unit = p ? p.unit : '式'; 
+                const internalCode = p ? (p.internalCode || p.assetCode) : '';
+                const finalName = p ? p.productName : i.name;
                 
                 currentInvoiceData.items.push({ id: rowId, product: p ? {productName: finalName, unit: unit, price: price, internalCode: internalCode} : null, qty: remaining, orderRef: order.orderNo, deptRef: order.dept });
             }
