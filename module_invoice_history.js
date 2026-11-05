@@ -1,7 +1,7 @@
 /**
  * ============================================================================
- * 模組 3：開立發票、歷史紀錄、跨系統比對中心 ＆ 三聯式/二聯式統一發票明細表 (module_invoice_history.js)
- * 【防連點、三聯/二聯字軌與雙月期別智慧攔截、異常單號診斷修正、已覆核專區 ＆ 稅捐處雙明細表旗艦版】
+ * 模組 3：開立發票、歷史紀錄、統計報表五表預覽中心、跨系統比對 ＆ 三聯/二聯發票明細表 (module_invoice_history.js)
+ * 【防連點、待補訂單號連動補登、統計報表5表互動預覽/選印/分享/寄信 ＆ 稅捐處雙明細表旗艦版】
  * ============================================================================
  */
 
@@ -10,7 +10,6 @@
 // ============================================================================
 const TRACK_TYPE_OVERRIDE_STORAGE_KEY = 'changgu_erp_invoice_track_type_overrides_v1';
 
-// 預設已知字軌之聯式對照表
 window.BUILTIN_INVOICE_TRACK_TYPES = {
     // 三聯式字軌
     'EC': 'THREE_PART',
@@ -26,7 +25,6 @@ window.BUILTIN_INVOICE_TRACK_TYPES = {
     'ZZ': 'TWO_PART'
 };
 
-// 預設已知字軌之法定所屬雙月期別對照表 (1-2月、3-4月、5-6月、7-8月、9-10月、11-12月)
 window.BUILTIN_TRACK_BI_MONTH_MAP = {
     'RT': [9, 10],
     'TT': [11, 12],
@@ -59,28 +57,24 @@ window.setTrackTypeOverride = function(track, formType) {
     } catch (e) {}
 };
 
-// 取得某個月份所屬的雙月期別陣列 (例如 10月 -> [9, 10]；6月 -> [5, 6])
 window.getBiMonthPair = function(month) {
     const m = parseInt(month, 10) || 1;
     const startM = (m % 2 === 1) ? m : (m - 1);
     return [startM, startM + 1];
 };
 
-// 判斷某個 2 碼字軌是否屬於目標月份的法定雙月期別 (回傳 { isMatch: boolean, expectedMonths: [m1, m2] | null })
 window.checkTrackPeriodMatch = function(track, targetWestYear, targetMonth) {
     const cleanTrack = String(track || '').trim().toUpperCase();
     if (cleanTrack.length !== 2) return { isMatch: true, expectedMonths: null };
 
     const targetPair = window.getBiMonthPair(targetMonth);
 
-    // 1. 優先檢查內建法定字軌期別表
     if (window.BUILTIN_TRACK_BI_MONTH_MAP[cleanTrack]) {
         const expPair = window.BUILTIN_TRACK_BI_MONTH_MAP[cleanTrack];
         const isMatch = expPair.includes(Number(targetMonth));
         return { isMatch: isMatch, expectedMonths: expPair };
     }
 
-    // 2. 若為未來新字軌，自動統計資料庫中該字軌最常出現的雙月期別 (多數決)
     const pairCounts = {};
     let totalValid = 0;
     (globalHistory || []).forEach(h => {
@@ -105,7 +99,6 @@ window.checkTrackPeriodMatch = function(track, targetWestYear, targetMonth) {
                 dominantKey = k;
             }
         });
-        // 若該字軌有超過 80% 的發票集中在某個雙月期別，則認定該雙月為其法定期別
         if (dominantKey && (maxCnt / totalValid) >= 0.8) {
             const expPair = dominantKey.split('-').map(Number);
             const isMatch = expPair.includes(Number(targetMonth));
@@ -116,7 +109,6 @@ window.checkTrackPeriodMatch = function(track, targetWestYear, targetMonth) {
     return { isMatch: true, expectedMonths: targetPair };
 };
 
-// 根據發票字軌 (或完整發票號碼) 判斷屬於 'THREE_PART' (三聯式) 或 'TWO_PART' (二聯式)
 window.getInvoiceFormTypeByTrack = function(trackOrPaperNo, fallbackTaxId) {
     const cleanStr = String(trackOrPaperNo || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
     const m = cleanStr.match(/^([A-Z]{2})/);
@@ -156,7 +148,6 @@ window.getInvoiceFormTypeByTrack = function(trackOrPaperNo, fallbackTaxId) {
     return 'THREE_PART';
 };
 
-// 計算兩個 6 碼字串的漢明距離 (相差幾個字元)，用於偵測如 528665 vs 525665 的單碼打錯異常
 window.getPrefixHammingDistance = function(strA, strB) {
     const a = String(strA || '');
     const b = String(strB || '');
@@ -338,7 +329,7 @@ window.submitInvoiceOptimistic = function() {
     const btn = event ? event.currentTarget : null;
     if(window.lockButton(btn)) return;
 
-    const orderNo = document.getElementById('invOrderNo').value; 
+    const orderNo = document.getElementById('invOrderNo').value.trim(); 
     const paperNo = document.getElementById('invPaperNo').value.toUpperCase(); 
     const invDateVal = document.getElementById('invDate').value; 
     const invDateTimestamp = invDateVal ? new Date(invDateVal).getTime() : Date.now();
@@ -420,7 +411,7 @@ window.resetInvoiceSystem = function() {
 };
 
 // ============================================================================
-// 歷史紀錄與報表模組 (含三聯式 / 二聯式字軌智慧徽章 ＆ 支援修改發票日期)
+// 歷史紀錄模組 (含三聯式/二聯式字軌智慧徽章 ＆ 待補訂單號碼一鍵補登按鈕)
 // ============================================================================
 window.updateHistoryDropdowns = function() { 
     const staffs = [...new Set(globalHistory.map(h => h.staff || '').filter(x => x))].sort(); 
@@ -455,6 +446,7 @@ window.renderHistory = debounce(function() {
         filtered = filtered.filter(h => 
             (h.client || '').toLowerCase().includes(term) || 
             String(h.paperNo || '').toLowerCase().includes(term) || 
+            String(h.orderNo || '').toLowerCase().includes(term) || 
             (h.details || '').toLowerCase().includes(term)
         );
     }
@@ -481,6 +473,7 @@ window.renderHistory = debounce(function() {
         }
 
         const isBorrowed = String(h.paperNo).startsWith('[借用中]');
+        const isPendOrd = window.isPendingOrderNo ? window.isPendingOrderNo(h.orderNo) : (!h.orderNo || h.orderNo === '無');
         const formType = window.getInvoiceFormTypeByTrack(h.paperNo, h.taxId);
         const formTypeBadge = !isBorrowed && h.paperNo
             ? (formType === 'TWO_PART'
@@ -493,21 +486,28 @@ window.renderHistory = debounce(function() {
             paperNoHtml = isBorrowed ? '<span class="text-danger">⚠️ ' + h.paperNo + '</span>' : '發票: ' + h.paperNo + formTypeBadge;
         }
 
+        const orderNoDisplayHtml = isPendOrd
+            ? `<span class="text-danger fw-bold">⏳ ${escapeQuotes(h.orderNo || '[待補單號]')}</span>`
+            : escapeQuotes(h.orderNo || '--');
+
         let actionBtns = '';
         if (!isVoid) {
             actionBtns += `<button class="btn btn-sm btn-outline-info me-1 fw-bold" onclick="printDeliveryNote(${h.rowIdx})">🖨️ 列印出單</button>`;
             if (isBorrowed) actionBtns += `<button class="btn btn-sm btn-danger me-1 fw-bold" onclick="openSuppInvModal(${h.rowIdx}, '${escapeQuotes(h.paperNo)}')">📝 補登發票</button>`;
+            if (isPendOrd && typeof window.openSuppOrderNoModal === 'function') {
+                actionBtns += `<button class="btn btn-sm btn-warning text-dark me-1 fw-bold shadow-sm" onclick="window.openSuppOrderNoModal({ invoiceRowIdx: ${h.rowIdx}, oldOrderNo: '${escapeQuotes(h.orderNo || '')}', clientName: '${escapeQuotes(h.client || '')}' })">📝 補登訂單號</button>`;
+            }
             actionBtns += `<button class="btn btn-sm btn-outline-danger me-1" onclick="voidInv(${h.rowIdx}, '${escapeQuotes(h.paperNo)}')">作廢</button>`;
             actionBtns += `<button class="btn btn-sm btn-outline-secondary" onclick="openEditInv(${h.rowIdx})">編輯</button>`;
         }
 
         return `<div class="item-row bg-white shadow-sm p-3 ${isVoid?'status-void':''}">
             <div class="d-flex justify-content-between align-items-start border-bottom pb-2 mb-2">
-                <div><div class="fw-bold fs-6 text-dark">${h.client} ${badgeHTML}</div><div class="small text-muted">單號: ${h.orderNo||'--'} | 開立: ${h.staff}</div></div>
+                <div><div class="fw-bold fs-6 text-dark">${h.client} ${badgeHTML}</div><div class="small text-muted">單號: ${orderNoDisplayHtml} | 開立: ${h.staff}</div></div>
                 <div class="text-end"><div class="badge bg-light text-dark border">${dateStr}</div><div class="small mt-1 fw-bold ${isBorrowed?'text-danger':'text-primary'}">${paperNoHtml}</div></div>
             </div>
             <div class="history-details text-muted mb-3">${h.details}</div>
-            <div class="d-flex justify-content-between align-items-center">
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-1">
                 <div>${actionBtns}</div>
                 <span class="fw-bold text-danger fs-5">$${Number(h.total).toLocaleString()}</span>
             </div>
@@ -677,12 +677,10 @@ window.voidInv = function(idx, pNo) {
     } 
 };
 
-// 升級版「✏️ 編輯發票紀錄」：自動注入「開立日期」欄位，方便直接修正跨期誤植日期或打錯之發票號碼
 window.openEditInv = function(idx, suggestedPaperNo = null, suggestedDateStr = null) { 
     const h = globalHistory.find(x=>x.rowIdx === idx); 
     if(!h) return; 
 
-    // 動態確保 editInvModal 內有「開立日期 (e_invDate)」欄位
     const paperInput = document.getElementById('e_invPaper');
     if (paperInput && !document.getElementById('e_invDate')) {
         const dateWrapper = document.createElement('div');
@@ -751,7 +749,6 @@ window.saveEditInvoice = function() {
         });
     }
 
-    // 同步將更新後的開立日期 (time) 與發票號碼寫入 Supabase
     try {
         if (typeof supabaseClient !== 'undefined') {
             supabaseClient.from('invoices').update({
@@ -781,6 +778,21 @@ window.saveEditInvoice = function() {
     showToast("✅ 發票資料與日期已成功修正並連動更新！");
 };
 
+// ============================================================================
+// 📊 【核心升級】統計報表 — 五表連動預覽、網頁互動、下鑽查詢、多選列印與分享/寄信中心
+// ============================================================================
+window.statReportViewState = {
+    startDate: '',
+    endDate: '',
+    clientFilter: '',
+    staffFilter: '',
+    formTypeFilter: 'ALL', // 'ALL' | 'THREE_PART' | 'TWO_PART'
+    includeVoid: false,
+    searchTerm: '',
+    activeSheet: 'STAT_S1', // 'STAT_S1' (發票總表) | 'STAT_S2' (出貨明細) | 'STAT_S3' (目前庫存表) | 'STAT_S4' (客戶營收分析表) | 'STAT_S5' (品項銷售統計表)
+    drillFilter: null       // { type: 'CLIENT' | 'INVOICE' | 'PRODUCT', value: '', title: '' }
+};
+
 window.setReportDate = function(days) { 
     const e = new Date(); const s = new Date(); 
     s.setDate(s.getDate() - (days - 1)); 
@@ -798,53 +810,1210 @@ window.setReportMonth = function() {
     generateReport(); 
 };
 
+window.setReportQuickPreset = function(preset) {
+    const now = new Date();
+    const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    let sStr = '';
+    let eStr = '';
+
+    if (preset === 'THIS_MONTH') {
+        sStr = fmt(new Date(now.getFullYear(), now.getMonth(), 1));
+        eStr = fmt(new Date(now.getFullYear(), now.getMonth() + 1, 0));
+    } else if (preset === 'LAST_MONTH') {
+        sStr = fmt(new Date(now.getFullYear(), now.getMonth() - 1, 1));
+        eStr = fmt(new Date(now.getFullYear(), now.getMonth(), 0));
+    } else if (preset === 'THIS_QUARTER') {
+        const qStartMonth = Math.floor(now.getMonth() / 3) * 3;
+        sStr = fmt(new Date(now.getFullYear(), qStartMonth, 1));
+        eStr = fmt(now);
+    } else if (preset === 'THIS_YEAR') {
+        sStr = `${now.getFullYear()}-01-01`;
+        eStr = `${now.getFullYear()}-12-31`;
+    }
+
+    if (sStr && eStr) {
+        if (document.getElementById('repStart')) document.getElementById('repStart').value = sStr;
+        if (document.getElementById('repEnd')) document.getElementById('repEnd').value = eStr;
+        window.generateReport();
+    }
+};
+
+// 動態升級「統計報表」頁籤的 KPI 卡片為可點擊互動卡片，並建立「五表預覽與列印中心」全螢幕視窗
+window.enhanceReportTabUI = function() {
+    ['repCount', 'repNet', 'repTotal'].forEach((id, idx) => {
+        const valEl = document.getElementById(id);
+        if (!valEl) return;
+        const cardBox = valEl.parentElement;
+        if (cardBox && !cardBox.dataset.interactiveBound) {
+            cardBox.dataset.interactiveBound = '1';
+            cardBox.style.cursor = 'pointer';
+            cardBox.style.transition = 'transform 0.15s ease, box-shadow 0.15s ease';
+            cardBox.title = '點擊開啟「銷售發票與出貨統計報表 — 五表連動預覽、列印與分享中心」';
+            cardBox.onmouseover = function() {
+                this.style.transform = 'translateY(-2px)';
+                this.style.boxShadow = '0 6px 16px rgba(13,110,253,0.18)';
+            };
+            cardBox.onmouseout = function() {
+                this.style.transform = '';
+                this.style.boxShadow = '';
+            };
+            cardBox.onclick = function() {
+                const defaultSheet = idx === 2 ? 'STAT_S4' : 'STAT_S1';
+                window.openStatReportModal(defaultSheet);
+            };
+            const badgeDiv = document.createElement('div');
+            badgeDiv.className = 'mt-1';
+            badgeDiv.innerHTML = `<span class="badge bg-primary bg-opacity-10 text-primary border border-primary" style="font-size:0.7rem;">📊 點擊預覽五表與列印</span>`;
+            cardBox.appendChild(badgeDiv);
+        }
+    });
+
+    // 在統計報表主按鈕上方注入快捷期間切換與「📊 預覽五表內容 / 選印 / 下載」雙按鈕組
+    const repTotalEl = document.getElementById('repTotal');
+    if (repTotalEl && !document.getElementById('statQuickActionToolbar')) {
+        const kpiRow = repTotalEl.closest('.row');
+        if (kpiRow) {
+            const actionBar = document.createElement('div');
+            actionBar.id = 'statQuickActionToolbar';
+            actionBar.className = 'd-flex flex-wrap justify-content-between align-items-center gap-2 p-2 bg-white border rounded shadow-sm mb-3';
+            actionBar.innerHTML = `
+                <div class="d-flex flex-wrap align-items-center gap-1">
+                    <span class="small fw-bold text-secondary me-1">⚡ 快速期間：</span>
+                    <button type="button" class="btn btn-sm btn-outline-primary fw-bold" onclick="window.setReportQuickPreset('THIS_MONTH')">本月</button>
+                    <button type="button" class="btn btn-sm btn-outline-primary fw-bold" onclick="window.setReportQuickPreset('LAST_MONTH')">上月</button>
+                    <button type="button" class="btn btn-sm btn-outline-primary fw-bold" onclick="window.setReportQuickPreset('THIS_QUARTER')">本季</button>
+                    <button type="button" class="btn btn-sm btn-outline-primary fw-bold" onclick="window.setReportQuickPreset('THIS_YEAR')">今年度</button>
+                </div>
+                <div class="d-flex flex-wrap gap-2">
+                    <button type="button" class="btn btn-primary fw-bold shadow-sm px-3" onclick="window.openStatReportModal('STAT_S1')">
+                        📊 預覽五表內容 / 選印 / 下載 Excel
+                    </button>
+                    <button type="button" class="btn btn-outline-success fw-bold shadow-sm px-3" onclick="window.openEmailModalFromStatReport()">
+                        📧 直接選信箱寄送 Excel
+                    </button>
+                </div>
+            `;
+            kpiRow.parentNode.insertBefore(actionBar, kpiRow.nextSibling);
+        }
+    }
+
+    // 建立「📊 銷售發票與出貨統計報表 — 五表連動預覽與列印中心」全螢幕彈跳視窗
+    if (!document.getElementById('statReportPreviewModal')) {
+        const modalHtml = `
+        <div class="modal fade" id="statReportPreviewModal" tabindex="-1">
+            <div class="modal-dialog modal-fullscreen-lg-down modal-xl" style="max-width: 96vw;">
+                <div class="modal-content border-0 shadow-lg">
+                    <div class="modal-header text-white py-2" style="background: linear-gradient(90deg, #0d6efd 0%, #0a58ca 100%);">
+                        <div>
+                            <h5 class="modal-title fw-bold mb-0">📊 銷售發票與出貨統計報表 — 五表連動預覽、選印與分享中心</h5>
+                            <div class="small opacity-75">即時檢視【1.發票總表】、【2.出貨明細】、【3.目前庫存表】、【4.客戶營收分析表】、【5.品項銷售統計表】，支援點擊下鑽、勾選工作表列印、轉存 PDF、下載 Excel 與寄信！</div>
+                        </div>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body bg-light p-3">
+                        <!-- 頂部：區間搜尋、複合篩選與列印/下載/寄信控制列 -->
+                        <div class="row g-2 mb-3">
+                            <div class="col-12 col-lg-7">
+                                <div class="p-3 bg-white border rounded shadow-sm h-100">
+                                    <!-- 第一排：起訖日期區間 ＋ 快捷期間按鈕 -->
+                                    <div class="d-flex flex-wrap align-items-center gap-2 mb-2 pb-2 border-bottom">
+                                        <span class="small fw-bold text-primary">📅 統計期間：</span>
+                                        <div class="d-flex align-items-center gap-1">
+                                            <input type="date" id="srStartDate" class="form-control form-control-sm fw-bold border-primary" onchange="window.onChangeStatReportModalFilter()">
+                                            <span class="fw-bold text-muted">～</span>
+                                            <input type="date" id="srEndDate" class="form-control form-control-sm fw-bold border-primary" onchange="window.onChangeStatReportModalFilter()">
+                                        </div>
+                                        <div class="btn-group btn-group-sm flex-wrap" role="group">
+                                            <button type="button" class="btn btn-outline-primary fw-bold" onclick="window.setStatReportModalQuickDate('THIS_MONTH')">本月</button>
+                                            <button type="button" class="btn btn-outline-primary fw-bold" onclick="window.setStatReportModalQuickDate('LAST_MONTH')">上月</button>
+                                            <button type="button" class="btn btn-outline-primary fw-bold" onclick="window.setStatReportModalQuickDate('DAYS_30')">近30天</button>
+                                            <button type="button" class="btn btn-outline-primary fw-bold" onclick="window.setStatReportModalQuickDate('THIS_QUARTER')">本季</button>
+                                            <button type="button" class="btn btn-outline-primary fw-bold" onclick="window.setStatReportModalQuickDate('THIS_YEAR')">今年</button>
+                                        </div>
+                                    </div>
+
+                                    <!-- 第二排：客戶、員工、聯式、包含作廢開關、關鍵字搜尋 -->
+                                    <div class="d-flex flex-wrap align-items-center gap-2">
+                                        <select id="srClientFilter" class="form-select form-select-sm fw-bold text-dark" style="max-width: 195px;" onchange="window.onChangeStatReportModalFilter()">
+                                            <option value="">🏢 所有客戶 (全部)</option>
+                                        </select>
+                                        <select id="srStaffFilter" class="form-select form-select-sm fw-bold text-secondary" style="max-width: 135px;" onchange="window.onChangeStatReportModalFilter()">
+                                            <option value="">👤 所有員工</option>
+                                        </select>
+                                        <select id="srFormTypeFilter" class="form-select form-select-sm fw-bold text-secondary" style="max-width: 145px;" onchange="window.onChangeStatReportModalFilter()">
+                                            <option value="ALL">🧾 全部發票聯式</option>
+                                            <option value="THREE_PART">📘 僅三聯式發票</option>
+                                            <option value="TWO_PART">📗 僅二聯式發票</option>
+                                        </select>
+                                        <input type="search" id="srSearchInput" class="form-control form-control-sm fw-bold" style="max-width: 200px;" placeholder="🔍 搜發票、單號、品名..." oninput="window.onChangeStatReportModalFilter()">
+                                        <div class="form-check form-switch mb-0 ms-1">
+                                            <input class="form-check-input" type="checkbox" id="srIncludeVoidSwitch" onchange="window.onChangeStatReportModalFilter()" style="cursor:pointer;">
+                                            <label class="form-check-label small fw-bold text-danger" for="srIncludeVoidSwitch" style="cursor:pointer;">顯示作廢發票</label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 右側：列印前勾選工作表 (單選/多選) ＋ 預覽列印/分享PDF ＋ 下載Excel ＋ 寄信 -->
+                            <div class="col-12 col-lg-5">
+                                <div class="p-3 bg-white border border-primary rounded shadow-sm h-100 d-flex flex-column justify-content-between">
+                                    <div>
+                                        <div class="small fw-bold text-primary mb-1">
+                                            🖨️ 列印前勾選要列印的工作表（可單選或多選）：
+                                            <a href="javascript:void(0)" class="ms-1 text-decoration-none" onclick="window.quickSelectStatPrintSheets('ALL')">[全選五表]</a>
+                                            <a href="javascript:void(0)" class="ms-1 text-decoration-none" onclick="window.quickSelectStatPrintSheets('CORE')">[印總表+分析]</a>
+                                            <a href="javascript:void(0)" class="ms-1 text-decoration-none" onclick="window.quickSelectStatPrintSheets('CURRENT')">[僅印目前頁籤]</a>
+                                        </div>
+                                        <div class="d-flex flex-wrap gap-2 mt-1">
+                                            <label class="form-check-label small fw-bold" style="cursor:pointer;">
+                                                <input type="checkbox" class="form-check-input me-1" id="cbPrintStat_s1" checked>1.發票總表
+                                            </label>
+                                            <label class="form-check-label small fw-bold" style="cursor:pointer;">
+                                                <input type="checkbox" class="form-check-input me-1" id="cbPrintStat_s2" checked>2.出貨明細
+                                            </label>
+                                            <label class="form-check-label small fw-bold" style="cursor:pointer;">
+                                                <input type="checkbox" class="form-check-input me-1" id="cbPrintStat_s3">3.目前庫存
+                                            </label>
+                                            <label class="form-check-label small fw-bold" style="cursor:pointer;">
+                                                <input type="checkbox" class="form-check-input me-1" id="cbPrintStat_s4" checked>4.客戶營收
+                                            </label>
+                                            <label class="form-check-label small fw-bold" style="cursor:pointer;">
+                                                <input type="checkbox" class="form-check-input me-1" id="cbPrintStat_s5">5.品項統計
+                                            </label>
+                                        </div>
+                                    </div>
+                                    <div class="d-flex flex-wrap gap-2 mt-2">
+                                        <button type="button" class="btn btn-primary fw-bold shadow-sm flex-grow-1" onclick="window.printSelectedStatReportSheets()">
+                                            🖨️ 預覽列印 / 📤 分享PDF
+                                        </button>
+                                        <button type="button" class="btn btn-success fw-bold shadow-sm" onclick="window.downloadStatReportExcelDirect()">
+                                            📥 下載Excel (.xlsx)
+                                        </button>
+                                        <button type="button" class="btn btn-dark fw-bold shadow-sm" onclick="window.openEmailModalFromStatReport()">
+                                            📧 寄送報表信箱
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 區間即時 KPI 統計總覽列 -->
+                        <div class="row g-2 mb-3 text-center">
+                            <div class="col-6 col-md-3">
+                                <div class="p-2 bg-white border rounded shadow-sm">
+                                    <div class="small text-muted fw-bold">🧾 總開立張數 (有效發票)</div>
+                                    <div class="fs-5 fw-bold text-dark mt-1" id="srKpiCount">0 張</div>
+                                </div>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <div class="p-2 bg-white border rounded shadow-sm">
+                                    <div class="small text-muted fw-bold">📘 總銷售額 (未稅)</div>
+                                    <div class="fs-5 fw-bold text-primary mt-1" id="srKpiNet">$0</div>
+                                </div>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <div class="p-2 bg-white border rounded shadow-sm">
+                                    <div class="small text-muted fw-bold">📙 總營業稅額 (5%)</div>
+                                    <div class="fs-5 fw-bold text-secondary mt-1" id="srKpiTax">$0</div>
+                                </div>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <div class="p-2 bg-white border rounded shadow-sm" style="border-bottom: 3px solid #dc3545 !important;">
+                                    <div class="small text-danger fw-bold">🔴 總計金額 (含稅)</div>
+                                    <div class="fs-4 fw-bold text-danger mt-1" id="srKpiTotal">$0</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 五大工作表分頁切換列 -->
+                        <div class="d-flex flex-wrap justify-content-between align-items-center bg-white border rounded-top px-3 pt-2 border-bottom-0">
+                            <ul class="nav nav-tabs border-bottom-0" id="srSheetTabs">
+                                <li class="nav-item">
+                                    <button type="button" class="nav-link active fw-bold" id="srTabBtn_STAT_S1" onclick="window.switchStatReportSheet('STAT_S1')">
+                                        📑 1. 發票總表 <span class="badge bg-primary ms-1" id="srBadge_s1">0 張</span>
+                                    </button>
+                                </li>
+                                <li class="nav-item">
+                                    <button type="button" class="nav-link fw-bold" id="srTabBtn_STAT_S2" onclick="window.switchStatReportSheet('STAT_S2')">
+                                        📑 2. 出貨明細 <span class="badge bg-info text-dark ms-1" id="srBadge_s2">0 筆</span>
+                                    </button>
+                                </li>
+                                <li class="nav-item">
+                                    <button type="button" class="nav-link fw-bold" id="srTabBtn_STAT_S3" onclick="window.switchStatReportSheet('STAT_S3')">
+                                        📑 3. 目前庫存表 <span class="badge bg-secondary ms-1" id="srBadge_s3">0 項</span>
+                                    </button>
+                                </li>
+                                <li class="nav-item">
+                                    <button type="button" class="nav-link fw-bold" id="srTabBtn_STAT_S4" onclick="window.switchStatReportSheet('STAT_S4')">
+                                        📑 4. 客戶營收分析表 <span class="badge bg-success ms-1" id="srBadge_s4">0 客戶</span>
+                                    </button>
+                                </li>
+                                <li class="nav-item">
+                                    <button type="button" class="nav-link fw-bold" id="srTabBtn_STAT_S5" onclick="window.switchStatReportSheet('STAT_S5')">
+                                        📑 5. 品項銷售統計表 <span class="badge bg-warning text-dark ms-1" id="srBadge_s5">0 品項</span>
+                                    </button>
+                                </li>
+                            </ul>
+                            <div class="pb-2 d-flex align-items-center gap-2">
+                                <span id="srDrillBanner" style="display:none;"></span>
+                                <span class="small fw-bold text-secondary" id="srPeriodRangeLabel">報表期間：--</span>
+                            </div>
+                        </div>
+
+                        <!-- 工作表內容渲染容器 -->
+                        <div class="bg-white border rounded-bottom shadow-sm p-3" id="srSheetContentContainer" style="min-height: 430px; max-height: 60vh; overflow: auto;">
+                        </div>
+                    </div>
+                    <div class="modal-footer bg-white py-2 d-flex justify-content-between">
+                        <div class="small text-secondary">
+                            💡 <strong>互動秘訣</strong>：點擊「<strong>4.客戶營收分析表</strong>」的客戶名稱可下鑽查看該客戶發票；點擊「<strong>1.發票總表</strong>」的發票號碼可下鑽查看該張發票的出貨與收款狀態！
+                        </div>
+                        <button type="button" class="btn btn-secondary fw-bold px-4" data-bs-dismiss="modal">關閉視窗</button>
+                    </div>
+                </div>
+            </div>
+        </div>`;
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+    }
+};
+
 window.generateReport = function() {
+    window.enhanceReportTabUI();
     if (typeof window.initReconcileCenterUI === 'function') window.initReconcileCenterUI();
 
-    const sVal = document.getElementById('repStart').value; 
-    const eVal = document.getElementById('repEnd').value; 
+    const sEl = document.getElementById('repStart');
+    const eEl = document.getElementById('repEnd');
+    if (!sEl || !eEl) return;
+
+    if (!sEl.value || !eEl.value) {
+        const now = new Date();
+        const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+        sEl.value = `${firstDay.getFullYear()}-${String(firstDay.getMonth()+1).padStart(2,'0')}-01`;
+        eEl.value = getTodayStr();
+    }
+
+    const sVal = sEl.value; 
+    const eVal = eEl.value; 
     if(!sVal || !eVal) return;
     
     const sDate = new Date(sVal); sDate.setHours(0,0,0,0); 
     const eDate = new Date(eVal); eDate.setHours(23,59,59,999);
     
-    let rCount=0, rNet=0, rTotal=0; const clientStats = {};
+    let rCount=0, rNet=0, rTotal=0;
     globalHistory.forEach(h => { 
         const d = new Date(h.time); 
         if(!isNaN(d.getTime()) && d >= sDate && d <= eDate && h.status !== '作廢') { 
-            rCount++; rNet += Number(h.net); rTotal += Number(h.total); 
-            if(!clientStats[h.client]) clientStats[h.client] = 0; 
-            clientStats[h.client] += Number(h.total); 
+            rCount++;
+            rNet += Number(h.net) || 0;
+            rTotal += Number(h.total) || 0; 
         } 
     });
     
-    document.getElementById('repCount').innerText = `${rCount} 張`; 
-    document.getElementById('repNet').innerText = `$${rNet.toLocaleString()}`; 
-    document.getElementById('repTotal').innerText = `$${rTotal.toLocaleString()}`;
+    if (document.getElementById('repCount')) document.getElementById('repCount').innerText = `${rCount} 張`; 
+    if (document.getElementById('repNet')) document.getElementById('repNet').innerText = `$${rNet.toLocaleString()}`; 
+    if (document.getElementById('repTotal')) document.getElementById('repTotal').innerText = `$${rTotal.toLocaleString()}`;
 };
 
+// 開啟「📊 銷售發票與出貨統計報表 — 五表連動預覽與列印中心」
+window.openStatReportModal = function(initialSheet = 'STAT_S1') {
+    window.enhanceReportTabUI();
+    const sv = window.statReportViewState;
+
+    const mainStart = document.getElementById('repStart')?.value || '';
+    const mainEnd = document.getElementById('repEnd')?.value || '';
+    if (!mainStart || !mainEnd) {
+        window.generateReport();
+    }
+
+    sv.startDate = document.getElementById('repStart')?.value || getTodayStr();
+    sv.endDate = document.getElementById('repEnd')?.value || getTodayStr();
+    sv.drillFilter = null;
+    if (initialSheet) sv.activeSheet = initialSheet;
+
+    // 填充客戶與員工篩選下拉選單
+    const clientSel = document.getElementById('srClientFilter');
+    if (clientSel) {
+        const cSet = new Set();
+        (globalHistory || []).forEach(h => { if (h.client) cSet.add(h.client); });
+        const sortedC = Array.from(cSet).sort();
+        clientSel.innerHTML = '<option value="">🏢 所有客戶 (全部)</option>' +
+            sortedC.map(c => `<option value="${escapeQuotes(c)}">${escapeQuotes(c)}</option>`).join('');
+        clientSel.value = sv.clientFilter || '';
+    }
+
+    const staffSel = document.getElementById('srStaffFilter');
+    if (staffSel) {
+        const sSet = new Set();
+        (globalHistory || []).forEach(h => { if (h.staff) sSet.add(h.staff); });
+        const sortedS = Array.from(sSet).sort();
+        staffSel.innerHTML = '<option value="">👤 所有員工</option>' +
+            sortedS.map(s => `<option value="${escapeQuotes(s)}">${escapeQuotes(s)}</option>`).join('');
+        staffSel.value = sv.staffFilter || '';
+    }
+
+    if (document.getElementById('srStartDate')) document.getElementById('srStartDate').value = sv.startDate;
+    if (document.getElementById('srEndDate')) document.getElementById('srEndDate').value = sv.endDate;
+    if (document.getElementById('srFormTypeFilter')) document.getElementById('srFormTypeFilter').value = sv.formTypeFilter || 'ALL';
+    if (document.getElementById('srIncludeVoidSwitch')) document.getElementById('srIncludeVoidSwitch').checked = !!sv.includeVoid;
+    if (document.getElementById('srSearchInput')) document.getElementById('srSearchInput').value = sv.searchTerm || '';
+
+    window.renderStatReportModalContent();
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('statReportPreviewModal')).show();
+};
+
+window.setStatReportModalQuickDate = function(preset) {
+    const now = new Date();
+    const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    let sStr = '';
+    let eStr = '';
+
+    if (preset === 'THIS_MONTH') {
+        sStr = fmt(new Date(now.getFullYear(), now.getMonth(), 1));
+        eStr = fmt(new Date(now.getFullYear(), now.getMonth() + 1, 0));
+    } else if (preset === 'LAST_MONTH') {
+        sStr = fmt(new Date(now.getFullYear(), now.getMonth() - 1, 1));
+        eStr = fmt(new Date(now.getFullYear(), now.getMonth(), 0));
+    } else if (preset === 'DAYS_30') {
+        const d30 = new Date(now);
+        d30.setDate(now.getDate() - 29);
+        sStr = fmt(d30);
+        eStr = fmt(now);
+    } else if (preset === 'THIS_QUARTER') {
+        const qStartMonth = Math.floor(now.getMonth() / 3) * 3;
+        sStr = fmt(new Date(now.getFullYear(), qStartMonth, 1));
+        eStr = fmt(now);
+    } else if (preset === 'THIS_YEAR') {
+        sStr = `${now.getFullYear()}-01-01`;
+        eStr = `${now.getFullYear()}-12-31`;
+    }
+
+    if (sStr && eStr) {
+        if (document.getElementById('srStartDate')) document.getElementById('srStartDate').value = sStr;
+        if (document.getElementById('srEndDate')) document.getElementById('srEndDate').value = eStr;
+        if (document.getElementById('repStart')) document.getElementById('repStart').value = sStr;
+        if (document.getElementById('repEnd')) document.getElementById('repEnd').value = eStr;
+        window.onChangeStatReportModalFilter();
+    }
+};
+
+window.onChangeStatReportModalFilter = debounce(function() {
+    const sv = window.statReportViewState;
+    sv.startDate = document.getElementById('srStartDate')?.value || '';
+    sv.endDate = document.getElementById('srEndDate')?.value || '';
+    sv.clientFilter = document.getElementById('srClientFilter')?.value || '';
+    sv.staffFilter = document.getElementById('srStaffFilter')?.value || '';
+    sv.formTypeFilter = document.getElementById('srFormTypeFilter')?.value || 'ALL';
+    sv.includeVoid = !!document.getElementById('srIncludeVoidSwitch')?.checked;
+    sv.searchTerm = (document.getElementById('srSearchInput')?.value || '').trim();
+
+    if (sv.startDate && document.getElementById('repStart')) document.getElementById('repStart').value = sv.startDate;
+    if (sv.endDate && document.getElementById('repEnd')) document.getElementById('repEnd').value = sv.endDate;
+    window.generateReport();
+    window.renderStatReportModalContent();
+}, 150);
+
+window.switchStatReportSheet = function(sheetId, keepDrill = false) {
+    const sv = window.statReportViewState;
+    sv.activeSheet = sheetId;
+    if (!keepDrill && (sheetId === 'STAT_S3' || sheetId === 'STAT_S4' || sheetId === 'STAT_S5')) {
+        sv.drillFilter = null;
+    }
+    ['STAT_S1', 'STAT_S2', 'STAT_S3', 'STAT_S4', 'STAT_S5'].forEach(s => {
+        const btn = document.getElementById(`srTabBtn_${s}`);
+        if (btn) btn.classList.toggle('active', s === sheetId);
+    });
+    window.renderStatReportModalContent();
+};
+
+window.quickSelectStatPrintSheets = function(mode) {
+    const ids = ['cbPrintStat_s1', 'cbPrintStat_s2', 'cbPrintStat_s3', 'cbPrintStat_s4', 'cbPrintStat_s5'];
+    if (mode === 'ALL') {
+        ids.forEach(id => { const el = document.getElementById(id); if (el) el.checked = true; });
+    } else if (mode === 'CORE') {
+        ids.forEach((id, i) => { const el = document.getElementById(id); if (el) el.checked = (i === 0 || i === 3 || i === 4); });
+    } else if (mode === 'CURRENT') {
+        const curIdx = ['STAT_S1', 'STAT_S2', 'STAT_S3', 'STAT_S4', 'STAT_S5'].indexOf(window.statReportViewState.activeSheet);
+        ids.forEach((id, i) => { const el = document.getElementById(id); if (el) el.checked = (i === curIdx); });
+    }
+};
+
+// 建立統計報表 5 大工作表完整資料模型
+window.buildStatReportDataModel = function() {
+    const sv = window.statReportViewState;
+    const sVal = sv.startDate || document.getElementById('repStart')?.value || getTodayStr();
+    const eVal = sv.endDate || document.getElementById('repEnd')?.value || getTodayStr();
+
+    const sDate = new Date(sVal); sDate.setHours(0, 0, 0, 0);
+    const eDate = new Date(eVal); eDate.setHours(23, 59, 59, 999);
+    const term = (sv.searchTerm || '').toLowerCase();
+    const drill = sv.drillFilter;
+
+    let validCount = 0;
+    let netSum = 0;
+    let taxSum = 0;
+    let totalSum = 0;
+
+    const detailsList = [];
+    const clientMap = new Map();
+
+    // 1. 掃描發票總表 (globalHistory)
+    (globalHistory || []).forEach(h => {
+        const d = new Date(h.time);
+        if (isNaN(d.getTime()) || d < sDate || d > eDate) return;
+        const isVoid = (h.status === '作廢');
+        if (isVoid && !sv.includeVoid) return;
+
+        const fType = window.getInvoiceFormTypeByTrack(h.paperNo, h.taxId);
+        if (sv.formTypeFilter !== 'ALL' && fType !== sv.formTypeFilter) return;
+        if (sv.clientFilter && h.client !== sv.clientFilter) return;
+        if (sv.staffFilter && h.staff !== sv.staffFilter) return;
+
+        if (term) {
+            const m =
+                String(h.paperNo || '').toLowerCase().includes(term) ||
+                String(h.client || '').toLowerCase().includes(term) ||
+                String(h.orderNo || '').toLowerCase().includes(term) ||
+                String(h.details || '').toLowerCase().includes(term) ||
+                String(h.staff || '').toLowerCase().includes(term);
+            if (!m) return;
+        }
+
+        const dateStr = `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`;
+        const cObj = (globalClients || []).find(c => c.name === h.client);
+        const taxIdStr = h.taxId || (cObj ? cObj.taxId : '') || '';
+        const netVal = Number(h.net) || 0;
+        const taxVal = Number(h.tax) || 0;
+        const totVal = Number(h.total) || 0;
+
+        if (!isVoid) {
+            validCount++;
+            netSum += netVal;
+            taxSum += taxVal;
+            totalSum += totVal;
+
+            const cKey = h.client || '未命名客戶';
+            if (!clientMap.has(cKey)) {
+                clientMap.set(cKey, {
+                    name: cKey,
+                    custId: window.getPrimaryCustIdByClientName ? window.getPrimaryCustIdByClientName(cKey) : '',
+                    taxId: taxIdStr,
+                    invCount: 0,
+                    net: 0,
+                    tax: 0,
+                    total: 0
+                });
+            }
+            const cStat = clientMap.get(cKey);
+            cStat.invCount++;
+            cStat.net += netVal;
+            cStat.tax += taxVal;
+            cStat.total += totVal;
+        }
+
+        // 若有下鑽條件，檢查是否符合下鑽顯示
+        if (drill) {
+            if (drill.type === 'CLIENT' && h.client !== drill.value) return;
+            if (drill.type === 'INVOICE' && h.paperNo !== drill.value) return;
+            if (drill.type === 'PRODUCT' && !String(h.details || '').includes(drill.value)) return;
+        }
+
+        detailsList.push({
+            rowIdx: h.rowIdx,
+            date: dateStr,
+            paperNo: h.paperNo || '',
+            formType: fType,
+            client: h.client || '',
+            taxId: taxIdStr,
+            orderNo: h.orderNo || '',
+            status: h.status || '正常',
+            staff: h.staff || '',
+            net: netVal,
+            tax: taxVal,
+            total: totVal,
+            desc: h.details || ''
+        });
+    });
+
+    // 2. 掃描出貨明細 (globalSalesDetails) 與累計品項銷售統計
+    const lineItemsList = [];
+    const prodMap = new Map();
+
+    (globalSalesDetails || []).forEach(s => {
+        if (s.shipStatus === '歷史已結案') return;
+        const d = new Date(s.time);
+        if (isNaN(d.getTime()) || d < sDate || d > eDate) return;
+
+        const isVoid = (s.shipStatus === '作廢');
+        if (isVoid && !sv.includeVoid) return;
+
+        const fType = window.getInvoiceFormTypeByTrack(s.paperNo);
+        if (sv.formTypeFilter !== 'ALL' && fType !== sv.formTypeFilter) return;
+        if (sv.clientFilter && s.client !== sv.clientFilter) return;
+
+        if (sv.staffFilter) {
+            const pInv = (globalHistory || []).find(h => h.paperNo === s.paperNo);
+            if (pInv && pInv.staff !== sv.staffFilter) return;
+        }
+
+        const cat = (typeof window.findProductRobust === 'function')
+            ? window.findProductRobust(s.client, null, s.name)
+            : (globalCatalog || []).find(c => c.productName === s.name && c.clientName === s.client);
+
+        let intCode = cat ? (cat.internalCode || '') : '';
+        let astCode = cat ? (cat.assetCode || '') : '';
+        if (typeof window.splitCombinedCodePair === 'function' && (/[\/／\|]/.test(intCode) || /[\/／\|]/.test(astCode))) {
+            const sr = window.splitCombinedCodePair(intCode, astCode);
+            intCode = sr.internalCode;
+            astCode = sr.assetCode;
+        }
+
+        if (term) {
+            const m =
+                String(s.paperNo || '').toLowerCase().includes(term) ||
+                String(s.client || '').toLowerCase().includes(term) ||
+                String(s.orderNo || '').toLowerCase().includes(term) ||
+                String(s.name || '').toLowerCase().includes(term) ||
+                String(intCode || '').toLowerCase().includes(term) ||
+                String(astCode || '').toLowerCase().includes(term);
+            if (!m) return;
+        }
+
+        const qty = Number(s.qty) || 0;
+        const price = Number(s.price) || 0;
+        const subtotal = Number(s.subtotal) || Math.round(qty * price);
+        const dateStr = `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`;
+
+        if (!isVoid) {
+            const pKey = s.name || '未知品項';
+            if (!prodMap.has(pKey)) {
+                prodMap.set(pKey, {
+                    name: pKey,
+                    code: intCode || astCode || '',
+                    assetCode: astCode || '',
+                    qty: 0,
+                    total: 0,
+                    orderCount: 0
+                });
+            }
+            const pStat = prodMap.get(pKey);
+            pStat.qty = Math.round((pStat.qty + qty) * 1000) / 1000;
+            pStat.total += subtotal;
+            pStat.orderCount++;
+            if (!pStat.code && intCode) pStat.code = intCode;
+        }
+
+        if (drill) {
+            if (drill.type === 'CLIENT' && s.client !== drill.value) return;
+            if (drill.type === 'INVOICE' && s.paperNo !== drill.value) return;
+            if (drill.type === 'PRODUCT' && s.name !== drill.value) return;
+        }
+
+        lineItemsList.push({
+            rowIdx: s.rowIdx,
+            time: dateStr,
+            paperNo: s.paperNo || '',
+            client: s.client || '',
+            orderNo: s.orderNo || '',
+            internalCode: intCode,
+            assetCode: astCode,
+            name: s.name || '',
+            qty: qty,
+            price: price,
+            subtotal: subtotal,
+            shipStatus: s.shipStatus || '待出貨',
+            shippedQty: Number(s.shippedQty) || 0,
+            payStatus: s.payStatus || '未收款',
+            paymentNo: s.paymentNo || ''
+        });
+    });
+
+    // 3. 目前庫存表 (globalInventory)
+    let invList = (globalInventory || []).map(inv => ({
+        name: inv.name || '',
+        internalCode: inv.internalCode || '',
+        assetCodeCombined: inv.assetCodeCombined || '',
+        supplier: inv.supplier || '',
+        qty: Number(inv.qty) || 0,
+        alertQty: Number(inv.alertQty) || 0,
+        cost: Number(inv.cost) || 0
+    }));
+    if (term) {
+        invList = invList.filter(i =>
+            i.name.toLowerCase().includes(term) ||
+            i.internalCode.toLowerCase().includes(term) ||
+            i.assetCodeCombined.toLowerCase().includes(term) ||
+            i.supplier.toLowerCase().includes(term)
+        );
+    }
+
+    const clientStats = Array.from(clientMap.values()).sort((a, b) => b.total - a.total);
+    const productStats = Array.from(prodMap.values()).sort((a, b) => b.total - a.total);
+
+    return {
+        dateRange: `${sVal} ~ ${eVal}`,
+        summary: {
+            count: validCount,
+            net: netSum,
+            tax: taxSum,
+            total: totalSum
+        },
+        details: detailsList,
+        lineItems: lineItemsList,
+        inventory: invList,
+        clientStats: clientStats,
+        productStats: productStats
+    };
+};
+
+// 渲染「統計報表五表預覽中心」視窗內容
+window.renderStatReportModalContent = function() {
+    const container = document.getElementById('srSheetContentContainer');
+    if (!container) return;
+
+    const model = window.buildStatReportDataModel();
+    const sv = window.statReportViewState;
+
+    setSafeText('srKpiCount', `${model.summary.count} 張`);
+    setSafeText('srKpiNet', '$' + model.summary.net.toLocaleString());
+    setSafeText('srKpiTax', '$' + model.summary.tax.toLocaleString());
+    setSafeText('srKpiTotal', '$' + model.summary.total.toLocaleString());
+
+    setSafeText('srBadge_s1', `${model.details.length} 張`);
+    setSafeText('srBadge_s2', `${model.lineItems.length} 筆`);
+    setSafeText('srBadge_s3', `${model.inventory.length} 項`);
+    setSafeText('srBadge_s4', `${model.clientStats.length} 客戶`);
+    setSafeText('srBadge_s5', `${model.productStats.length} 品項`);
+    setSafeText('srPeriodRangeLabel', `報表期間：${model.dateRange}`);
+
+    const drillEl = document.getElementById('srDrillBanner');
+    if (drillEl) {
+        if (sv.drillFilter) {
+            drillEl.style.display = 'inline-block';
+            drillEl.innerHTML = `
+                <span class="badge bg-warning text-dark fs-6">
+                    🔎 下鑽篩選中：${escapeQuotes(sv.drillFilter.title)}
+                    <a href="javascript:void(0)" class="text-danger fw-bold ms-1 text-decoration-none" onclick="window.clearStatReportDrill()">[✕ 清除篩選]</a>
+                </span>`;
+        } else {
+            drillEl.style.display = 'none';
+            drillEl.innerHTML = '';
+        }
+    }
+
+    ['STAT_S1', 'STAT_S2', 'STAT_S3', 'STAT_S4', 'STAT_S5'].forEach(s => {
+        const btn = document.getElementById(`srTabBtn_${s}`);
+        if (btn) btn.classList.toggle('active', s === sv.activeSheet);
+    });
+
+    if (sv.activeSheet === 'STAT_S1') {
+        container.innerHTML = window.generateStatSheet1Html(model, false);
+    } else if (sv.activeSheet === 'STAT_S2') {
+        container.innerHTML = window.generateStatSheet2Html(model, false);
+    } else if (sv.activeSheet === 'STAT_S3') {
+        container.innerHTML = window.generateStatSheet3Html(model, false);
+    } else if (sv.activeSheet === 'STAT_S4') {
+        container.innerHTML = window.generateStatSheet4Html(model, false);
+    } else {
+        container.innerHTML = window.generateStatSheet5Html(model, false);
+    }
+};
+
+window.drillDownStatReport = function(type, val, title, targetSheet = 'STAT_S2') {
+    window.statReportViewState.drillFilter = { type, value: val, title };
+    window.switchStatReportSheet(targetSheet, true);
+    showToast(`🔎 已下鑽篩選「${title}」`);
+};
+
+window.clearStatReportDrill = function() {
+    window.statReportViewState.drillFilter = null;
+    window.renderStatReportModalContent();
+};
+
+// 產生【工作表 1：發票總表】HTML
+window.generateStatSheet1Html = function(model, forPrint = false) {
+    const list = model.details || [];
+    if (list.length === 0) {
+        return `<div class="text-center text-muted py-5">📭 所選期間與篩選條件下沒有發票紀錄</div>`;
+    }
+
+    let subNet = 0, subTax = 0, subTot = 0;
+    const rowsHtml = list.map((d, idx) => {
+        const isVoid = d.status === '作廢';
+        if (!isVoid) {
+            subNet += d.net;
+            subTax += d.tax;
+            subTot += d.total;
+        }
+        const typeBadge = !forPrint
+            ? (d.formType === 'TWO_PART' ? '<span class="badge bg-success bg-opacity-10 text-success border border-success ms-1">二聯</span>' : '<span class="badge bg-primary bg-opacity-10 text-primary border border-primary ms-1">三聯</span>')
+            : '';
+        const invClick = !forPrint
+            ? `style="cursor:pointer; text-decoration:underline;" onclick="window.drillDownStatReport('INVOICE', '${escapeQuotes(d.paperNo)}', '發票 ${escapeQuotes(d.paperNo)} 之出貨明細', 'STAT_S2')" title="點擊下鑽查看此發票之出貨與收款狀態"`
+            : '';
+        const isPendOrd = window.isPendingOrderNo ? window.isPendingOrderNo(d.orderNo) : (!d.orderNo || d.orderNo === '無');
+        const ordHtml = isPendOrd && !forPrint
+            ? `<span class="text-danger fw-bold">${escapeQuotes(d.orderNo || '[待補單號]')}</span> <button class="btn btn-sm btn-warning text-dark py-0 px-1 fw-bold" style="font-size:0.7rem;" onclick="window.openSuppOrderNoModal({ invoiceRowIdx: ${d.rowIdx}, oldOrderNo: '${escapeQuotes(d.orderNo || '')}', clientName: '${escapeQuotes(d.client)}' })">補單號</button>`
+            : escapeQuotes(d.orderNo || '');
+
+        return `
+        <tr style="${isVoid ? 'background-color:#fff5f5; color:#999; text-decoration:line-through;' : ''}">
+            <td class="text-center text-muted">${idx + 1}</td>
+            <td class="text-nowrap">${escapeQuotes(d.date)}</td>
+            <td class="fw-bold text-primary text-nowrap" ${invClick}>${escapeQuotes(d.paperNo)}${typeBadge}</td>
+            <td class="fw-bold">${escapeQuotes(d.client)}</td>
+            <td class="font-monospace">${escapeQuotes(d.taxId)}</td>
+            <td>${ordHtml}</td>
+            <td class="text-center">${isVoid ? '<span class="badge bg-danger">作廢</span>' : '<span class="badge bg-success">正常</span>'}</td>
+            <td class="text-center">${escapeQuotes(d.staff)}</td>
+            <td class="text-end">$${d.net.toLocaleString()}</td>
+            <td class="text-end">$${d.tax.toLocaleString()}</td>
+            <td class="text-end fw-bold text-danger">$${d.total.toLocaleString()}</td>
+            <td class="small text-secondary" style="white-space:pre-wrap; max-width:260px;">${escapeQuotes(d.desc)}</td>
+        </tr>`;
+    }).join('');
+
+    return `
+    <div>
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h6 class="fw-bold text-dark mb-0">📑 工作表 1：【發票總表】（共 ${list.length} 筆）</h6>
+            <span class="small text-muted">報表期間：${escapeQuotes(model.dateRange)}</span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-sm table-bordered table-hover align-middle mb-0" style="font-size: ${forPrint ? '0.73rem' : '0.83rem'}; border-color: #adb5bd;">
+                <thead style="background-color: #cfe2ff;">
+                    <tr>
+                        <th class="text-center" style="width:40px;">#</th>
+                        <th>開立日期</th>
+                        <th>發票號碼</th>
+                        <th>客戶名稱</th>
+                        <th>統一編號</th>
+                        <th>訂單編號</th>
+                        <th class="text-center">狀態</th>
+                        <th class="text-center">開立人員</th>
+                        <th class="text-end">銷售額(未稅)</th>
+                        <th class="text-end">營業稅額</th>
+                        <th class="text-end">總計(含稅)</th>
+                        <th>明細內容</th>
+                    </tr>
+                </thead>
+                <tbody>${rowsHtml}</tbody>
+                <tfoot>
+                    <tr style="background-color: #cfe2ff; border-top: 2px solid #0d6efd;">
+                        <td colspan="8" class="text-end fw-bold">本表有效發票合計：</td>
+                        <td class="text-end fw-bold text-primary">$${subNet.toLocaleString()}</td>
+                        <td class="text-end fw-bold">$${subTax.toLocaleString()}</td>
+                        <td class="text-end fw-bold text-danger fs-6">$${subTot.toLocaleString()}</td>
+                        <td></td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </div>`;
+};
+
+// 產生【工作表 2：出貨明細】HTML
+window.generateStatSheet2Html = function(model, forPrint = false) {
+    const list = model.lineItems || [];
+    if (list.length === 0) {
+        return `<div class="text-center text-muted py-5">📭 所選期間內沒有出貨明細紀錄</div>`;
+    }
+
+    let sumQty = 0, sumSub = 0;
+    const rowsHtml = list.map((l, idx) => {
+        sumQty = Math.round((sumQty + (Number(l.qty) || 0)) * 1000) / 1000;
+        sumSub += (Number(l.subtotal) || 0);
+        const shipBadge = l.shipStatus === '已結案'
+            ? `<span class="badge bg-success">已結案</span>`
+            : `<span class="badge bg-warning text-dark">${escapeQuotes(l.shipStatus)}</span>`;
+        const payBadge = l.payStatus === '已沖帳'
+            ? `<span class="badge bg-success">🟢 已沖帳</span>`
+            : `<span class="badge bg-danger bg-opacity-10 text-danger border border-danger">未收款</span>`;
+
+        return `
+        <tr>
+            <td class="text-center text-muted">${idx + 1}</td>
+            <td class="text-nowrap">${escapeQuotes(l.time)}</td>
+            <td class="fw-bold text-primary text-nowrap">${escapeQuotes(l.paperNo)}</td>
+            <td class="fw-bold">${escapeQuotes(l.client)}</td>
+            <td>${escapeQuotes(l.orderNo)}</td>
+            <td><code>${escapeQuotes(l.internalCode)}</code>${l.assetCode ? `<div class="small text-primary">資材: ${escapeQuotes(l.assetCode)}</div>` : ''}</td>
+            <td class="fw-bold text-dark">${escapeQuotes(l.name)}</td>
+            <td class="text-center fw-bold">${l.qty}</td>
+            <td class="text-end">$${Number(l.price).toLocaleString()}</td>
+            <td class="text-end fw-bold text-danger">$${Number(l.subtotal).toLocaleString()}</td>
+            <td class="text-center">${shipBadge} <small class="text-muted">(${l.shippedQty}/${l.qty})</small></td>
+            ${!forPrint ? `<td class="text-center">${payBadge}</td>` : ''}
+        </tr>`;
+    }).join('');
+
+    return `
+    <div>
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h6 class="fw-bold text-dark mb-0">📑 工作表 2：【出貨明細】（共 ${list.length} 筆品項明細）</h6>
+            <span class="small text-muted">報表期間：${escapeQuotes(model.dateRange)}</span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-sm table-bordered table-hover align-middle mb-0" style="font-size: ${forPrint ? '0.73rem' : '0.83rem'}; border-color: #adb5bd;">
+                <thead style="background-color: #d1e7dd;">
+                    <tr>
+                        <th class="text-center" style="width:40px;">#</th>
+                        <th>開立日期</th>
+                        <th>發票號碼</th>
+                        <th>客戶名稱</th>
+                        <th>訂單編號</th>
+                        <th>長固代號 / 資材碼</th>
+                        <th>品名規格</th>
+                        <th class="text-center">開立數量</th>
+                        <th class="text-end">單價(含稅)</th>
+                        <th class="text-end">總價(含稅)</th>
+                        <th class="text-center">出貨狀態 (已出/總數)</th>
+                        ${!forPrint ? '<th class="text-center">收款狀態</th>' : ''}
+                    </tr>
+                </thead>
+                <tbody>${rowsHtml}</tbody>
+                <tfoot>
+                    <tr style="background-color: #d1e7dd; border-top: 2px solid #198754;">
+                        <td colspan="7" class="text-end fw-bold">出貨明細總計：</td>
+                        <td class="text-center fw-bold">${sumQty}</td>
+                        <td></td>
+                        <td class="text-end fw-bold text-danger fs-6">$${sumSub.toLocaleString()}</td>
+                        <td colspan="${!forPrint ? '2' : '1'}"></td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </div>`;
+};
+
+// 產生【工作表 3：目前庫存表】HTML
+window.generateStatSheet3Html = function(model, forPrint = false) {
+    const list = model.inventory || [];
+    if (list.length === 0) {
+        return `<div class="text-center text-muted py-5">📭 目前沒有庫存品項資料</div>`;
+    }
+
+    const rowsHtml = list.map((inv, idx) => {
+        let statusBadge = '<span class="badge bg-success">🟢 庫存正常</span>';
+        let rowStyle = '';
+        if (inv.qty <= 0) {
+            statusBadge = '<span class="badge bg-danger">🔴 缺貨/負庫存</span>';
+            rowStyle = 'background-color: #fff5f5;';
+        } else if (inv.qty <= inv.alertQty) {
+            statusBadge = '<span class="badge bg-warning text-dark">🟡 低於安全量</span>';
+            rowStyle = 'background-color: #fffdf2;';
+        }
+
+        return `
+        <tr style="${rowStyle}">
+            <td class="text-center text-muted">${idx + 1}</td>
+            <td class="fw-bold text-dark">${escapeQuotes(inv.name)}</td>
+            <td><code>${escapeQuotes(inv.internalCode)}</code></td>
+            <td class="small text-primary">${escapeQuotes(inv.assetCodeCombined)}</td>
+            <td class="text-end fw-bold ${inv.qty <= 0 ? 'text-danger' : 'text-success'} fs-6">${inv.qty}</td>
+            <td class="text-end text-muted">${inv.alertQty}</td>
+            <td class="text-center">${statusBadge}</td>
+        </tr>`;
+    }).join('');
+
+    return `
+    <div>
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h6 class="fw-bold text-dark mb-0">📑 工作表 3：【目前庫存表】（共 ${list.length} 項庫存產品）</h6>
+            <span class="small text-muted">即時庫存快照時間：${getTodayStr()}</span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-sm table-bordered table-hover align-middle mb-0" style="font-size: ${forPrint ? '0.75rem' : '0.85rem'}; border-color: #adb5bd;">
+                <thead style="background-color: #e2e3e5;">
+                    <tr>
+                        <th class="text-center" style="width:45px;">#</th>
+                        <th>品名規格</th>
+                        <th>長固代號</th>
+                        <th>對應醫院資材碼</th>
+                        <th class="text-end">目前庫存數量</th>
+                        <th class="text-end">安全庫存量</th>
+                        <th class="text-center">庫存狀態</th>
+                    </tr>
+                </thead>
+                <tbody>${rowsHtml}</tbody>
+            </table>
+        </div>
+    </div>`;
+};
+
+// 產生【工作表 4：客戶營收分析表】HTML (支援點擊客戶下鑽至發票總表或出貨明細)
+window.generateStatSheet4Html = function(model, forPrint = false) {
+    const list = model.clientStats || [];
+    if (list.length === 0) {
+        return `<div class="text-center text-muted py-5">📭 所選期間內無客戶營收資料</div>`;
+    }
+
+    const grandTotal = model.summary.total || 1;
+    const rowsHtml = list.map((c, idx) => {
+        const pct = ((c.total / grandTotal) * 100).toFixed(1) + '%';
+        const clickInv = !forPrint
+            ? `style="cursor:pointer; text-decoration:underline;" onclick="window.drillDownStatReport('CLIENT', '${escapeQuotes(c.name)}', '客戶：${escapeQuotes(c.name)}', 'STAT_S1')" title="點擊下鑽查看此客戶的所有發票"`
+            : '';
+        const clickLine = !forPrint
+            ? `style="cursor:pointer; text-decoration:underline;" onclick="window.drillDownStatReport('CLIENT', '${escapeQuotes(c.name)}', '客戶：${escapeQuotes(c.name)}', 'STAT_S2')" title="點擊下鑽查看此客戶的所有出貨明細"`
+            : '';
+
+        return `
+        <tr>
+            <td class="text-center fw-bold text-secondary">${idx + 1}</td>
+            <td class="fw-bold text-primary">${escapeQuotes(c.custId || '--')}</td>
+            <td class="fw-bold text-dark" ${clickInv}>${escapeQuotes(c.name)}</td>
+            <td class="font-monospace">${escapeQuotes(c.taxId || '--')}</td>
+            <td class="text-center fw-bold" ${clickInv}>${c.invCount} 張</td>
+            <td class="text-end">$${c.net.toLocaleString()}</td>
+            <td class="text-end">$${c.tax.toLocaleString()}</td>
+            <td class="text-end fw-bold text-danger fs-6" ${clickLine}>$${c.total.toLocaleString()}</td>
+            <td class="text-end fw-bold text-secondary">${pct}</td>
+        </tr>`;
+    }).join('');
+
+    return `
+    <div>
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h6 class="fw-bold text-dark mb-0">📑 工作表 4：【客戶營收分析表】（共 ${list.length} 家客戶）</h6>
+            <span class="small text-muted">報表期間：${escapeQuotes(model.dateRange)}</span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-sm table-bordered table-hover align-middle mb-0" style="font-size: ${forPrint ? '0.75rem' : '0.86rem'}; border-color: #adb5bd;">
+                <thead style="background-color: #fff3cd;">
+                    <tr>
+                        <th class="text-center" style="width:50px;">排行</th>
+                        <th>外部代號</th>
+                        <th>客戶 / 醫院名稱</th>
+                        <th>統一編號</th>
+                        <th class="text-center">開立發票張數</th>
+                        <th class="text-end">未稅銷售額合計</th>
+                        <th class="text-end">營業稅額合計</th>
+                        <th class="text-end">總銷售額 (含稅)</th>
+                        <th class="text-end">營收佔比</th>
+                    </tr>
+                </thead>
+                <tbody>${rowsHtml}</tbody>
+                <tfoot>
+                    <tr style="background-color: #fff3cd; border-top: 2px solid #ffc107;">
+                        <td colspan="4" class="text-end fw-bold">全體客戶營收總計：</td>
+                        <td class="text-center fw-bold">${model.summary.count} 張</td>
+                        <td class="text-end fw-bold text-primary">$${model.summary.net.toLocaleString()}</td>
+                        <td class="text-end fw-bold">$${model.summary.tax.toLocaleString()}</td>
+                        <td class="text-end fw-bold text-danger fs-6">$${model.summary.total.toLocaleString()}</td>
+                        <td class="text-end fw-bold">100%</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </div>`;
+};
+
+// 產生【工作表 5：品項銷售統計表】HTML (支援點擊品名下鑽查看該品項所有出貨明細)
+window.generateStatSheet5Html = function(model, forPrint = false) {
+    const list = model.productStats || [];
+    if (list.length === 0) {
+        return `<div class="text-center text-muted py-5">📭 所選期間內無產品銷售統計資料</div>`;
+    }
+
+    const grandTotal = model.summary.total || 1;
+    let totalQty = 0, totalAmt = 0;
+
+    const rowsHtml = list.map((p, idx) => {
+        totalQty = Math.round((totalQty + p.qty) * 1000) / 1000;
+        totalAmt += p.total;
+        const pct = ((p.total / grandTotal) * 100).toFixed(1) + '%';
+        const clickProd = !forPrint
+            ? `style="cursor:pointer; text-decoration:underline;" onclick="window.drillDownStatReport('PRODUCT', '${escapeQuotes(p.name)}', '品項：${escapeQuotes(p.name)}', 'STAT_S2')" title="點擊下鑽查看此產品的所有出貨明細"`
+            : '';
+
+        return `
+        <tr>
+            <td class="text-center fw-bold text-secondary">${idx + 1}</td>
+            <td><code>${escapeQuotes(p.code || '--')}</code></td>
+            <td class="small text-primary">${escapeQuotes(p.assetCode || '--')}</td>
+            <td class="fw-bold text-dark" ${clickProd}>${escapeQuotes(p.name)}</td>
+            <td class="text-center">${p.orderCount} 次</td>
+            <td class="text-end fw-bold text-primary">${p.qty}</td>
+            <td class="text-end fw-bold text-danger fs-6" ${clickProd}>$${p.total.toLocaleString()}</td>
+            <td class="text-end fw-bold text-secondary">${pct}</td>
+        </tr>`;
+    }).join('');
+
+    return `
+    <div>
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h6 class="fw-bold text-dark mb-0">📑 工作表 5：【品項銷售統計表】（共 ${list.length} 項熱銷產品）</h6>
+            <span class="small text-muted">報表期間：${escapeQuotes(model.dateRange)}</span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-sm table-bordered table-hover align-middle mb-0" style="font-size: ${forPrint ? '0.75rem' : '0.86rem'}; border-color: #adb5bd;">
+                <thead style="background-color: #f8d7da;">
+                    <tr>
+                        <th class="text-center" style="width:50px;">排行</th>
+                        <th>長固代號</th>
+                        <th>醫院資材碼</th>
+                        <th>品名規格</th>
+                        <th class="text-center">出貨筆數</th>
+                        <th class="text-end">銷售總數量</th>
+                        <th class="text-end">總銷售金額 (含稅)</th>
+                        <th class="text-end">營收佔比</th>
+                    </tr>
+                </thead>
+                <tbody>${rowsHtml}</tbody>
+                <tfoot>
+                    <tr style="background-color: #f8d7da; border-top: 2px solid #dc3545;">
+                        <td colspan="5" class="text-end fw-bold">全體品項銷售總計：</td>
+                        <td class="text-end fw-bold text-primary">${totalQty}</td>
+                        <td class="text-end fw-bold text-danger fs-6">$${totalAmt.toLocaleString()}</td>
+                        <td class="text-end fw-bold">100%</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </div>`;
+};
+
+// 🖨️ 列印前依勾選的工作表（可單選或多選）產生 A4 橫向分頁預覽列印與 PDF 分享
+window.printSelectedStatReportSheets = function() {
+    const p1 = document.getElementById('cbPrintStat_s1')?.checked;
+    const p2 = document.getElementById('cbPrintStat_s2')?.checked;
+    const p3 = document.getElementById('cbPrintStat_s3')?.checked;
+    const p4 = document.getElementById('cbPrintStat_s4')?.checked;
+    const p5 = document.getElementById('cbPrintStat_s5')?.checked;
+
+    if (!p1 && !p2 && !p3 && !p4 && !p5) {
+        return alert("請至少勾選一張要列印的工作表！");
+    }
+
+    const model = window.buildStatReportDataModel();
+    const blocks = [];
+
+    const buildPrintHeader = (sheetTitle) => `
+        <div style="border-bottom: 2px solid #000; padding-bottom: 6px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: flex-end;">
+            <div>
+                <div style="font-size: 18px; font-weight: bold; color: #000;">長固實業有限公司 — 銷售發票與出貨統計報表 (${sheetTitle})</div>
+                <div style="font-size: 12px; color: #444;">
+                    報表期間：${escapeQuotes(model.dateRange)} ｜ 
+                    總開立張數：${model.summary.count} 張 ｜ 
+                    未稅總額：$${model.summary.net.toLocaleString()} ｜ 
+                    營業稅：$${model.summary.tax.toLocaleString()} ｜ 
+                    含稅總計：$${model.summary.total.toLocaleString()}
+                </div>
+            </div>
+            <div style="font-size: 12px; color: #333; text-align: right;">
+                製表人員：${escapeQuotes(myName || '管理員')} ｜ 列印日期：${getTodayStr()}
+            </div>
+        </div>
+    `;
+
+    if (p1) blocks.push(`<div style="padding:12px; background:#fff;">${buildPrintHeader('1. 發票總表')}${window.generateStatSheet1Html(model, true)}</div>`);
+    if (p2) blocks.push(`<div style="padding:12px; background:#fff;">${buildPrintHeader('2. 出貨明細')}${window.generateStatSheet2Html(model, true)}</div>`);
+    if (p3) blocks.push(`<div style="padding:12px; background:#fff;">${buildPrintHeader('3. 目前庫存表')}${window.generateStatSheet3Html(model, true)}</div>`);
+    if (p4) blocks.push(`<div style="padding:12px; background:#fff;">${buildPrintHeader('4. 客戶營收分析表')}${window.generateStatSheet4Html(model, true)}</div>`);
+    if (p5) blocks.push(`<div style="padding:12px; background:#fff;">${buildPrintHeader('5. 品項銷售統計表')}${window.generateStatSheet5Html(model, true)}</div>`);
+
+    const combinedHtml = blocks.map((bHtml, idx) => {
+        const isLast = idx === blocks.length - 1;
+        return `<div class="${!isLast ? 'print-sheet-page-break' : ''}" style="margin-bottom: 18px;">${bHtml}</div>`;
+    }).join('');
+
+    bootstrap.Modal.getInstance(document.getElementById('statReportPreviewModal'))?.hide();
+
+    let printEl = document.getElementById('printStatReportArea');
+    if (!printEl) {
+        printEl = document.createElement('div');
+        printEl.id = 'printStatReportArea';
+        printEl.style.display = 'none';
+        document.body.appendChild(printEl);
+    }
+    printEl.innerHTML = combinedHtml;
+
+    window.applyPrintStyle('A4', 'landscape');
+    window.showPrintPreview('printStatReportArea');
+};
+
+// 📥 直接下載五工作表 Excel (.xlsx) 檔案至電腦/手機
+window.downloadStatReportExcelDirect = function() {
+    if (typeof XLSX === 'undefined') return alert("Excel 引擎載入中，請稍候！");
+    const model = window.buildStatReportDataModel();
+    const wb = XLSX.utils.book_new();
+
+    // 工作表 1: 發票總表
+    const s1Rows = [
+        ["報表期間", model.dateRange, "", "", "", "", "", "", "", "", ""],
+        ["總開立張數", model.summary.count, "", "", "", "", "", "", "", "", ""],
+        ["總銷售額(未稅)", model.summary.net, "", "", "", "", "", "", "", "", ""],
+        ["總營業稅", model.summary.tax, "", "", "", "", "", "", "", "", ""],
+        ["總計(含稅)", model.summary.total, "", "", "", "", "", "", "", "", ""],
+        ["開立日期", "發票號碼", "客戶名稱", "統一編號", "訂單編號", "狀態", "開立人員", "銷售額", "稅額", "總計", "明細內容"]
+    ];
+    model.details.forEach(d => {
+        s1Rows.push([d.date, d.paperNo, d.client, d.taxId, d.orderNo, d.status, d.staff, d.net, d.tax, d.total, d.desc]);
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(s1Rows), "發票總表");
+
+    // 工作表 2: 出貨明細
+    const s2Rows = [
+        ["開立日期", "發票號碼", "客戶名稱", "訂單編號", "長固代號", "醫院資材碼", "品名", "開立數量", "單價(含稅)", "總價(含稅)", "出貨狀態", "已出貨數量", "收款狀態"]
+    ];
+    model.lineItems.forEach(l => {
+        s2Rows.push([l.time, l.paperNo, l.client, l.orderNo, l.internalCode, l.assetCode, l.name, l.qty, l.price, l.subtotal, l.shipStatus, l.shippedQty, l.payStatus]);
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(s2Rows), "出貨明細");
+
+    // 工作表 3: 目前庫存表
+    const s3Rows = [["品名", "長固代號", "對應資材碼", "目前庫存數量", "安全庫存量"]];
+    model.inventory.forEach(inv => {
+        s3Rows.push([inv.name, inv.internalCode, inv.assetCodeCombined, inv.qty, inv.alertQty]);
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(s3Rows), "目前庫存表");
+
+    // 工作表 4: 客戶營收分析表
+    const s4Rows = [["排行", "客戶代號", "客戶/醫院名稱", "統一編號", "發票張數", "未稅銷售額", "營業稅額", "總銷售額(含稅)"]];
+    model.clientStats.forEach((c, idx) => {
+        s4Rows.push([idx + 1, c.custId, c.name, c.taxId, c.invCount, c.net, c.tax, c.total]);
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(s4Rows), "客戶營收分析表");
+
+    // 工作表 5: 品項銷售統計表
+    const s5Rows = [["排行", "長固代號", "醫院資材碼", "品名規格", "出貨筆數", "銷售總數量", "總銷售額(含稅)"]];
+    model.productStats.forEach((p, idx) => {
+        s5Rows.push([idx + 1, p.code, p.assetCode, p.name, p.orderCount, p.qty, p.total]);
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(s5Rows), "品項銷售統計表");
+
+    const cleanRange = model.dateRange.replace(/[\/\s~]/g, '_');
+    XLSX.writeFile(wb, `長固ERP_發票與出貨統計五表_${cleanRange}.xlsx`);
+    showToast("📥 已成功下載包含 5 大工作表之統計報表 Excel 檔！");
+};
+
+// 點擊原「📥 匯出 Excel 報表並寄信」按鈕時，預設先打開五表互動預覽視窗供確認，亦可從視窗內或副按鈕開啟寄信選單
 window.exportReportToEmail = function() {
-    const sVal = document.getElementById('repStart').value; 
-    const eVal = document.getElementById('repEnd').value; 
+    window.openStatReportModal('STAT_S1');
+};
+
+window.openEmailModalFromStatReport = function() {
+    const sVal = document.getElementById('repStart')?.value; 
+    const eVal = document.getElementById('repEnd')?.value; 
     if(!sVal || !eVal) return alert("請先設定報表統計日期範圍！");
     
     let modalEl = document.getElementById('dynamicEmailModal');
     if (!modalEl) {
         const modalHtml = `
-        <div class="modal fade" id="dynamicEmailModal" tabindex="-1">
+        <div class="modal fade" id="dynamicEmailModal" tabindex="-1" style="z-index: 1080;">
             <div class="modal-dialog modal-dialog-centered">
                 <div class="modal-content border-0 shadow-lg">
-                    <div class="modal-header bg-light">
-                        <h5 class="modal-title fw-bold text-dark">📧 選擇報表收件信箱</h5>
-                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    <div class="modal-header bg-dark text-white">
+                        <h5 class="modal-title fw-bold">📧 選擇統計報表收件信箱</h5>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                     </div>
                     <div class="modal-body">
-                        <div class="small text-muted mb-3">請勾選要發送 Excel 報表的對象 (資料連動自後台「收件信箱管理」)</div>
+                        <div class="small text-muted mb-3">請勾選要發送 Excel 統計報表的對象 (資料連動自後台「收件信箱管理」)</div>
                         <div id="dynamicEmailCheckboxes" class="d-flex flex-column gap-2"></div>
                     </div>
                     <div class="modal-footer border-0">
                         <button type="button" class="btn btn-secondary fw-bold" data-bs-dismiss="modal">取消</button>
-                        <button type="button" class="btn btn-primary fw-bold" onclick="confirmExportReport()">確認並寄出</button>
+                        <button type="button" class="btn btn-primary fw-bold px-4" onclick="confirmExportReport()">確認並寄出</button>
                     </div>
                 </div>
             </div>
@@ -879,51 +2048,18 @@ window.confirmExportReport = function() {
     if(window.lockButton(btn)) return;
     
     const emailStr = emails.join(','); 
-    
-    const sVal = document.getElementById('repStart').value; 
-    const eVal = document.getElementById('repEnd').value; 
-    
     bootstrap.Modal.getInstance(document.getElementById('dynamicEmailModal')).hide();
-    showLoading("產生 Excel 中...");
+    showLoading("產生 Excel 並寄送中...");
     
-    const sDate = new Date(sVal); sDate.setHours(0,0,0,0); 
-    const eDate = new Date(eVal); eDate.setHours(23,59,59,999);
-    
-    let rCount=0, rNet=0, rTax=0, rTotal=0; const clientStats = {}; const details = []; const lines = [];
-    globalHistory.forEach(h => { 
-        const d = new Date(h.time); 
-        if(!isNaN(d.getTime()) && d >= sDate && d <= eDate && h.status !== '作廢') { 
-            rCount++; rNet += Number(h.net); rTax += Number(h.tax); rTotal += Number(h.total); 
-            if(!clientStats[h.client]) clientStats[h.client] = 0; 
-            clientStats[h.client] += Number(h.total); 
-            details.push({ date: `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()}`, paperNo: h.paperNo, orderNo: h.orderNo, status: h.status, staff: h.staff, client: h.client, taxId: h.taxId, net: h.net, tax: h.tax, total: h.total, desc: h.details }); 
-        } 
-    });
-    
-    globalSalesDetails.forEach(s => { 
-        const d = new Date(s.time); 
-        if(!isNaN(d.getTime()) && d >= sDate && d <= eDate && s.shipStatus !== '作廢') { 
-            lines.push({
-                rowIdx: s.rowIdx,
-                time: `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()}`,
-                paperNo: s.paperNo,
-                client: s.client,
-                orderNo: s.orderNo,
-                name: s.name,
-                qty: s.qty,
-                price: s.price,
-                subtotal: s.subtotal || Math.round((Number(s.price)||0) * (Number(s.qty)||0)),
-                shipStatus: s.shipStatus,
-                shippedQty: s.shippedQty
-            }); 
-        } 
-    });
-    
+    const model = window.buildStatReportDataModel();
     const payload = { 
         email: emailStr, 
-        dateRange: `${sVal} ~ ${eVal}`, summary: { count: rCount, net: rNet, tax: rTax, total: rTotal }, 
-        clientStats: Object.keys(clientStats).map(k=>({name:k, total:clientStats[k]})).sort((a,b)=>b.total-a.total), 
-        details: details.reverse(), lineItems: lines.reverse() 
+        dateRange: model.dateRange,
+        summary: model.summary, 
+        clientStats: model.clientStats.map(c => ({ name: c.name, total: c.total })), 
+        productStats: model.productStats,
+        details: [...model.details].reverse(),
+        lineItems: [...model.lineItems].reverse() 
     };
     
     callApi('exportExcelReport', payload).then(res => { 
@@ -948,7 +2084,6 @@ window.reconcileState = {
     currentFilter: 'ALL_DIFF',
     searchTerm: ''
 };
-
 window.saveReconcileWorkspace = function() {
     try {
         const now = new Date();
@@ -1503,6 +2638,7 @@ window.buildReconcileItemKey = function(r) {
         r.extQty !== null ? r.extQty : 'N'
     ].join('|');
 };
+
 window.runReportReconciliation = function(isSilentRestore = false) {
     const extRows = window.reconcileState.extRawRows || [];
     if (extRows.length === 0) {
@@ -2490,7 +3626,6 @@ window.exportReconciliationExcel = function() {
     XLSX.writeFile(wb, outFileName);
     showToast("📥 跨系統比對差異 Excel 報表已成功下載！");
 };
-
 // ============================================================================
 // 【📋 營業人使用三聯式 ＆ 二聯式統一發票明細表】（1:1 復刻稅捐處標準 A4 直式雙表格）
 // 支援：字軌與雙月期別智慧攔截、異常單號診斷修正、唯一單號精確計數、本月 401 銷項匯總、多冊合併列印與 Excel 匯出
@@ -2544,7 +3679,7 @@ window.initTaxDetailTab = function() {
         const curRocYear = new Date().getFullYear() - 1911;
         let yearOpts = '';
         for (let y = curRocYear - 2; y <= curRocYear + 2; y++) {
-            yearOpts += `<option value="${y}" ${y === window.taxDetailState.rocYear ? 'selected' : ''}>中華民國 ${y} 年 (${y + 111 + 1800})</option>`;
+            yearOpts += `<option value="${y}" ${y === window.taxDetailState.rocYear ? 'selected' : ''}>中華民國 ${y} 年 (${y + 1911})</option>`;
         }
 
         let monthOpts = '';
@@ -2697,7 +3832,7 @@ window.initTaxDetailTab = function() {
                     <div id="td_bookletPills" class="d-flex flex-wrap gap-1"></div>
                 </div>
 
-                <!-- 🩺 新增：跨期字軌 / 疑似打錯前六碼 / 重複單號 智慧診斷與一鍵修正專區 -->
+                <!-- 🩺 跨期字軌 / 疑似打錯前六碼 / 重複單號 智慧診斷與一鍵修正專區 -->
                 <div id="td_anomaliesContainer" class="mt-2"></div>
 
                 <div class="small text-muted mt-1">
@@ -2715,7 +3850,6 @@ window.initTaxDetailTab = function() {
     window.onTaxPeriodChange();
 };
 
-// 切換「📘 三聯式明細表」與「📗 二聯式明細表」
 window.setTaxDetailFormType = function(formType) {
     window.taxDetailState.formType = formType;
     const isTwo = (formType === 'TWO_PART');
@@ -2742,7 +3876,6 @@ window.setTaxDetailFormType = function(formType) {
     window.onTaxPeriodChange();
 };
 
-// 手動輸入字軌時同步檢查並更新字軌標籤
 window.onManualTrackInput = function() {
     const trk = (document.getElementById('td_track')?.value || '').trim().toUpperCase();
     window.updateTrackTypeBadgeUI(trk);
@@ -2767,7 +3900,6 @@ window.updateTrackTypeBadgeUI = function(track) {
     }
 };
 
-// 點擊字軌旁小標籤，手動將該字軌永久切換為三聯式或二聯式
 window.toggleCurrentTrackFormType = function() {
     const trk = (document.getElementById('td_track')?.value || '').trim().toUpperCase();
     if (!trk || trk.length !== 2) return alert("請先在發票字軌欄位輸入 2 碼英文字軌！");
@@ -2780,7 +3912,6 @@ window.toggleCurrentTrackFormType = function() {
     window.setTaxDetailFormType(nextType);
 };
 
-// 當切換中華民國年份、月份或聯式時，自動掃描該月份所有已開立發票，攔截跨期誤植字軌、去重計算張數並偵測單號打錯異常
 window.onTaxPeriodChange = function() {
     const rocY = parseInt(document.getElementById('td_rocYear')?.value, 10) || (new Date().getFullYear() - 1911);
     const mon = parseInt(document.getElementById('td_month')?.value, 10) || (new Date().getMonth() + 1);
@@ -2792,7 +3923,7 @@ window.onTaxPeriodChange = function() {
 
     const bookMap = new Map();
     const crossPeriodList = [];
-    const invOccurrenceMap = new Map(); // fullNo -> array of history records
+    const invOccurrenceMap = new Map();
 
     (globalHistory || []).forEach(h => {
         const d = new Date(h.time);
@@ -2810,7 +3941,6 @@ window.onTaxPeriodChange = function() {
         const half = sufNum < 50 ? '00-49' : '50-99';
         const fType = window.getInvoiceFormTypeByTrack(trk, h.taxId);
 
-        // 1. 檢查此字軌是否屬於該月份的法定雙月期別 (例如 10 月份不應出現 5-6 月的 ZX 字軌)
         const periodCheck = window.checkTrackPeriodMatch(trk, westY, mon);
         if (!periodCheck.isMatch) {
             const expPair = periodCheck.expectedMonths || [5, 6];
@@ -2827,14 +3957,12 @@ window.onTaxPeriodChange = function() {
                 currentDateStr: `${westY}-${String(mon).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
                 suggestedDateStr: suggestedDateStr
             });
-            return; // 自動攔截，不混入當月正式申報冊別與稅額匯總
+            return;
         }
 
-        // 2. 記錄同號碼出現次數，以偵測重複建檔
         if (!invOccurrenceMap.has(pNo)) invOccurrenceMap.set(pNo, []);
         invOccurrenceMap.get(pNo).push(h);
 
-        // 3. 將有效發票歸入發票冊，並以 Set 計算唯一發票號碼張數 (絕不超過 50 張)
         const key = `${trk}_${pfx}_${half}`;
         if (!bookMap.has(key)) {
             bookMap.set(key, {
@@ -2859,10 +3987,9 @@ window.onTaxPeriodChange = function() {
         return ka.localeCompare(kb);
     });
 
-    // 4. 偵測「疑似前六碼打錯之孤立冊別」(例如 EC-528665 僅 2 張，與主冊 EC-525665 只差 1 碼)
     const typoPrefixesList = [];
     allBooklets.forEach(bSmall => {
-        if (bSmall.count > 3) return; // 僅針對張數極少 (1~3張) 的孤立冊別進行檢查
+        if (bSmall.count > 3) return;
         const mainCandidate = allBooklets.find(bMain =>
             bMain.track === bSmall.track &&
             bMain.prefix6 !== bSmall.prefix6 &&
@@ -2886,7 +4013,6 @@ window.onTaxPeriodChange = function() {
         }
     });
 
-    // 5. 整理同號碼重複建檔清單
     const duplicateList = [];
     invOccurrenceMap.forEach((rows, fullNo) => {
         const activeRows = rows.filter(r => r.status !== '作廢');
@@ -2909,10 +4035,8 @@ window.onTaxPeriodChange = function() {
     const filteredBooklets = allBooklets.filter(b => b.formType === activeFormType);
     window.taxDetailState.detectedBooklets = filteredBooklets;
 
-    // 更新頂部三聯＋二聯匯總卡片
     window.updateMonthBothTypesSummaryBanner(rocY, mon);
 
-    // 渲染快選冊別按鈕
     const pillsContainer = document.getElementById('td_bookletPills');
     if (pillsContainer) {
         if (filteredBooklets.length === 0) {
@@ -2932,7 +4056,6 @@ window.onTaxPeriodChange = function() {
         }
     }
 
-    // 渲染異常診斷與一鍵修正專區
     window.renderTaxAnomaliesBox();
 
     if (filteredBooklets.length > 0) {
@@ -2948,7 +4071,6 @@ window.onTaxPeriodChange = function() {
     }
 };
 
-// 渲染「🩺 本月發票字軌與單號異常診斷與一鍵修正專區」
 window.renderTaxAnomaliesBox = function() {
     const box = document.getElementById('td_anomaliesContainer');
     if (!box) return;
@@ -2961,7 +4083,6 @@ window.renderTaxAnomaliesBox = function() {
 
     let itemsHtml = '';
 
-    // 1. 跨期字軌日期誤植 (例如 10 月出現 5-6 月的 ZX-529594xx)
     crossPeriod.forEach(cp => {
         const r = cp.record;
         itemsHtml += `
@@ -2982,7 +4103,6 @@ window.renderTaxAnomaliesBox = function() {
         </div>`;
     });
 
-    // 2. 疑似前六碼打錯 (例如 EC-528665 僅 2 張 vs 主冊 EC-525665)
     typoPrefixes.forEach(tp => {
         const r = tp.record;
         itemsHtml += `
@@ -3000,7 +4120,6 @@ window.renderTaxAnomaliesBox = function() {
         </div>`;
     });
 
-    // 3. 同發票號碼重複建檔提醒 (曾導致冊別張數超過 50 張的原因)
     duplicates.forEach(dup => {
         const firstRow = dup.rows[0];
         const secondRow = dup.rows[1];
@@ -3054,7 +4173,6 @@ window.selectTaxBooklet = function(idx) {
     window.renderTaxDetailPreview();
 };
 
-// 點擊預覽表列時，若該號原本在系統中為「空白」，允許操作員一鍵切換為「作廢」(並永久記憶於 localStorage)
 window.toggleManualVoidOnTaxSheet = function(track, prefix6, suffix2) {
     const fullNo = `${track}${prefix6}${suffix2}`;
     const inSystem = (globalHistory || []).find(h => String(h.paperNo || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase() === fullNo);
@@ -3075,7 +4193,6 @@ window.toggleManualVoidOnTaxSheet = function(track, prefix6, suffix2) {
     window.renderTaxDetailPreview();
 };
 
-// 更新頂部「📊 本月三聯式＋二聯式 營業稅申報總覽卡片」
 window.updateMonthBothTypesSummaryBanner = function(rocYear, month) {
     const threeStats = window.calculateMonthGrandTaxStats(rocYear, month, 'THREE_PART');
     const twoStats = window.calculateMonthGrandTaxStats(rocYear, month, 'TWO_PART');
@@ -3102,7 +4219,6 @@ window.updateMonthBothTypesSummaryBanner = function(rocYear, month) {
     setSafeText('tdSumAllTax', '$' + combinedTax.toLocaleString());
 };
 
-// 核心渲染函式：產生單張「三聯式」或「二聯式」統一發票明細表標準 HTML (1:1 復刻稅捐處 A4 直式 21x29.7cm)
 window.buildSingleTaxDetailSheetHtml = function(params, isPrintMode = false) {
     const {
         formType, rocYear, month, companyTaxId, companyName, taxRegNo, taxOfficeCode,
@@ -3114,7 +4230,6 @@ window.buildSingleTaxDetailSheetHtml = function(params, isPrintMode = false) {
     const cleanTrack = String(track || '').trim().toUpperCase();
     const cleanPrefix6 = String(prefix6 || '').trim();
 
-    // 建立所有發票的快速索引 Map
     const invMap = new Map();
     (globalHistory || []).forEach(h => {
         const pNo = String(h.paperNo || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
@@ -3311,13 +4426,11 @@ window.buildSingleTaxDetailSheetHtml = function(params, isPrintMode = false) {
     const mainTableHeaderHtml = isTwoPart ? `
         <thead>
             <tr style="background-color: #f8f9fa;">
-                <!-- 左欄表頭 -->
                 <th colspan="2" rowspan="2" style="${cellBorder} text-align: center; padding: 2px; line-height: 1.15;">末二位<br>號 碼</th>
                 <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px; letter-spacing: 1px;">發 票 總 計 金 額</th>
                 <th colspan="3" style="${cellBorder} text-align: center; padding: 2px; letter-spacing: 2px;">課 稅 別</th>
                 <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px; letter-spacing: 2px;">備 註</th>
 
-                <!-- 右欄表頭 -->
                 <th colspan="2" rowspan="2" style="${cellBorder} border-left: 2px solid #000; text-align: center; padding: 2px; line-height: 1.15;">末二位<br>號 碼</th>
                 <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px; letter-spacing: 1px;">發 票 總 計 金 額</th>
                 <th colspan="3" style="${cellBorder} text-align: center; padding: 2px; letter-spacing: 2px;">課 稅 別</th>
@@ -3335,7 +4448,6 @@ window.buildSingleTaxDetailSheetHtml = function(params, isPrintMode = false) {
     ` : `
         <thead>
             <tr style="background-color: #f8f9fa;">
-                <!-- 左欄表頭 -->
                 <th colspan="2" rowspan="2" style="${cellBorder} text-align: center; padding: 2px; line-height: 1.15;">末二位<br>號 碼</th>
                 <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px; line-height: 1.15;">買 受 人<br>統一編號</th>
                 <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px;">銷 售 額</th>
@@ -3343,7 +4455,6 @@ window.buildSingleTaxDetailSheetHtml = function(params, isPrintMode = false) {
                 <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px;">稅 額</th>
                 <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px;">備 註</th>
 
-                <!-- 右欄表頭 -->
                 <th colspan="2" rowspan="2" style="${cellBorder} border-left: 2px solid #000; text-align: center; padding: 2px; line-height: 1.15;">末二位<br>號 碼</th>
                 <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px; line-height: 1.15;">買 受 人<br>統一編號</th>
                 <th rowspan="2" style="${cellBorder} text-align: center; padding: 2px;">銷 售 額</th>
@@ -3598,7 +4709,6 @@ window.buildSingleTaxDetailSheetHtml = function(params, isPrintMode = false) {
     </div>`;
 };
 
-// 計算該月份指定聯式 ('THREE_PART' 或 'TWO_PART') 全部有效發票冊的「本期(月)總計」統計值
 window.calculateMonthGrandTaxStats = function(rocYear, month, targetFormType) {
     const westY = Number(rocYear) + 1911;
     const fType = targetFormType || window.taxDetailState.formType || 'THREE_PART';
@@ -3692,7 +4802,6 @@ window.renderTaxDetailPreview = function() {
     container.innerHTML = window.buildSingleTaxDetailSheetHtml(params, false);
 };
 
-// 列印目前顯示的單張「三聯式或二聯式統一發票明細表」(A4 直式)
 window.printCurrentTaxDetailSheet = function() {
     const params = window.getCurrentTaxFormParams();
     if (!params.track || params.track.length < 2 || !params.prefix6 || params.prefix6.length < 6) {
@@ -3707,7 +4816,6 @@ window.printCurrentTaxDetailSheet = function() {
     if (typeof window.showPrintPreview === 'function') window.showPrintPreview('printTaxDetailArea');
 };
 
-// 一鍵預覽並列印該月份「目前聯式全部冊別」或「三聯＋二聯合併全部冊別」(多頁 A4 直式)
 window.printAllMonthTaxDetailSheets = function(includeBothTypes = false) {
     const baseParams = window.getCurrentTaxFormParams();
     const allBooks = window.taxDetailState.allMonthBooklets || [];
@@ -3753,7 +4861,6 @@ window.printAllMonthTaxDetailSheets = function(includeBothTypes = false) {
     if (typeof window.showPrintPreview === 'function') window.showPrintPreview('printTaxDetailArea');
 };
 
-// 一鍵匯出本月「三聯式＋二聯式統一發票明細表」完整 Excel (.xlsx)
 window.exportMonthTaxDetailExcel = function() {
     if (typeof XLSX === 'undefined') return alert("Excel 模組載入中，請稍候！");
     const baseParams = window.getCurrentTaxFormParams();
