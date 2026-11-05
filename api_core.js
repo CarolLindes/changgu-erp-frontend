@@ -1,12 +1,12 @@
 /**
  * ============================================================================
  * 模組 1：API 核心、全域狀態與雙軌並行架構 (api_core.js) 
- * 【極速登入 ＆ 真實誰在線上懸浮卡 ＆ 長固代號/資材碼自動拆分遷移 ＆ 多表列印升級版】
+ * 【極速登入 ＆ 誰在線上懸浮卡 ＆ 待補訂單號5表連動補登 ＆ 統計報表5表列印升級版】
  * 1. 直連 Supabase 實現 0.1 秒極速登入
  * 2. 內建 Supabase Realtime Presence 真實線上同仁追蹤與輕量懸浮資訊卡 (顯示姓名/所在模組/裝置/活躍狀態)
- * 3. 內建「長固代號 / 醫院資材碼」智慧拆分與資料庫自動遷移引擎 (自動拆分如 86-18-00022-4 / 95501008)
- * 4. 內建 customer1.xlsx 客戶代號 (CUSTID) 智慧雙向對照引擎 (含正向與反向查表)
- * 5. 支援跨系統明細補登、5月前歷史帳移轉、批次快速沖帳、撤銷還原(Undo)與未收/已沖帳多表列印
+ * 3. 內建「長固代號 / 醫院資材碼」智慧拆分與資料庫自動遷移引擎
+ * 4. 支援「提前要貨無訂單號 ([待補單號])」日後補登正式訂單號碼，5 大資料表同步連動更新
+ * 5. 支援統計報表 5 大工作表預覽、選印、PDF 分享與 Excel 寄信
  * ============================================================================
  */
 
@@ -67,6 +67,24 @@ let currentInvoiceData = { clientName:'', taxId:'', items:[] };
 let currentSearchSource = []; 
 let currentSearchCallback = null;
 let myLastSyncTime = Date.now();
+
+// ============================================================================
+// ⏳ 待補訂單號碼 (提前要貨暫無單號) 全域識別與產生器
+// ============================================================================
+window.isPendingOrderNo = function(orderNo) {
+    const s = String(orderNo || '').trim();
+    if (!s || s === '無' || s === '--') return true;
+    return s.startsWith('[待補單號]') || s.startsWith('[暫無單號]') || s.startsWith('待補單號');
+};
+
+window.generatePendingOrderNo = function() {
+    const d = new Date();
+    const yy = String(d.getFullYear()).slice(-2);
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const rand = String(Math.floor(100 + Math.random() * 900));
+    return `[待補單號]-${yy}${mm}${dd}-${rand}`;
+};
 
 // ============================================================================
 // 👥 線上同仁即時狀態追蹤與輕量懸浮資訊卡 (Presence & Popover)
@@ -435,13 +453,11 @@ window.normalizeInvoiceNo = function(invNo) {
 };
 
 // ============================================================================
-// 【核心新增】長固代號 ＆ 醫院資材碼 智慧拆分引擎
-// 自動將過去填在同一欄位的「86-18-00022-4 / 95501008」拆分為獨立的 internalCode 與 assetCode
+// 長固代號 ＆ 醫院資材碼 智慧拆分引擎
 // ============================================================================
 window.isLikelyChangguInternalCode = function(codeStr) {
     const s = String(codeStr || '').trim();
     if (!s) return false;
-    // 長固內部代號標準特徵：包含至少 2 個連字號 (如 86-18-00022-4, 8-05-002110-1, 33-A-600449-0, 1-26-5161EL-1)
     const hyphenCount = (s.match(/\-/g) || []).length;
     if (hyphenCount >= 2) return true;
     if (/^(86|8|7|1|33)\-[A-Za-z0-9]+/.test(s)) return true;
@@ -455,7 +471,6 @@ window.splitCombinedCodePair = function(rawInternalCode, rawAssetCode) {
 
     const sepRegex = /[\/／\|]+/;
 
-    // 情況 1：長固代號欄位內含有斜線分隔 (如 "86-18-00022-4 / 95501008")
     if (sepRegex.test(intCode)) {
         const parts = intCode.split(sepRegex).map(s => s.trim()).filter(Boolean);
         if (parts.length >= 2) {
@@ -480,7 +495,6 @@ window.splitCombinedCodePair = function(rawInternalCode, rawAssetCode) {
         }
     }
 
-    // 情況 2：醫院資材碼欄位內含有斜線且混入了長固代號
     if (sepRegex.test(astCode)) {
         const parts = astCode.split(sepRegex).map(s => s.trim()).filter(Boolean);
         if (parts.length >= 2) {
@@ -754,7 +768,6 @@ window.autoMigrateCombinedCodesInDb = async function(silent = true) {
     let migratedOrdCount = 0;
 
     try {
-        // 1. 檢查並遷移 catalog 表中原本帶有 '/' 的品項
         const catToUpdate = [...(window.pendingCatalogMigrationRows || [])];
         if (catToUpdate.length > 0) {
             for (const row of catToUpdate) {
@@ -770,7 +783,6 @@ window.autoMigrateCombinedCodesInDb = async function(silent = true) {
             window.pendingCatalogMigrationRows = [];
         }
 
-        // 2. 檢查並遷移 orders 表中品項內帶有 '/' 的長固代號或缺少資材碼的未結案訂單
         for (const ord of (globalOrders || [])) {
             if (!ord || !ord.jsonStr || ord.status === '已作廢' || ord.status === '作廢') continue;
             let items = [];
@@ -779,14 +791,12 @@ window.autoMigrateCombinedCodesInDb = async function(silent = true) {
 
             let ordChanged = false;
             items.forEach(itm => {
-                // 若訂單品項內的 internalCode 或 code 含有 '/'，先執行拆分
                 const splitRes = window.splitCombinedCodePair(itm.internalCode || '', itm.code || '');
                 if (splitRes.wasSplit) {
                     itm.internalCode = splitRes.internalCode;
                     itm.code = splitRes.assetCode;
                     ordChanged = true;
                 }
-                // 再與拆分後的 globalCatalog 進行對應，自動補齊缺漏的醫院資材碼 (code) 或長固代號 (internalCode)
                 if (ord.client && (!itm.code || !itm.internalCode)) {
                     const matchedCat = (typeof window.findProductRobust === 'function')
                         ? window.findProductRobust(ord.client, itm.code || itm.internalCode, itm.name)
@@ -854,7 +864,7 @@ async function callApi(action, payload = {}) {
         return { success: true };
     }
     
-    // 攔截報表發送請求，生成 4 個工作表
+    // 攔截報表發送請求，生成 5 個工作表 (發票總表、出貨明細、目前庫存表、客戶營收分析表、品項銷售統計表)
     if (action === 'exportExcelReport' || action === 'sendPendingOrdersReport') {
         if (typeof XLSX === 'undefined') throw new Error("Excel 模組仍在載入中，請稍後再試！");
         
@@ -910,7 +920,7 @@ async function callApi(action, payload = {}) {
             const cat = (typeof window.findProductRobust === 'function')
                 ? window.findProductRobust(l.client, null, l.name)
                 : globalCatalog.find(c => c.productName === l.name && c.clientName === l.client);
-            const internalCode = cat ? (cat.internalCode || cat.assetCode || '') : '';
+            const internalCode = l.internalCode || (cat ? (cat.internalCode || cat.assetCode || '') : '');
             
             lineItemRows.push([
                 l.time, l.paperNo, l.client, l.orderNo, internalCode, l.name, l.qty, price, subtotal, l.shipStatus, l.shippedQty
@@ -938,7 +948,6 @@ async function callApi(action, payload = {}) {
                 c.name, c.total
             ]);
         });
-        const wsClient = XLSX.utils.book_new();
         const wsClientSheet = XLSX.utils.aoa_to_sheet(clientRows);
 
         const wb = XLSX.utils.book_new();
@@ -946,6 +955,18 @@ async function callApi(action, payload = {}) {
         XLSX.utils.book_append_sheet(wb, wsDelivery, "出貨明細");
         XLSX.utils.book_append_sheet(wb, wsInventory, "目前庫存表");
         XLSX.utils.book_append_sheet(wb, wsClientSheet, "客戶營收分析表");
+
+        // 工作表 5: 品項銷售統計表 (若有提供)
+        if (payload.productStats && Array.isArray(payload.productStats) && payload.productStats.length > 0) {
+            const prodRows = [
+                ["排行", "長固代號", "品名規格", "銷售總數量", "總銷售額(含稅)"]
+            ];
+            payload.productStats.forEach((p, idx) => {
+                prodRows.push([idx + 1, p.code || '', p.name, p.qty, p.total]);
+            });
+            const wsProdSheet = XLSX.utils.aoa_to_sheet(prodRows);
+            XLSX.utils.book_append_sheet(wb, wsProdSheet, "品項銷售統計表");
+        }
 
         const base64Data = XLSX.write(wb, { bookType: 'xlsx', type: 'base64' });
         
@@ -959,7 +980,7 @@ async function callApi(action, payload = {}) {
         payload = {
             toEmails: emails,
             subject: `長固 ERP 系統 - 銷售發票與出貨統計報表 (${cleanDateRange})`,
-            bodyText: `您好，\n\n附上由長固 ERP 系統自動產生的統計報表，請查收附件。\n\n報表包含：\n1. 發票總表\n2. 出貨明細\n3. 目前庫存表\n4. 客戶營收分析表\n\n(此為系統自動發送，請勿直接回覆)\n系統產生時間：${new Date().toLocaleString()}`,
+            bodyText: `您好，\n\n附上由長固 ERP 系統自動產生的統計報表，請查收附件。\n\n報表包含：\n1. 發票總表\n2. 出貨明細\n3. 目前庫存表\n4. 客戶營收分析表\n5. 品項銷售統計表\n\n(此為系統自動發送，請勿直接回覆)\n系統產生時間：${new Date().toLocaleString()}`,
             base64Data: base64Data,
             fileName: fileName
         };
@@ -1026,6 +1047,50 @@ async function executeSupabaseAction(action, payload) {
     else if (action === 'updateOrderStatus') {
         const { error } = await supabaseClient.from('orders').update({ status: payload.status }).in('row_idx', payload.rowIndices);
         if (error) throw error;
+    }
+    else if (action === 'supplementOrderNo') {
+        // 🔗 5 大資料表同步更新：將原本的 [待補單號] 替換為醫院核發的正式訂單號碼
+        // 1. 更新 orders 表
+        if (payload.updatedOrders && payload.updatedOrders.length > 0) {
+            for (const oUpd of payload.updatedOrders) {
+                await supabaseClient.from('orders').update({ order_no: oUpd.newOrderNo }).eq('row_idx', oUpd.rowIdx);
+            }
+        }
+        // 2. 更新 invoices 表 (含 order_no 欄位與 details 文字內的 [待補單號] 標籤)
+        if (payload.updatedInvoices && payload.updatedInvoices.length > 0) {
+            for (const invUpd of payload.updatedInvoices) {
+                await supabaseClient.from('invoices').update({
+                    order_no: invUpd.orderNo,
+                    details: invUpd.details
+                }).eq('row_idx', invUpd.rowIdx);
+            }
+        }
+        // 3. 更新 sales_details 表
+        if (payload.updatedSalesDetails && payload.updatedSalesDetails.length > 0) {
+            for (const sdUpd of payload.updatedSalesDetails) {
+                await supabaseClient.from('sales_details').update({
+                    order_no: sdUpd.orderNo
+                }).eq('row_idx', sdUpd.rowIdx);
+            }
+        }
+        // 4. 更新 deliveries 表 (送貨單之 order_no 與 items_str)
+        if (payload.updatedDeliveries && payload.updatedDeliveries.length > 0) {
+            for (const delUpd of payload.updatedDeliveries) {
+                await supabaseClient.from('deliveries').update({
+                    order_no: delUpd.orderNo,
+                    items_str: delUpd.itemsStr
+                }).eq('row_idx', delUpd.rowIdx);
+            }
+        }
+        // 5. 更新 inventory_logs 表 (訂貨單之 order_no 與 snapshot)
+        if (payload.updatedInvLogs && payload.updatedInvLogs.length > 0) {
+            for (const logUpd of payload.updatedInvLogs) {
+                await supabaseClient.from('inventory_logs').update({
+                    order_no: logUpd.orderNo,
+                    snapshot: logUpd.snapshot
+                }).eq('row_idx', logUpd.rowIdx);
+            }
+        }
     }
     else if (action === 'submitInvoice') {
         const { error: invErr } = await supabaseClient.from('invoices').insert({
@@ -1455,7 +1520,6 @@ async function executeSupabaseAction(action, payload) {
             ? Number(payload.rowIndex)
             : window.getNextCatalogRowIndex();
 
-        // 若使用者不小心又把兩個代碼用斜線填在一起，儲存時自動幫他拆開
         const splitRes = window.splitCombinedCodePair(payload.internalCode || '', payload.assetCode || '');
 
         const record = {
@@ -1689,7 +1753,6 @@ async function loadDataFromSupabase() {
     
     myLastSyncTime = Date.now();
 
-    // 背景自動檢查並將過去寫在同一欄的「長固代號 / 資材碼」拆分同步回資料庫
     setTimeout(() => {
         if (typeof window.autoMigrateCombinedCodesInDb === 'function') {
             window.autoMigrateCombinedCodesInDb(true);
@@ -1889,9 +1952,9 @@ window.lockButton = function(btn) {
 };
 
 // ============================================================================
-// 列印與 PDF 分享引擎 (含 A5 橫式防跨頁裁切保護 ＆ A4 未收/已沖帳三表分頁列印支援)
+// 列印與 PDF 分享引擎 (含 A5 橫式防跨頁裁切保護 ＆ A4 統計/未收/已沖帳多表分頁列印支援)
 // ============================================================================
-const ALL_PRINT_AREA_IDS = ['printArea', 'printPoArea', 'printQuoteArea', 'printDeliveryArea', 'printTaxDetailArea', 'printUnpaidWorkbookArea', 'printPaidReportArea'];
+const ALL_PRINT_AREA_IDS = ['printArea', 'printPoArea', 'printQuoteArea', 'printDeliveryArea', 'printTaxDetailArea', 'printUnpaidWorkbookArea', 'printPaidReportArea', 'printStatReportArea'];
 
 window.applyPrintStyle = function(size, layout) {
     let styleNode = document.getElementById('dynamicPrintStyle');
@@ -2064,6 +2127,11 @@ window.sharePdf = async function(areaId) {
     } else if (areaId === 'printPaidReportArea') {
         opt.margin = 6;
         opt.filename = `長固ERP_已沖帳收款報表_${getTodayStr()}.pdf`;
+        opt.jsPDF.format = 'a4';
+        opt.jsPDF.orientation = 'landscape';
+    } else if (areaId === 'printStatReportArea') {
+        opt.margin = 6;
+        opt.filename = `長固ERP_銷售發票與出貨統計報表_${getTodayStr()}.pdf`;
         opt.jsPDF.format = 'a4';
         opt.jsPDF.orientation = 'landscape';
     } else if (areaId === 'printQuoteArea') {
