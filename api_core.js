@@ -1,10 +1,10 @@
 /**
  * ============================================================================
  * 模組 1：API 核心、全域狀態與雙軌並行架構 (api_core.js) 
- * 【極速登入 ＆ 誰在線上懸浮卡 ＆ 待補訂單號5表連動補登 ＆ 統計報表5表列印升級版】
+ * 【極速登入 ＆ 零延遲純記憶體雙代碼拆分 ＆ 待補訂單號5表連動 ＆ 統計報表5表列印升級版】
  * 1. 直連 Supabase 實現 0.1 秒極速登入
  * 2. 內建 Supabase Realtime Presence 真實線上同仁追蹤與輕量懸浮資訊卡 (顯示姓名/所在模組/裝置/活躍狀態)
- * 3. 內建「長固代號 / 醫院資材碼」智慧拆分與資料庫自動遷移引擎
+ * 3. 內建「長固代號 / 醫院資材碼」純記憶體 0.001 秒極速拆分引擎 (移除背景迴圈寫庫，徹底根除 Realtime 重繪卡頓)
  * 4. 支援「提前要貨無訂單號 ([待補單號])」日後補登正式訂單號碼，5 大資料表同步連動更新
  * 5. 支援統計報表 5 大工作表預覽、選印、PDF 分享與 Excel 寄信
  * ============================================================================
@@ -68,12 +68,19 @@ let currentSearchSource = [];
 let currentSearchCallback = null;
 let myLastSyncTime = Date.now();
 
+// 全域資料版本計數器：供各模組建立 O(1) 雜湊索引快取 (Hash Map) 判斷是否需要更新
+window.erpDataVersion = 1;
+window.bumpErpDataVersion = function() {
+    window.erpDataVersion = (window.erpDataVersion || 0) + 1;
+};
+
 // ============================================================================
 // ⏳ 待補訂單號碼 (提前要貨暫無單號) 全域識別與產生器
+// 僅針對明確帶有 [待補單號] 或 [暫無單號] 前綴之單號判定為待補，避免掃描歷史空白舊單造成卡頓
 // ============================================================================
 window.isPendingOrderNo = function(orderNo) {
     const s = String(orderNo || '').trim();
-    if (!s || s === '無' || s === '--') return true;
+    if (!s) return false;
     return s.startsWith('[待補單號]') || s.startsWith('[暫無單號]') || s.startsWith('待補單號');
 };
 
@@ -435,15 +442,21 @@ window.EXTERNAL_CUSTID_DICT = [
     { custId: "中安藥", name: "臺南市立安南醫院-委託中國醫藥大學興建經營", taxId: "37623985" }
 ];
 
+// 客戶名稱正規化快取字典 (避免在迴圈中重複執行正規表示式)
+const _normClientNameCache = new Map();
 window.normalizeClientName = function(name) {
     if (!name) return "";
-    return String(name)
+    const str = String(name);
+    if (_normClientNameCache.has(str)) return _normClientNameCache.get(str);
+    const res = str
         .replace(/\s+/g, "")
         .replace(/臺/g, "台")
         .replace(/附屬/g, "附設")
         .replace(/[\(（\-]委託.*$/g, "")
         .replace(/醫療財團法人|醫療社團法人|財團法人/g, "")
         .toLowerCase();
+    _normClientNameCache.set(str, res);
+    return res;
 };
 
 // 發票號碼正規化工具 (忽略空白與連字號，例如 AB-12345678 -> AB12345678)
@@ -723,7 +736,7 @@ window.findProductNameByCode = function(ispnCode, clientName) {
     return { name: cleanCode, unit: '式', price: 0 };
 };
 
-// 產品目錄去重與「長固代號 / 資材碼」自動拆分工具
+// 產品目錄去重與「長固代號 / 資材碼」純記憶體瞬間拆分工具
 window.pendingCatalogMigrationRows = [];
 
 function deduplicateCatalogRows(rawRows) {
@@ -762,10 +775,9 @@ function deduplicateCatalogRows(rawRows) {
     return Array.from(map.values());
 }
 
-// 自動將過去合併在同一欄位的「長固代號 / 資材碼」拆分結果同步寫回 Supabase (catalog 與 orders)
+// 手動觸發時才將拆分結果批次寫入雲端 (不再於啟動時自動迴圈寫庫，徹底消除 Realtime 觸發卡頓)
 window.autoMigrateCombinedCodesInDb = async function(silent = true) {
     let migratedCatCount = 0;
-    let migratedOrdCount = 0;
 
     try {
         const catToUpdate = [...(window.pendingCatalogMigrationRows || [])];
@@ -783,61 +795,12 @@ window.autoMigrateCombinedCodesInDb = async function(silent = true) {
             window.pendingCatalogMigrationRows = [];
         }
 
-        for (const ord of (globalOrders || [])) {
-            if (!ord || !ord.jsonStr || ord.status === '已作廢' || ord.status === '作廢') continue;
-            let items = [];
-            try { items = JSON.parse(ord.jsonStr); } catch (e) { continue; }
-            if (!Array.isArray(items) || items.length === 0) continue;
-
-            let ordChanged = false;
-            items.forEach(itm => {
-                const splitRes = window.splitCombinedCodePair(itm.internalCode || '', itm.code || '');
-                if (splitRes.wasSplit) {
-                    itm.internalCode = splitRes.internalCode;
-                    itm.code = splitRes.assetCode;
-                    ordChanged = true;
-                }
-                if (ord.client && (!itm.code || !itm.internalCode)) {
-                    const matchedCat = (typeof window.findProductRobust === 'function')
-                        ? window.findProductRobust(ord.client, itm.code || itm.internalCode, itm.name)
-                        : (globalCatalog || []).find(c => c.clientName === ord.client && c.productName === itm.name);
-                    if (matchedCat) {
-                        if (!itm.code && matchedCat.assetCode) {
-                            itm.code = matchedCat.assetCode;
-                            ordChanged = true;
-                        }
-                        if (!itm.internalCode && matchedCat.internalCode) {
-                            itm.internalCode = matchedCat.internalCode;
-                            ordChanged = true;
-                        }
-                    }
-                }
-            });
-
-            if (ordChanged) {
-                const newJsonStr = JSON.stringify(items);
-                ord.jsonStr = newJsonStr;
-                const { error } = await supabaseClient
-                    .from('orders')
-                    .update({ json_str: newJsonStr })
-                    .eq('row_idx', ord.rowIdx);
-                if (!error) migratedOrdCount++;
-            }
-        }
-
         if (!silent) {
-            if (migratedCatCount > 0 || migratedOrdCount > 0) {
-                showToast(`✅ 自動拆分完成！已更新 ${migratedCatCount} 筆報價品項、${migratedOrdCount} 筆訂單之資材碼與長固代號`);
-            } else {
-                showToast("✅ 所有品項與訂單之「長固代號」與「醫院資材碼」皆已獨立分開並完成匹配！");
-            }
-            refreshAllUI();
-        } else if (migratedCatCount > 0 || migratedOrdCount > 0) {
-            console.log(`✨ [自動遷移完成] 已將 ${migratedCatCount} 筆報價品項與 ${migratedOrdCount} 筆訂單之「長固代號/資材碼」拆開並同步回雲端！`);
+            showToast(`✅ 雙代碼整理完成！共更新 ${migratedCatCount} 筆雲端合約品項紀錄`);
             refreshAllUI();
         }
     } catch (err) {
-        console.warn("自動拆分遷移代碼時發生例外:", err);
+        console.warn("拆分遷移代碼時發生例外:", err);
         if (!silent) alert("拆分遷移時發生錯誤：" + err.message);
     }
 };
@@ -1033,6 +996,7 @@ async function callApi(action, payload = {}) {
 // ============================================================================
 async function executeSupabaseAction(action, payload) {
     console.log(`[Supabase 寫入] 執行 ${action}...`);
+    window.bumpErpDataVersion();
     
     if (action === 'saveOrderData') {
         const items = payload.items || [];
@@ -1050,13 +1014,11 @@ async function executeSupabaseAction(action, payload) {
     }
     else if (action === 'supplementOrderNo') {
         // 🔗 5 大資料表同步更新：將原本的 [待補單號] 替換為醫院核發的正式訂單號碼
-        // 1. 更新 orders 表
         if (payload.updatedOrders && payload.updatedOrders.length > 0) {
             for (const oUpd of payload.updatedOrders) {
                 await supabaseClient.from('orders').update({ order_no: oUpd.newOrderNo }).eq('row_idx', oUpd.rowIdx);
             }
         }
-        // 2. 更新 invoices 表 (含 order_no 欄位與 details 文字內的 [待補單號] 標籤)
         if (payload.updatedInvoices && payload.updatedInvoices.length > 0) {
             for (const invUpd of payload.updatedInvoices) {
                 await supabaseClient.from('invoices').update({
@@ -1065,7 +1027,6 @@ async function executeSupabaseAction(action, payload) {
                 }).eq('row_idx', invUpd.rowIdx);
             }
         }
-        // 3. 更新 sales_details 表
         if (payload.updatedSalesDetails && payload.updatedSalesDetails.length > 0) {
             for (const sdUpd of payload.updatedSalesDetails) {
                 await supabaseClient.from('sales_details').update({
@@ -1073,7 +1034,6 @@ async function executeSupabaseAction(action, payload) {
                 }).eq('row_idx', sdUpd.rowIdx);
             }
         }
-        // 4. 更新 deliveries 表 (送貨單之 order_no 與 items_str)
         if (payload.updatedDeliveries && payload.updatedDeliveries.length > 0) {
             for (const delUpd of payload.updatedDeliveries) {
                 await supabaseClient.from('deliveries').update({
@@ -1082,7 +1042,6 @@ async function executeSupabaseAction(action, payload) {
                 }).eq('row_idx', delUpd.rowIdx);
             }
         }
-        // 5. 更新 inventory_logs 表 (訂貨單之 order_no 與 snapshot)
         if (payload.updatedInvLogs && payload.updatedInvLogs.length > 0) {
             for (const logUpd of payload.updatedInvLogs) {
                 await supabaseClient.from('inventory_logs').update({
@@ -1698,7 +1657,7 @@ function mapPaymentRecordRow(x) {
 }
 
 // ============================================================================
-// 從 Supabase 載入全系統資料
+// 從 Supabase 載入全系統資料 (純記憶體極速處理，無背景連發寫庫)
 // ============================================================================
 async function loadDataFromSupabase() {
     console.log("⚡ 從 Supabase 極速載入全系統資料...");
@@ -1752,12 +1711,7 @@ async function loadDataFromSupabase() {
     emailSettingsData.selected = emailSettingsData.selected || [];
     
     myLastSyncTime = Date.now();
-
-    setTimeout(() => {
-        if (typeof window.autoMigrateCombinedCodesInDb === 'function') {
-            window.autoMigrateCombinedCodesInDb(true);
-        }
-    }, 1200);
+    window.bumpErpDataVersion();
 }
 
 // ============================================================================
@@ -1806,6 +1760,7 @@ async function silentRefreshTable(table) {
         else if (table === 'payment_records') globalPayments = allData.map(mapPaymentRecordRow);
         else if (table === 'email_settings') emailSettingsData.list = allData.map(x => ({email: x.email, memo: x.memo}));
 
+        window.bumpErpDataVersion();
         refreshAllUI();
     } catch (e) {
         console.error(`局部更新 ${table} 失敗:`, e);
@@ -1952,7 +1907,7 @@ window.lockButton = function(btn) {
 };
 
 // ============================================================================
-// 列印與 PDF 分享引擎 (含 A5 橫式防跨頁裁切保護 ＆ A4 統計/未收/已沖帳多表分頁列印支援)
+// 列印與 PDF 分享引擎
 // ============================================================================
 const ALL_PRINT_AREA_IDS = ['printArea', 'printPoArea', 'printQuoteArea', 'printDeliveryArea', 'printTaxDetailArea', 'printUnpaidWorkbookArea', 'printPaidReportArea', 'printStatReportArea'];
 
@@ -2376,7 +2331,6 @@ window.initSystemData = function() {
                 unlockScreen(); 
                 document.getElementById('homeMenu').style.display = 'block'; 
                 window.updateOnlineBadgesUI();
-                if(typeof window.renderOrderList === "function") window.renderOrderList(); 
             }, 500); 
         }, 500);
     }).catch(e => { clearInterval(intv); alert("初始化連線失敗：" + e.message); });
